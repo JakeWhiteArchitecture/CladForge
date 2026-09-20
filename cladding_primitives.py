@@ -79,6 +79,41 @@ def subdivide(a, b, max_span):
     return [a + (b - a) * i / n for i in range(1, n)]
 
 
+MIN_OPENING = 300.0   # mm – smaller holes are penetrations, not windows
+
+
+def openings(elev, limit=MIN_OPENING):
+    """Structural openings as (u0, u1, v0, v1), from the interior holes big enough to
+    be a window or door rather than a pipe penetration."""
+    out = []
+    for poly in elev.get("polygons", []):
+        for hole in poly.get("holes", []):
+            us = [q[0] for q in hole]
+            vs = [q[1] for q in hole]
+            if max(us) - min(us) >= limit and max(vs) - min(vs) >= limit:
+                out.append((min(us), max(us), min(vs), max(vs)))
+    return sorted(out)
+
+
+def bays_between(stops, max_panel, gap):
+    """Panels filling each span between consecutive *stops*, split equally into as few
+    bays as stay within *max_panel*. A stop is a fixed edge (an opening jamb or the end
+    of the elevation), so no joint gap is taken there; gaps fall between bays."""
+    panels, joints = [], []
+    for a, b in zip(stops, stops[1:]):
+        span = b - a
+        if span <= 1.0:
+            continue
+        n = max(1, int(math.ceil((span + gap) / (max_panel + gap))))
+        width = (span - gap * (n - 1)) / n
+        for i in range(n):
+            start = a + i * (width + gap)
+            panels.append((start, start + width, True))
+            if i:
+                joints.append(start - gap / 2.0)
+    return panels, sorted(joints)
+
+
 def panel_bays(length, panel, gap, offset):
     """Panels across *length* with a panel centred at length/2 + offset.
     Returns (panels, joints): panels as (start, end, full) clipped to [0, length],
@@ -145,6 +180,93 @@ def splash_rings(elev, splash):
         rings.append([[float(u), float(v)] for u, v in line]
                      + [[float(u), float(v) + splash] for u, v in reversed(line)])
     return rings
+
+
+def buildup_depth(p):
+    """Depth of the cladding outer face from the wall face (mm)."""
+    d = (p["sheathing_t"] if p["sheathing"] else 0.0) + (p["insulation_t"] if p["insulation"] else 0.0)
+    d += (p["cb_d"] if p["has_cb"] else 0.0) + p["batten_d"]
+    return d + (p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"])
+
+
+def corner_detail(p):
+    """The corner detail in force. The master-lap is a panel detail: one board runs
+    past the corner and the other butts behind it, leaving the joint gap exposed.
+    Plank cladding has no master board to lap, so it falls back to a mitre."""
+    detail = p.get("corner", "mitre")
+    if detail == "lap" and p["cladding_type"] != "panel":
+        return "mitre"
+    return detail if detail in ("mitre", "lap", "butt") else "mitre"
+
+
+def corner_ends(elev, p):
+    """((k, ext) left, (k, ext) right, detail). The end face of an element sits at
+    u_end -/+ (ext + k x depth): k shears it onto the corner's bisector (a mitre),
+    ext moves it square past the corner (a lap). Ends with no corner get (0, 0)."""
+    detail = corner_detail(p)
+    lo, hi = float(elev.get("corner_lo") or 0.0), float(elev.get("corner_hi") or 0.0)
+    master_lo, master_hi = bool(elev.get("master_lo")), bool(elev.get("master_hi"))
+    if elev.get("chain_reversed"):
+        lo, hi, master_lo, master_hi = hi, lo, master_hi, master_lo
+    if detail == "butt":
+        return (0.0, 0.0), (0.0, 0.0), detail
+    if detail == "mitre":
+        return (lo, 0.0), (hi, 0.0), detail
+    depth, board, gap = buildup_depth(p), p["panel_t"], p["panel_gap"]
+
+    def lap(k, master):
+        """Master-lap ends. k = tan(beta/2) for a corner turning through beta, signed
+        positive outward. At an external corner the master board wraps past and out to
+        the far face of the other side's cladding, and the one behind stops a joint gap
+        short of the master's back. At a re-entrant corner there is nothing to wrap
+        round: the master runs into the corner and the other stops a gap clear of the
+        master's whole buildup. Away from a right angle both ends slope with depth."""
+        if not k:
+            return (0.0, 0.0)
+        beta = 2.0 * math.atan(abs(k))
+        sin_b = max(1e-6, math.sin(beta))
+        cot = math.cos(beta) / sin_b
+        cot = 0.0 if abs(cot) < 1e-9 else cot   # a right angle cuts square
+        if k > 0:
+            return (-cot, depth / sin_b) if master else (-cot, (depth - board) / sin_b - gap)
+        return (0.0, 0.0) if master else (cot, -(depth / sin_b + gap))
+
+    return lap(lo, master_lo), lap(hi, master_hi), detail
+
+
+def corner_shift(u, corner, s, tol=0.6):
+    """Where a vertex at *u* sits once the corner detail is applied at depth *s*."""
+    if not corner:
+        return u
+    if (corner.get("k_l") or corner.get("ext_l")) and abs(u - corner["u_l"]) < tol:
+        return u - (corner.get("ext_l", 0.0) + corner.get("k_l", 0.0) * s)
+    if (corner.get("k_r") or corner.get("ext_r")) and abs(u - corner["u_r"]) < tol:
+        return u + (corner.get("ext_r", 0.0) + corner.get("k_r", 0.0) * s)
+    return u
+
+
+def corner_ring(ring, corner, s):
+    return [(corner_shift(float(u), corner, s), float(v)) for u, v in ring]
+
+
+def chain_layout(elevations, face_depth, detail):
+    """Run coordinates measured along the cladding face, so a corner adds the wrap on
+    both of its sides. Returns {elevation name: (start, run length)}."""
+    groups = {}
+    for e in elevations:
+        groups.setdefault(e.get("chain") or ("\x00" + str(e.get("name"))), []).append(e)
+    out = {}
+    for members in groups.values():
+        members.sort(key=lambda e: float(e.get("chain_start") or 0.0))
+        run, spans = 0.0, []
+        for e in members:
+            width = float(e["width"])
+            spans.append((e.get("name"), run))
+            k = float(e.get("corner_hi") or 0.0) if detail != "butt" else 0.0
+            run += width + 2.0 * k * face_depth
+        for name, start in spans:
+            out[name] = (start, run)
+    return out
 
 
 def base_level(elev, splash):

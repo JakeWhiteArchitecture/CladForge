@@ -98,17 +98,32 @@ def test_panels_joints_on_battens(elevation):
     battens = sorted(m["profile"][0][0] + 25 for m in out["geometry"] if m["ifc_type"] == "batten")
     panels = [m for m in out["geometry"] if m["ifc_type"] == "panel"]
     assert panels and any(m["ifc_type"] == "cross_batten" for m in out["geometry"])
+    # Every panel edge is backed: a batten centred on the joint gap, or, at a window
+    # jamb, the solid timber cavity closer that the setting-out started from.
+    jambs = {2000.0, 3200.0}
     for m in panels:
         u0, u1 = m["profile"][0][0], m["profile"][1][0]
         for edge in (u0, u1):
-            if 1 < edge < 7999:  # internal joint edge: a batten centred on the joint gap
+            if 1 < edge < 7999 and edge not in jambs:
                 assert min(abs(b - (edge - 5)) for b in battens) < 1e-6 or min(abs(b - (edge + 5)) for b in battens) < 1e-6
-    for a, b in zip(battens, battens[1:]):
-        assert b - a <= 600 + 1e-6
+    # Supports are the battens plus the closers at the jambs; only a window is unsupported.
+    supports = sorted(set(battens) | jambs)
+    for a, b in zip(supports, supports[1:]):
+        if (a, b) == (2000.0, 3200.0):
+            continue
+        assert b - a <= 600 + 1e-6, (a, b)
+    # Driven by the openings, every bay is sized to fit, so there is no closing cut:
+    # the panels vary in width instead, and none exceeds the maximum.
     info = out["info"][0]
-    assert info["closing_cut_left"] > 0 and info["closing_cut_right"] > 0
+    assert info["set_out_from_openings"] and info["openings"] == 1
+    assert info["closing_cut_left"] == 0 and info["closing_cut_right"] == 0
+    assert len(info["panel_widths"]) > 1 and max(info["panel_widths"]) <= 1200 + 1e-6
     checks = {c["name"]: c["status"] for c in check_rules(_params(elevation, cladding_type="panel", offset=300))}
-    assert checks.get("Closing cut") == "warn"   # the 60mm strip on the left
+    assert checks.get("Setting-out") == "pass"
+    # Centred instead, the last panel on each side is a narrow closing cut.
+    centred = generate_preview(_params(elevation, cladding_type="panel", trim=False, offset=300,
+                                       set_out_from_openings=False))["info"][0]
+    assert centred["closing_cut_left"] > 0 and centred["closing_cut_right"] > 0
 
 
 def test_check_rules(elevation):

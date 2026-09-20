@@ -6,8 +6,8 @@ CladForge — DXF export: one flattened elevation per detected region.
 
 Each elevation is drawn in its own (u, v) frame, moved to origin and laid out
 left to right. Layers: WALL, OPENING, SPLASH_ZONE, SHEATHING, INSULATION,
-COUNTER_BATTEN, BATTEN, CLADDING, DIMS, NOTES. Output is DXF R12 (AC1009),
-readable by every CAD package.
+COUNTER_BATTEN, BATTEN, CLADDING, CLOSER, DIMS, NOTES. Output is DXF R12
+(AC1009), readable by every CAD package.
 """
 
 import math
@@ -15,7 +15,7 @@ import tempfile
 
 from cladding_constants import (_parse, TOOL_NAME, IFC_SCHEMA_LABEL, SCOPE_NOTE, QUANTITY_NOTE,
                                 DISCLAIMER)
-from cladding_primitives import splash_rings
+from cladding_primitives import buildup_depth, corner_ring, splash_rings
 
 LAYERS = {
     "WALL":           {"color": 7, "linetype": "CONTINUOUS"},
@@ -26,12 +26,13 @@ LAYERS = {
     "COUNTER_BATTEN": {"color": 3, "linetype": "CONTINUOUS"},
     "BATTEN":         {"color": 4, "linetype": "CONTINUOUS"},
     "CLADDING":       {"color": 5, "linetype": "CONTINUOUS"},
+    "CLOSER":         {"color": 1, "linetype": "CONTINUOUS"},
     "DIMS":           {"color": 7, "linetype": "CONTINUOUS"},
     "NOTES":          {"color": 7, "linetype": "CONTINUOUS"},
 }
 _LAYER_FOR_TYPE = {"batten": "BATTEN", "cross_batten": "BATTEN", "counter_batten": "COUNTER_BATTEN",
                    "sheathing": "SHEATHING", "insulation": "INSULATION", "panel": "CLADDING",
-                   "plank": "CLADDING"}
+                   "plank": "CLADDING", "closer": "CLOSER"}
 _ELEV_GAP = 2500.0     # mm between elevations on the sheet
 _TEXT = 50.0           # mm dimension / note text height
 _TITLE = 120.0
@@ -121,6 +122,12 @@ def _draw_dim_line(dxf, p1, p2, offset, label=None, norm=None, layer="DIMS"):
     dxf.add_text(text, ((d1[0] + d2[0]) / 2 + nx * 30, (d1[1] + d2[1]) / 2 + ny * 30), _TEXT, layer)
 
 
+def _corner_ring(ring, mesh):
+    """Ring drawn at the element's outer face, so a corner end shows its cut length."""
+    corner = mesh.get("corner")
+    return ring if not corner else corner_ring(ring, corner, float(mesh["depth"]) + float(mesh["thickness"]))
+
+
 def _wrap(text, width=70):
     words, lines, cur = text.split(), [], ""
     for w in words:
@@ -151,8 +158,16 @@ def _schedule(p, info, meshes):
         "insulation %.0fmm, " % p["insulation_t"] if p["insulation"] else "",
         info.get("battens", ""), p["batten_w"], p["batten_d"], info.get("batten_centres", 0),
         ", counter-battens %.0fx%.0f" % (p["cb_w"], p["cb_d"]) if p["has_cb"] else ""))
-    lines.append("Battens: %d no.  Counter-battens: %d no.  Noggins: %d no." % (
-        counts.get("batten", 0), counts.get("counter_batten", 0), counts.get("cross_batten", 0)))
+    lines.append("Battens: %d no.  Counter-battens: %d no.  Noggins: %d no.  Cavity closers: %d no." % (
+        counts.get("batten", 0), counts.get("counter_batten", 0), counts.get("cross_batten", 0),
+        counts.get("closer", 0)))
+    if counts.get("reveal"):
+        lines.append("Reveal linings: %d no., mitred to the face panel. Not drawn: they are "
+                     "perpendicular to this view." % counts["reveal"])
+    if info.get("openings"):
+        lines.append("Openings: %d. Setting-out %s." % (info["openings"], "starts from the structural "
+                     "openings, so panel edges land on the jambs" if info.get("set_out_from_openings")
+                     else "is centred on the elevation"))
     if p["cladding_type"] == "panel":
         lines.append("Panels: %d pieces (%d full %.0fx%.0f) in %d courses, joint gap %.0f" % (
             counts.get("panel", 0), info.get("n_full", 0), p["panel_w"], p["panel_h"],
@@ -163,6 +178,14 @@ def _schedule(p, info, meshes):
             "lapped %.0f" % p["plank_lap"] if p["plank_lap"] > 0 else "open joint %.0f" % p["plank_gap"]))
     lines.append("Closing cuts: left %.0f  right %.0f  top %.0f.  Splash zone %.0f from abutments." % (
         info.get("closing_cut_left", 0), info.get("closing_cut_right", 0), info.get("closing_cut_top", 0), p["splash"]))
+    corner = info.get("corner") or {}
+    ends = [(side, corner.get(side) or (0.0, 0.0)) for side in ("left", "right")]
+    if any(any(v) for _s, v in ends):
+        detail = {"mitre": "mitred", "lap": "master-lap, open joint"}.get(corner.get("detail"), corner.get("detail"))
+        lines.append("Corners (%s): %s. Boards are drawn to their outer face, which is the cut length." % (
+            detail, ", ".join("%s end %s %.0fmm at the cladding face" % (
+                side, "wraps" if (k + ext) > 0 else "is cut back", abs(k * buildup_depth(p) + ext))
+                for side, (k, ext) in ends if k or ext)))
     return lines
 
 
@@ -196,8 +219,10 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for ring in splash_rings(elev, p["splash"]):
             dxf.add_ring(ring, "SPLASH_ZONE", ox, 0.0)
         for m in by_elev.get(name, []):
+            if m["ifc_type"] == "reveal":
+                continue        # a reveal lining is perpendicular to this view
             layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
-            dxf.add_ring(m["profile"], layer, ox, 0.0)
+            dxf.add_ring(_corner_ring(m["profile"], m), layer, ox, 0.0)
             for hole in m.get("holes") or []:
                 dxf.add_ring(hole, layer, ox, 0.0)
         for d in [d for d in dims if d["elevation"] == name]:
@@ -219,7 +244,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
 
     notes = ["%s  -  %s companion export  -  units mm" % (TOOL_NAME, IFC_SCHEMA_LABEL), DISCLAIMER]
     notes += _wrap(SCOPE_NOTE) + _wrap(QUANTITY_NOTE)
-    notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING DIMS NOTES")
+    notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING CLOSER DIMS NOTES")
     _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), sheet_min_y - 600.0, 60.0)
     return dxf.to_string()
 

@@ -20,7 +20,8 @@ PLANK_SPAN_TABLE = [(12.0, 400.0), (16.0, 500.0), (20.0, 600.0)]  # (min thickne
 
 COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers, see-through cladding
     "sheathing": ("#d9c9a3", 0.35), "insulation": ("#e8d86a", 0.30), "counter_batten": ("#8b7355", 1.0),
-    "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45), "plank": ("#6b8fa3", 0.45)}
+    "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
+    "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7)}
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
     "batten_w": (50, 25, 100), "batten_d": (38, 19, 100), "batten_centres": (400, 300, 600),
@@ -28,6 +29,7 @@ _NUMERIC = {  # name: (default, min, max)
     "panel_t": (9, 6, 20), "panel_w": (1200, 600, 1500), "panel_h": (2400, 1200, 3000),
     "panel_gap": (10, 0, 15), "plank_w": (150, 75, 250), "plank_t": (20, 12, 32),
     "plank_lap": (0, 0, 50), "plank_gap": (8, 0, 15), "plank_len": (3600, 1800, 6000),
+    "closer_w": (50, 25, 150),
 }
 
 
@@ -39,11 +41,12 @@ def _parse(params):
             p[key] = min(hi, max(lo, float(params.get(key, default))))
         except (TypeError, ValueError):
             p[key] = float(default)
-    p["sheathing"] = bool(params.get("sheathing", False))
-    p["insulation"] = bool(params.get("insulation", False))
+    p["sheathing"], p["insulation"] = bool(params.get("sheathing")), bool(params.get("insulation"))
+    p["reveals"], p["set_out_from_openings"] = bool(params.get("reveals", True)), bool(params.get("set_out_from_openings", True))
     p["cladding_type"] = "panel" if params.get("cladding_type") == "panel" else "plank"
     p["counter_batten"] = params.get("counter_batten", "auto")   # auto | yes | no
     p["plank_orient"] = "vertical" if params.get("plank_orient") == "vertical" else "horizontal"
+    p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))
     # Derived: battens perpendicular to boards; horizontal battens on vertical counter-battens.
     vertical_planks = p["cladding_type"] == "plank" and p["plank_orient"] == "vertical"
