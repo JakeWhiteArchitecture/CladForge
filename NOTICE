@@ -1,0 +1,10 @@
+CladForge
+Copyright 2026 Jake White Architecture
+
+Forked from StairSmith (geometry engine, export pipeline and UI shell)
+https://github.com/JakeWhiteArchitecture/stairsmith
+and SunForm (web-ifc import and Three.js viewer)
+https://github.com/JakeWhiteArchitecture/sunform
+
+If you use or redistribute this software, please retain this notice
+and acknowledge the original repositories.

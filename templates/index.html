@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CladForge — Cladding setting-out from IFC</title>
+    <meta name="description" content="Import an IFC model, pick wall faces, and generate the cladding support buildup and board setting-out as IFC4X3 geometry and DXF elevations. Free, runs in your browser.">
+    <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+    <div class="panel" id="panel">
+      <div class="panel-scroll">
+        <div class="panel-top">
+            <div class="logo-container">
+                <h1>CladForge</h1>
+                <p class="logo-tagline">Cladding buildup and setting-out from an IFC model · IFC4X3 + DXF out</p>
+            </div>
+
+            <div class="section">
+                <h2>1 · Model</h2>
+                <label class="file-drop" id="file-drop">
+                    <input type="file" id="ifc-file" accept=".ifc" onchange="onFileChosen(this)">
+                    <span id="upload-text">Drop an IFC file here or click to browse</span>
+                </label>
+                <div class="derived" id="model-info" style="margin-top:8px">No model loaded. Nothing is uploaded: the file is parsed in your browser.</div>
+                <label class="chk"><input type="checkbox" id="show-model" checked onchange="setLayerVisible('model', this.checked)"> Show host model</label>
+            </div>
+
+            <div class="section">
+                <h2>2 · Elevations</h2>
+                <div id="pick-toggle" class="turn-toggle">
+                    <button class="turn-btn active" data-value="pick" onclick="setPickMode(true)">Pick faces</button>
+                    <button class="turn-btn" data-value="orbit" onclick="setPickMode(false)">Orbit only</button>
+                </div>
+                <p class="hint">Click a wall face to add its coplanar patch to the active elevation; click again to remove it. Merged picks on one plane become one region. Openings punched by the importer become holes.</p>
+                <label class="chk"><input type="checkbox" id="penetrations" checked onchange="state.elevations.forEach(runExtraction)"> Subtract penetrations crossing the face</label>
+                <div id="elevation-list"></div>
+                <div class="row">
+                    <button class="btn btn-secondary btn-sm" onclick="newElevation()">+ New elevation</button>
+                    <button class="btn btn-secondary btn-sm" onclick="deleteElevation()">Delete active</button>
+                </div>
+            </div>
+        </div><!-- /panel-top -->
+
+        <div class="panel-bot">
+            <div class="section">
+                <h2>3 · Buildup</h2>
+                <div class="row pair">
+                    <label class="chk" style="flex:1"><input type="checkbox" id="sheathing" onchange="updatePreview()"> Sheathing board</label>
+                    <div class="field"><label>Thickness <span class="unit">6–18 mm</span></label><input type="number" id="sheathing_t" value="9" min="6" max="18" oninput="onNumeric()"></div>
+                </div>
+                <div class="row pair">
+                    <label class="chk" style="flex:1"><input type="checkbox" id="insulation" onchange="updatePreview()"> External insulation</label>
+                    <div class="field"><label>Thickness <span class="unit">25–200 mm</span></label><input type="number" id="insulation_t" value="100" min="25" max="200" step="5" oninput="onNumeric()"></div>
+                </div>
+                <div class="field"><label>Cladding type</label>
+                    <div id="cladding-type" class="turn-toggle">
+                        <button class="turn-btn active" data-value="plank" onclick="selectToggle('cladding-type','plank'); onTypeChange()">Plank</button>
+                        <button class="turn-btn" data-value="panel" onclick="selectToggle('cladding-type','panel'); onTypeChange()">Panel</button>
+                    </div>
+                </div>
+                <div class="row pair">
+                    <div class="field"><label>Batten width <span class="unit">mm</span></label><input type="number" id="batten_w" value="50" min="25" max="100" oninput="onNumeric()"></div>
+                    <div class="field"><label>Batten depth <span class="unit">mm</span></label><input type="number" id="batten_d" value="38" min="19" max="100" oninput="onNumeric()"></div>
+                    <div class="field"><label>Centres <span class="unit">300–600</span></label><input type="number" id="batten_centres" value="400" min="300" max="600" step="10" oninput="onNumeric()"></div>
+                </div>
+                <div class="row pair">
+                    <div class="field"><label>Counter-battens</label>
+                        <select id="counter_batten" onchange="updatePreview()">
+                            <option value="auto" selected>Derived from orientation</option>
+                            <option value="yes">Force on</option>
+                            <option value="no">Force off</option>
+                        </select>
+                    </div>
+                    <div class="field"><label>C/B width</label><input type="number" id="cb_w" value="50" min="25" max="100" oninput="onNumeric()"></div>
+                    <div class="field"><label>C/B depth</label><input type="number" id="cb_d" value="38" min="19" max="100" oninput="onNumeric()"></div>
+                </div>
+                <div class="field"><label>Splash zone above abutments <span class="unit">0–300 mm, 150 recommended</span></label>
+                    <input type="number" id="splash" value="150" min="0" max="300" step="10" oninput="onNumeric()"></div>
+                <div class="derived">Battens: <span id="d-battens">Vertical</span><br>Cover / bay: <span id="d-cover">158 mm</span></div>
+            </div>
+
+            <div class="section" id="panel-section">
+                <h2>4 · Panels</h2>
+                <div class="row pair">
+                    <div class="field"><label>Thickness <span class="unit">6–20</span></label><input type="number" id="panel_t" value="9" min="6" max="20" oninput="onNumeric()"></div>
+                    <div class="field"><label>Max width <span class="unit">600–1500</span></label><input type="number" id="panel_w" value="1200" min="600" max="1500" step="10" oninput="onNumeric()"></div>
+                </div>
+                <div class="row pair">
+                    <div class="field"><label>Max height <span class="unit">1200–3000</span></label><input type="number" id="panel_h" value="2400" min="1200" max="3000" step="10" oninput="onNumeric()"></div>
+                    <div class="field"><label>Joint gap <span class="unit">0–15</span></label><input type="number" id="panel_gap" value="10" min="0" max="15" oninput="onNumeric()"></div>
+                </div>
+                <p class="hint">Panel width drives batten centres: joints land on a batten, intermediate battens keep spans under 600 mm. Horizontal joints are open joints at the gap with noggins behind.</p>
+            </div>
+
+            <div class="section" id="plank-section">
+                <h2>4 · Planks</h2>
+                <div class="field"><label>Plank orientation</label>
+                    <div id="plank-orient" class="turn-toggle">
+                        <button class="turn-btn active" data-value="horizontal" onclick="selectToggle('plank-orient','horizontal'); onTypeChange()">Horizontal</button>
+                        <button class="turn-btn" data-value="vertical" onclick="selectToggle('plank-orient','vertical'); onTypeChange()">Vertical</button>
+                    </div>
+                </div>
+                <div class="row pair">
+                    <div class="field"><label>Face width <span class="unit">75–250</span></label><input type="number" id="plank_w" value="150" min="75" max="250" step="5" oninput="onNumeric()"></div>
+                    <div class="field"><label>Thickness <span class="unit">12–32</span></label><input type="number" id="plank_t" value="20" min="12" max="32" oninput="onNumeric()"></div>
+                </div>
+                <div class="row pair">
+                    <div class="field"><label>Lap <span class="unit">0 = open joint</span></label><input type="number" id="plank_lap" value="0" min="0" max="50" oninput="onNumeric()"></div>
+                    <div class="field"><label>Joint gap <span class="unit">0–15</span></label><input type="number" id="plank_gap" value="8" min="0" max="15" oninput="onNumeric()"></div>
+                    <div class="field"><label>Max length <span class="unit">1800–6000</span></label><input type="number" id="plank_len" value="3600" min="1800" max="6000" step="100" oninput="onNumeric()"></div>
+                </div>
+                <p class="hint">Lap &gt; 0 courses at face width minus lap (lapped profiles); lap = 0 courses at face width plus gap (open-jointed). Courses start at the splash zone and work up. End joints land on battens and stagger course to course.</p>
+            </div>
+
+            <div class="section">
+                <h2>5 · Setting-out</h2>
+                <div class="field"><label>Active elevation</label><select id="active-elev" onchange="setActive(parseInt(this.value))"></select></div>
+                <div class="field"><label>Horizontal offset <span class="unit">± half a bay, live</span></label>
+                    <div class="slider-row"><input type="range" id="offset" min="-300" max="300" step="5" value="0" oninput="onSlider(this.value)"><span id="offset-val">0 mm</span></div></div>
+                <label class="chk"><input type="checkbox" id="live-trim" checked onchange="updatePreview()"> Trim at openings in the preview (always trimmed on export)</label>
+            </div>
+
+            <div class="section">
+                <h2>Checks</h2>
+                <div id="checks-container" class="checks"></div>
+                <p class="scope-note">CladForge does not check compliance with Approved Document B and does not generate, position or verify cavity barriers. Cavity barrier provision remains a design decision outside the tool. Board counts are setting-out information, not a quantity take-off. Verify all outputs before use.</p>
+            </div>
+        </div><!-- /panel-bot -->
+      </div>
+
+      <div class="panel-actions">
+          <button class="btn btn-primary" id="ifc-btn" data-label="Download IFC4X3" onclick="downloadIFC()">Download IFC4X3</button>
+          <button class="btn btn-secondary" id="dxf-btn" data-label="Download DXF elevations" onclick="downloadDXF()">Download DXF elevations</button>
+          <a class="btn btn-secondary" style="text-align:center;text-decoration:none;font-size:12px;padding:7px" href="https://www.jakewhitearchitecture.com" target="_blank" rel="noopener">Jake White Architecture</a>
+      </div>
+    </div>
+
+    <div class="viewport" id="viewport">
+        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall face to pick</div>
+        <div class="legend">
+            <label><input type="checkbox" checked onchange="setLayerVisible('sheathing', this.checked)"><i style="background:#d9c9a3"></i> Sheathing</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('insulation', this.checked)"><i style="background:#e8d86a"></i> Insulation</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('counter_batten', this.checked)"><i style="background:#8b7355"></i> Counter-battens</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('batten', this.checked)"><i style="background:#c8a87c"></i> Battens</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('cladding', this.checked)"><i style="background:#6b8fa3"></i> Cladding</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('dims', this.checked)"><i style="background:#00ccff"></i> Dimensions</label>
+        </div>
+        <div class="dim-overlay" id="dim-overlay">
+            <div><span class="dim-label">Elevation:</span> <span class="dim-value" id="dim-size">--</span></div>
+            <div><span class="dim-label">Batten centres:</span> <span class="dim-value" id="dim-centres">--</span></div>
+            <div><span class="dim-label">Courses:</span> <span class="dim-value" id="dim-courses">--</span></div>
+            <div><span class="dim-label">Closing cuts:</span> <span class="dim-value" id="dim-cuts">--</span></div>
+            <div><span class="dim-label">Boards:</span> <span class="dim-value" id="dim-boards">--</span></div>
+        </div>
+        <div class="status-chip busy" id="status-chip">Loading…</div>
+    </div>
+
+    <div id="download-reminder" role="dialog" aria-modal="true" aria-label="Download Reminder">
+        <div class="reminder-dialog">
+            <div class="reminder-heading">Before you download</div>
+            <p class="reminder-text">CladForge is a preliminary design aid. The user must check all outputs for compliance with UK or other relevant local regulation or standard. The tool does not check Approved Document B and does not position cavity barriers. Schedules are setting-out information, not a quantity take-off.</p>
+            <button class="btn btn-primary" onclick="confirmDownload()">Understood, proceed to download</button>
+        </div>
+    </div>
+
+    <!-- Runtimes: Pyodide (engine), Three.js r128 (viewer), web-ifc (IFC import) -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.27.4/full/pyodide.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/web-ifc@0.0.57/web-ifc-api-iife.js" crossorigin="anonymous"></script>
+    <script src="static/viewer.js"></script>
+    <script src="static/app.js"></script>
+    <script>initApp();</script>
+</body>
+</html>
