@@ -358,7 +358,9 @@ function renderOutlines(elevations, splash) {
         }
         for (const ab of e.abutments) {
             if (!ab.enabled || splash <= 0) continue;
-            const ring = [[ab.u0, ab.v], [ab.u1, ab.v], [ab.u1, ab.v + splash], [ab.u0, ab.v + splash]];
+            // The band follows the abutment line: level for slabs, sloped where a roof pitches.
+            const line = ab.line || [[ab.u0, ab.v], [ab.u1, ab.v]];
+            const ring = line.concat(line.slice().reverse().map(p => [p[0], p[1] + splash]));
             outlineGroup.add(ringLine(ring, e.frame, 3, 0xe94560, true));
         }
     });

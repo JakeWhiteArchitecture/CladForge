@@ -3,8 +3,9 @@ CladForge — fabric extraction.
 
 Turns picked wall-face triangles into a named elevation: a coplanar region in
 its own (u, v) frame, with openings as interior holes, penetrations subtracted
-and slab/roof abutments detected for the splash zone. Runs once per selection
-(in Pyodide or via Flask) and the result is cached by the caller.
+and slab/roof abutments detected as lines (level or pitched) for the splash
+zone. Also decides whether two elevations meet at a corner so the UI can
+chain them. Runs once per selection (in Pyodide or via Flask).
 
 Payload (all coordinates IFC mm, Z-up):
   {"name": "Elevation A",
@@ -14,13 +15,13 @@ Payload (all coordinates IFC mm, Z-up):
    "options": {"penetrations": true}}
 
 Result: {"ok", "name", "warnings", "frame", "polygons", "width", "height",
-         "area", "abutments", "n_faces"}
+         "area", "abutments": [{"u0","u1","v","line":[[u,v],...],"source",...}], "n_faces"}
 """
 
 import math
 
-from shapely.geometry import Polygon, MultiPoint
-from shapely.ops import unary_union
+from shapely.geometry import Polygon, MultiPoint, LineString
+from shapely.ops import unary_union, polygonize
 from shapely.affinity import translate
 
 from cladding_booleans import iter_polygons, polygon_to_rings, _difference
@@ -29,6 +30,8 @@ PLANE_TOL = 25.0          # mm – off-plane distance still treated as on the fa
 VERTICAL_TOL = 0.087      # sin(5 deg) – flatten faces this close to vertical
 MIN_HOLE_AREA = 2500.0    # mm² – ignore holes smaller than 50 x 50
 EDGE_MARGIN = 50.0        # mm – abutments this close to the top/bottom are not abutments
+CORNER_TOL = 400.0        # mm – a corner may sit this far past an elevation's end (wall thickness)
+PITCH_TOL = 20.0          # mm – rise along an abutment line before it counts as pitched
 # Type names are compared upper-cased: web-ifc reports IFCSLAB, IfcOpenShell IfcSlab.
 ABUTMENT_TYPES = frozenset({"IFCSLAB", "IFCSLABSTANDARDCASE", "IFCSLABELEMENTEDCASE", "IFCROOF"})
 IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE", "IFCSPACE",
@@ -137,12 +140,18 @@ def _union_faces(faces, n, u):
 
 
 def _section(tris, n, d, u):
-    """Intersection of an element with the wall plane.
-    Returns (straddles, touches, hull polygon or None, v_top, v_bot, u0, u1) in local coords."""
-    pts, smin, smax = [], float("inf"), float("-inf")
+    """Intersection of an element with the wall plane, in local (u, v).
+
+    Returns (straddles, touches, section polygon or None, points). The polygon is
+    assembled from the plane-crossing segments plus any triangles lying in the
+    plane; the convex hull of the points is the fallback for open meshes."""
+    pts, segs, inplane, smin, smax = [], [], [], float("inf"), float("-inf")
     for tri in tris:
         s = [_dot(v, n) - d for v in tri]
         smin, smax = min(smin, *s), max(smax, *s)
+        if all(abs(x) <= PLANE_TOL for x in s):
+            inplane.append(Polygon([_to_local(v, n, u) for v in tri]))
+        cut = []
         for i in range(3):
             a, b = tri[i], tri[(i + 1) % 3]
             sa, sb = s[i], s[(i + 1) % 3]
@@ -150,22 +159,48 @@ def _section(tris, n, d, u):
                 pts.append(_to_local(a, n, u))
             if (sa < -PLANE_TOL and sb > PLANE_TOL) or (sa > PLANE_TOL and sb < -PLANE_TOL):
                 t = sa / (sa - sb)
-                pts.append(_to_local((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
-                                      a[2] + (b[2] - a[2]) * t), n, u))
+                q = _to_local((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t), n, u)
+                pts.append(q)
+                cut.append(q)
+        if len(cut) == 2 and cut[0] != cut[1]:
+            segs.append(LineString(cut))
     if not pts:
-        return False, False, None, 0, 0, 0, 0
+        return False, False, None, []
     straddles = smin < -PLANE_TOL and smax > PLANE_TOL
-    touches = any(True for _ in pts)
-    hull = None
+    poly = None
     try:
-        h = MultiPoint(pts).convex_hull
-        if h.geom_type == "Polygon" and h.area > MIN_HOLE_AREA:
-            hull = h
+        parts = [pg for pg in polygonize(unary_union(segs)) if pg.area > MIN_HOLE_AREA] if segs else []
+        parts += [pg for pg in inplane if pg.is_valid and pg.area > 1.0]
+        if parts:
+            poly = unary_union(parts).buffer(0.5, join_style=2).buffer(-0.5, join_style=2)
+        if poly is None or poly.is_empty or poly.area <= MIN_HOLE_AREA:
+            hull = MultiPoint(pts).convex_hull
+            poly = hull if hull.geom_type == "Polygon" and hull.area > MIN_HOLE_AREA else None
     except Exception:
-        pass
-    us = [q[0] for q in pts]
-    vs = [q[1] for q in pts]
-    return straddles, touches, hull, max(vs), min(vs), min(us), max(us)
+        poly = None
+    return straddles, True, poly, pts
+
+
+def _top_line(poly, u0, u1):
+    """Upper envelope of a section polygon between u0 and u1, as a simplified polyline.
+    Level for a flat roof or slab, sloped where a pitched roof meets a gable."""
+    bu0, bv0, bu1, bv1 = poly.bounds
+    lo, hi = max(u0, bu0), min(u1, bu1)
+    if hi - lo < EDGE_MARGIN:
+        return None
+    us = sorted({lo, hi} | {round(x, 3) for pg in iter_polygons(poly) for x, _y in pg.exterior.coords if lo < x < hi})
+    line = []
+    for x in us:
+        try:
+            hit = LineString([(x, bv0 - 1), (x, bv1 + 1)]).intersection(poly)
+        except Exception:
+            continue
+        if hit.is_empty:
+            continue
+        line.append((x, hit.bounds[3]))
+    if len(line) < 2:
+        return None
+    return [list(p) for p in LineString(line).simplify(2.0).coords]
 
 
 def extract_elevation(payload):
@@ -195,24 +230,24 @@ def extract_elevation(payload):
         tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem.get("tris", [])]
         if not tris or etype in IGNORE_TYPES:
             continue
-        straddles, touches, hull, v_top, v_bot, eu0, eu1 = _section(tris, n, d, u)
-        if not touches:
+        straddles, touches, poly, pts = _section(tris, n, d, u)
+        if not touches or poly is None:
             continue
         if etype in ABUTMENT_TYPES:
-            if min(eu1, umax0) - max(eu0, umin0) < EDGE_MARGIN:   # only grazes the region
-                continue
-            if vmin0 + EDGE_MARGIN < v_top < vmax0 - EDGE_MARGIN:
-                abutments.append({"u0": max(eu0, umin0), "u1": min(eu1, umax0), "v": v_top,
-                                  "source": elem.get("type") or etype, "name": elem.get("name", ""),
-                                  "pitched": (v_top - v_bot) > 300.0 and etype == "IFCROOF"})
-            if straddles and hull is not None:
-                cuts.append(hull)
-        elif straddles and hull is not None and options.get("penetrations", True):
-            cuts.append(hull)
-    for hull in cuts:
+            line = _top_line(poly, umin0, umax0)
+            if line:
+                top = max(v for _u, v in line)
+                if vmin0 + EDGE_MARGIN < top < vmax0 - EDGE_MARGIN:
+                    abutments.append({"line": line, "source": elem.get("type") or etype,
+                                      "name": elem.get("name", "")})
+            if straddles:
+                cuts.append(poly)
+        elif straddles and options.get("penetrations", True):
+            cuts.append(poly)
+    for cut_poly in cuts:
         try:
-            if hull.intersection(region).area > MIN_HOLE_AREA:
-                cut = _difference(region, hull)
+            if cut_poly.intersection(region).area > MIN_HOLE_AREA:
+                cut = _difference(region, cut_poly)
                 if cut is not None and not cut.is_empty:
                     region = cut
         except Exception:
@@ -238,24 +273,63 @@ def extract_elevation(payload):
                    "abutments": _merge_abutments(abutments, umin, vmin, width),
                    "n_holes": sum(len(pg["holes"]) for pg in polygons)})
     if any(a.get("pitched") for a in result["abutments"]):
-        result["warnings"].append("Pitched roof abutment detected — check the level or set it manually")
+        result["warnings"].append("Pitched abutment detected — the splash zone follows the roof line; check it")
     return result
 
 
 def _merge_abutments(found, umin, vmin, width):
-    """Shift to local coords, merge near-identical levels, prepend the base (ground) line."""
-    out = [{"u0": 0.0, "u1": round(width, 2), "v": 0.0, "source": "base", "enabled": True,
-            "name": "Elevation base"}]
-    for ab in sorted(found, key=lambda a: a["v"]):
-        v = round(ab["v"] - vmin, 2)
-        u0, u1 = round(ab["u0"] - umin, 2), round(ab["u1"] - umin, 2)
+    """Shift to local coords, merge near-identical level lines, prepend the base (ground) line."""
+    out = [{"u0": 0.0, "u1": round(width, 2), "v": 0.0, "line": [[0.0, 0.0], [round(width, 2), 0.0]],
+            "source": "base", "enabled": True, "name": "Elevation base", "pitched": False}]
+    for ab in found:
+        line = [[round(x - umin, 2), round(y - vmin, 2)] for x, y in ab["line"]]
+        vs = [p[1] for p in line]
+        rec = {"u0": line[0][0], "u1": line[-1][0], "v": round(max(vs), 2), "v_min": round(min(vs), 2),
+               "line": line, "source": ab["source"], "enabled": True, "name": ab.get("name") or ab["source"],
+               "pitched": (max(vs) - min(vs)) > PITCH_TOL}
         merged = False
         for ex in out[1:]:
-            if abs(ex["v"] - v) <= 10.0 and u0 <= ex["u1"] + 10 and u1 >= ex["u0"] - 10:
-                ex["u0"], ex["u1"] = min(ex["u0"], u0), max(ex["u1"], u1)
+            if not ex["pitched"] and not rec["pitched"] and abs(ex["v"] - rec["v"]) <= 10.0 \
+                    and rec["u0"] <= ex["u1"] + 10 and rec["u1"] >= ex["u0"] - 10:
+                ex["u0"], ex["u1"] = min(ex["u0"], rec["u0"]), max(ex["u1"], rec["u1"])
+                ex["line"] = [[ex["u0"], ex["v"]], [ex["u1"], ex["v"]]]
                 merged = True
                 break
         if not merged:
-            out.append({"u0": u0, "u1": u1, "v": v, "source": ab["source"], "enabled": True,
-                        "name": ab.get("name") or ab["source"], "pitched": ab.get("pitched", False)})
-    return out
+            out.append(rec)
+    return sorted(out, key=lambda a: (a["v"], a["u0"]))
+
+
+# ── corners ──────────────────────────────────────────────────────────────
+
+def chain_link(a, b):
+    """Do elevations a and b meet at a vertical corner? None if not, else
+    {"end_a": "left"|"right", "end_b": ..., "corner_u_a", "corner_u_b", "angle"}.
+    Ends are judged in each elevation's own frame (u = 0 is the viewer's left)."""
+    fa, fb = a["frame"], b["frame"]
+    na, nb = fa["n"], fb["n"]
+    cross = na[0] * nb[1] - na[1] * nb[0]
+    if abs(cross) < 0.05:
+        return None                                   # parallel or coplanar
+    da = na[0] * fa["origin"][0] + na[1] * fa["origin"][1]
+    db = nb[0] * fb["origin"][0] + nb[1] * fb["origin"][1]
+    px = (da * nb[1] - db * na[1]) / cross            # plan point on both planes
+    py = (na[0] * db - nb[0] * da) / cross
+    ends = []
+    for e in (a, b):
+        f = e["frame"]
+        uu = f["u"][0] * (px - f["origin"][0]) + f["u"][1] * (py - f["origin"][1])
+        W = float(e["width"])
+        if abs(uu) <= CORNER_TOL:
+            ends.append(("left", uu))
+        elif abs(uu - W) <= CORNER_TOL:
+            ends.append(("right", uu))
+        else:
+            return None
+    za0, za1 = fa["origin"][2], fa["origin"][2] + float(a["height"])
+    zb0, zb1 = fb["origin"][2], fb["origin"][2] + float(b["height"])
+    if min(za1, zb1) - max(za0, zb0) < 300.0:
+        return None                                   # no vertical overlap
+    return {"end_a": ends[0][0], "end_b": ends[1][0], "corner_u_a": round(ends[0][1], 1),
+            "corner_u_b": round(ends[1][1], 1),
+            "angle": round(math.degrees(math.atan2(cross, na[0] * nb[0] + na[1] * nb[1])), 1)}

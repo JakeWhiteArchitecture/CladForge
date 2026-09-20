@@ -1,31 +1,47 @@
 /* CladForge app — elevation state, Pyodide engine, live preview, downloads. */
 
-const state = { elevations: [], active: -1, pickMode: true, sliderDragging: false, model: null };
+const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDragging: false, model: null, seq: 0 };
 let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null;
 
-// ─── ELEVATIONS ───
-function newElevation() {
+// ─── ELEVATIONS AND CHAINS ───
+// An elevation is one coplanar region. A chain is an ordered run of elevations that
+// meet at corners; coursing is set out along the whole run so joints carry round.
+function newChain() {
+    const chain = { name: 'Chain ' + (++state.seq), offset: 0, members: [], length: 0 };
+    state.chains.push(chain);
+    return chain;
+}
+
+function newElevation(chain) {
     const n = state.elevations.length;
     const name = 'Elevation ' + String.fromCharCode(65 + (n % 26)) + (n >= 26 ? Math.floor(n / 26) : '');
-    state.elevations.push({ name, color: ELEV_COLORS[n % ELEV_COLORS.length], picks: [], result: null,
-                            manual: [], disabled: {}, offset: 0, storey: null, highlights: [] });
+    const e = { name, color: ELEV_COLORS[n % ELEV_COLORS.length], picks: [], result: null, manual: [], disabled: {},
+                storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null };
+    e.chain.members.push(e);
+    state.elevations.push(e);
     setActive(n);
+    return e;
 }
 
 function deleteElevation() {
     if (state.active < 0) return;
     const e = state.elevations.splice(state.active, 1)[0];
     e.highlights.forEach(h => highlightGroup.remove(h));
+    e.chain.members = e.chain.members.filter(m => m !== e);
+    if (!e.chain.members.length) state.chains = state.chains.filter(c => c !== e.chain);
+    else relinkChain(e.chain);
     setActive(Math.min(state.active, state.elevations.length - 1));
 }
+
+function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' · ' + e.name : e.name; }
 
 function setActive(i) {
     state.active = i;
     renderElevationList();
     const sel = document.getElementById('active-elev');
-    sel.innerHTML = state.elevations.map((e, k) => `<option value="${k}" ${k === i ? 'selected' : ''}>${e.name}</option>`).join('');
+    sel.innerHTML = state.elevations.map((e, k) => `<option value="${k}" ${k === i ? 'selected' : ''}>${chainLabel(e)}</option>`).join('');
     const e = state.elevations[i];
-    document.getElementById('offset').value = e ? e.offset : 0;
+    document.getElementById('offset').value = e ? e.chain.offset : 0;
     updateSliderRange();
     updatePreview();
 }
@@ -62,28 +78,101 @@ function removeManualLevel(i, k) {
 function abutmentsFor(e) {
     if (!e.result || !e.result.ok) return [];
     const out = e.result.abutments.map(ab => Object.assign({}, ab, { enabled: !e.disabled[abutKey(ab)] }));
-    e.manual.forEach((v, k) => out.push({ u0: 0, u1: e.result.width, v, source: 'manual', name: 'Manual level', enabled: true, k }));
+    e.manual.forEach((v, k) => out.push({ u0: 0, u1: e.result.width, v, line: [[0, v], [e.result.width, v]],
+                                          source: 'manual', name: 'Manual level', enabled: true, k }));
     return out;
+}
+
+function elevationCard(e, i) {
+    const r = e.result, ok = r && r.ok;
+    const meta = ok ? `${Math.round(r.width)} × ${Math.round(r.height)} mm · ${r.n_holes} opening${r.n_holes === 1 ? '' : 's'}` : `${e.picks.length} pick${e.picks.length === 1 ? '' : 's'}`;
+    const abuts = abutmentsFor(e).map(ab => ab.source === 'manual'
+        ? `<label><input type="checkbox" checked disabled> Manual level @ ${Math.round(ab.v)} <button class="mini" onclick="event.stopPropagation(); removeManualLevel(${i}, ${ab.k})">×</button></label>`
+        : `<label onclick="event.stopPropagation()"><input type="checkbox" ${ab.enabled ? 'checked' : ''} onchange="toggleAbutment(${i}, '${abutKey(ab)}', this.checked)"> ${ab.name || ab.source} (${ab.source}) ${ab.pitched ? `pitched ${Math.round(ab.v_min)}–${Math.round(ab.v)}, splash follows the roof` : '@ ' + Math.round(ab.v)}</label>`).join('');
+    const warn = r && r.warnings && r.warnings.length ? `<div class="elev-warn">${r.warnings.join(' · ')}</div>` : '';
+    const place = e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + r.width)}${e.rev ? ' ↺' : ''}` : '';
+    return `<div class="elev-card ${i === state.active ? 'active' : ''}" onclick="setActive(${i})">
+        <div class="elev-head"><span class="elev-swatch" style="background:#${e.color.toString(16).padStart(6, '0')}"></span>
+            <input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
+            <span class="elev-meta">${meta}${e.storey ? ' · ' + e.storey.name : ''}${place}</span></div>
+        ${ok ? `<div class="elev-abut">Abutments (splash zone above each):${abuts}
+            <div class="row" style="margin-top:4px"><input type="number" id="manual-level-${i}" placeholder="Level mm above base" onclick="event.stopPropagation()">
+            <button class="mini" onclick="event.stopPropagation(); addManualLevel(${i})">Add level</button></div></div>` : ''}${warn}</div>`;
 }
 
 function renderElevationList() {
     const box = document.getElementById('elevation-list');
     if (!state.elevations.length) { box.innerHTML = '<p class="hint">No elevations yet. Load a model, then click a wall face.</p>'; return; }
-    box.innerHTML = state.elevations.map((e, i) => {
-        const r = e.result, ok = r && r.ok;
-        const meta = ok ? `${Math.round(r.width)} × ${Math.round(r.height)} mm · ${r.n_holes} opening${r.n_holes === 1 ? '' : 's'}` : `${e.picks.length} pick${e.picks.length === 1 ? '' : 's'}`;
-        const abuts = abutmentsFor(e).map(ab => ab.source === 'manual'
-            ? `<label><input type="checkbox" checked disabled> Manual level @ ${Math.round(ab.v)} <button class="mini" onclick="event.stopPropagation(); removeManualLevel(${i}, ${ab.k})">×</button></label>`
-            : `<label onclick="event.stopPropagation()"><input type="checkbox" ${ab.enabled ? 'checked' : ''} onchange="toggleAbutment(${i}, '${abutKey(ab)}', this.checked)"> ${ab.name || ab.source} (${ab.source}) @ ${Math.round(ab.v)}${ab.pitched ? ' ⚠ pitched' : ''}</label>`).join('');
-        const warn = r && r.warnings && r.warnings.length ? `<div class="elev-warn">${r.warnings.join(' · ')}</div>` : '';
-        return `<div class="elev-card ${i === state.active ? 'active' : ''}" onclick="setActive(${i})">
-            <div class="elev-head"><span class="elev-swatch" style="background:#${e.color.toString(16).padStart(6, '0')}"></span>
-                <input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
-                <span class="elev-meta">${meta}${e.storey ? ' · ' + e.storey.name : ''}</span></div>
-            ${ok ? `<div class="elev-abut">Abutments (splash zone above each):${abuts}
-                <div class="row" style="margin-top:4px"><input type="number" id="manual-level-${i}" placeholder="Level mm above base" onclick="event.stopPropagation()">
-                <button class="mini" onclick="event.stopPropagation(); addManualLevel(${i})">Add level</button></div></div>` : ''}${warn}</div>`;
-    }).join('');
+    let html = '';
+    for (const chain of state.chains) {
+        const members = chain.members.slice().sort((a, b) => a.start - b.start);
+        if (members.length > 1) {
+            html += `<div class="chain-head">${chain.name} · ${members.map(m => m.name.replace('Elevation ', '')).join(' → ')} · run ${Math.round(chain.length)} mm</div>`;
+        }
+        for (const m of members) html += elevationCard(m, state.elevations.indexOf(m));
+    }
+    box.innerHTML = html;
+}
+
+// ─── CORNERS ───
+function samePlane(hit, e) {
+    if (!e.result || !e.result.ok) return e.picks.length === 0;
+    const f = e.result.frame, n = toIfc(hit.normal), p = toIfc(hit.point);
+    if (n[0] * f.n[0] + n[1] * f.n[1] < 0.9998) return false;
+    const d = f.n[0] * (p[0] - f.origin[0]) + f.n[1] * (p[1] - f.origin[1]);
+    return Math.abs(d) < 25;
+}
+
+async function pyLink(a, b) {
+    const slim = r => JSON.stringify({ frame: r.frame, width: r.width, height: r.height });
+    pyodide.globals.set('_link_a', slim(a)); pyodide.globals.set('_link_b', slim(b));
+    const out = await pyodide.runPythonAsync(`
+import json as _json
+from fabric_extract import chain_link as _cl
+_json.dumps(_cl(_json.loads(_link_a), _json.loads(_link_b)))`);
+    return JSON.parse(out);
+}
+
+function placeInChain(e, other, link) {
+    // Chain coordinate c runs along the whole run. *other* occupies [start, start + W];
+    // the corner sits at one of its ends, and e extends away from that corner.
+    const W = e.result.width, Wo = other.result.width;
+    const cornerC = (link.end_a === 'right') !== other.rev ? other.start + Wo : other.start;
+    if (cornerC >= other.start + Wo - 1) { e.start = cornerC; e.rev = link.end_b === 'right'; }
+    else { e.start = cornerC - W; e.rev = link.end_b === 'left'; }
+    e.link = link;
+}
+
+function relayoutChain(chain) {
+    const placed = chain.members.filter(m => m.result && m.result.ok);
+    const lo = placed.length ? Math.min(...placed.map(m => m.start)) : 0;
+    placed.forEach(m => m.start -= lo);
+    chain.length = placed.length ? Math.max(...placed.map(m => m.start + m.result.width)) : 0;
+}
+
+async function linkIntoChain(e) {
+    const chain = e.chain;
+    const others = chain.members.filter(m => m !== e && m.result && m.result.ok).reverse();
+    for (const other of others) {
+        let link = null;
+        try { link = await pyLink(other.result, e.result); } catch (err) { console.warn('link failed', err); }
+        if (link) { placeInChain(e, other, link); relayoutChain(chain); return true; }
+    }
+    if (others.length) {   // not adjacent to anything in this chain: give it a chain of its own
+        chain.members = chain.members.filter(m => m !== e);
+        e.chain = newChain(); e.chain.members.push(e);
+    }
+    e.start = 0; e.rev = false; e.link = null;
+    relayoutChain(e.chain);
+    return false;
+}
+
+async function relinkChain(chain) {
+    const members = chain.members.slice().sort((a, b) => a.start - b.start);
+    chain.members = [];
+    for (const m of members) { m.chain = chain; chain.members.push(m); if (m.result && m.result.ok) await linkIntoChain(m); }
+    renderElevationList();
+    updatePreview();
 }
 
 // ─── PICKING → EXTRACTION ───
@@ -100,7 +189,13 @@ function onViewportClick(event) {
     const faces = coplanarFaces(hit.mesh, hit.faceIndex);
     if (!faces) { setStatus('That face is not vertical — pick a wall face', 'busy'); return; }
     if (state.active < 0) newElevation();
-    const e = state.elevations[state.active];
+    let e = state.elevations[state.active];
+    // Coplanar with the active elevation: merge. Otherwise start a new elevation in the
+    // same chain; after extraction it either links at a corner or moves to its own chain.
+    if (!samePlane(hit, e)) {
+        const match = e.chain.members.find(m => samePlane(hit, m));
+        e = match || newElevation(e.chain);
+    }
     const existing = e.picks.findIndex(p => p.mesh === hit.mesh && p.faces.includes(hit.faceIndex));
     if (existing >= 0) e.picks.splice(existing, 1);
     else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal) });
@@ -127,7 +222,11 @@ from fabric_extract import extract_elevation as _ex
 _json.dumps(_ex(_json.loads(_payload_json)))`);
         e.result = JSON.parse(out);
         setStatus(e.result.ok ? 'Ready' : (e.result.warnings.join('; ') || 'Extraction failed'), e.result.ok ? 'ready' : 'busy');
-        if (e.result.ok) frameElevation(e.result);
+        if (e.result.ok) {
+            const linked = await linkIntoChain(e);
+            if (linked) setStatus(`${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)`, 'ready');
+            frameElevation(e.result);
+        }
     } catch (err) {
         console.error(err); e.result = null; setStatus('Extraction error: ' + err.message, 'busy');
     }
@@ -146,8 +245,16 @@ function selectToggle(id, value) {
 }
 
 function elevationRecords() {
-    return state.elevations.filter(e => e.result && e.result.ok).map(e =>
-        Object.assign({}, e.result, { name: e.name, offset: e.offset, abutments: abutmentsFor(e), storey: e.storey }));
+    const out = [];
+    for (const chain of state.chains) {
+        const members = chain.members.filter(e => e.result && e.result.ok).sort((a, b) => a.start - b.start);
+        for (const e of members) {
+            out.push(Object.assign({}, e.result, { name: e.name, offset: chain.offset, abutments: abutmentsFor(e), storey: e.storey,
+                                                   chain: members.length > 1 ? chain.name : null, chain_start: e.start,
+                                                   chain_length: chain.length, chain_reversed: e.rev }));
+        }
+    }
+    return out;
 }
 
 function getParams() {
@@ -179,15 +286,15 @@ function updateSliderRange() {
     const s = document.getElementById('offset');
     s.min = -Math.round(half); s.max = Math.round(half); s.step = 5;
     const e = state.elevations[state.active];
-    if (e) { e.offset = Math.max(-half, Math.min(half, e.offset)); s.value = e.offset; }
-    document.getElementById('offset-val').textContent = (e ? e.offset : 0) + ' mm';
+    if (e) { e.chain.offset = Math.max(-half, Math.min(half, e.chain.offset)); s.value = e.chain.offset; }
+    document.getElementById('offset-val').textContent = (e ? e.chain.offset : 0) + ' mm';
 }
 
 function onSlider(value) {
     const e = state.elevations[state.active];
     if (!e) return;
-    e.offset = parseFloat(value);
-    document.getElementById('offset-val').textContent = e.offset + ' mm';
+    e.chain.offset = parseFloat(value);
+    document.getElementById('offset-val').textContent = e.chain.offset + ' mm';
     updatePreview();
 }
 
@@ -278,7 +385,7 @@ async function loadModel(file) {
     const info = document.getElementById('model-info');
     try {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
-        state.elevations = []; state.active = -1; renderElevationList();
+        state.elevations = []; state.chains = []; state.active = -1; state.seq = 0; renderElevationList();
         const summary = await loadIFC(file, t => setStatus(t, 'busy'));
         state.model = summary;
         info.innerHTML = `<b>${file.name}</b><br>${summary.meshes} elements · ${summary.storeys} storeys · ${summary.context.project || 'unnamed project'}`;

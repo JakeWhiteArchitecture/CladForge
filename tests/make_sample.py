@@ -20,9 +20,21 @@ def box(ifc, body, x0, y0, z0, x1, y1, z1):
     return ifc.createIfcProductDefinitionShape(None, None, [ifc.createIfcShapeRepresentation(body, "Body", "SweptSolid", [solid])])
 
 
-def element(ifc, body, storey, cls, name, bounds, predefined=None):
+def sloped(ifc, body, x0, x1, y0, z0, y1, z1, t):
+    """Roof slab of vertical thickness t whose top runs from (y0, z0) to (y1, z1), spanning x0..x1."""
+    prof = [(y0, z0 - t), (y1, z1 - t), (y1, z1), (y0, z0)]
+    pts = [ifc.createIfcCartesianPoint((float(a), float(b))) for a, b in prof]
+    pts.append(pts[0])
+    profile = ifc.createIfcArbitraryClosedProfileDef("AREA", None, ifc.createIfcPolyline(pts))
+    place = ifc.createIfcAxis2Placement3D(ifc.createIfcCartesianPoint((float(x0), 0.0, 0.0)),
+                                          ifc.createIfcDirection((1.0, 0.0, 0.0)), ifc.createIfcDirection((0.0, 1.0, 0.0)))
+    solid = ifc.createIfcExtrudedAreaSolid(profile, place, ifc.createIfcDirection((0.0, 0.0, 1.0)), float(x1 - x0))
+    return ifc.createIfcProductDefinitionShape(None, None, [ifc.createIfcShapeRepresentation(body, "Body", "SweptSolid", [solid])])
+
+
+def element(ifc, body, storey, cls, name, bounds, predefined=None, shape=None):
     e = ifcopenshell.api.run("root.create_entity", ifc, ifc_class=cls, name=name)
-    e.Representation = box(ifc, body, *bounds)
+    e.Representation = shape or box(ifc, body, *bounds)
     e.ObjectPlacement = ifc.createIfcLocalPlacement(None, ifc.createIfcAxis2Placement3D(
         ifc.createIfcCartesianPoint((0.0, 0.0, 0.0)), None, None))
     if predefined:
@@ -61,11 +73,15 @@ def main():
     element(ifc, body, first, "IfcSlab", "First floor slab", (300, 300, 2800, 7700, 5700, 3000), "FLOOR")
     element(ifc, body, first, "IfcSlab", "Balcony", (4500, -1500, 3000, 8000, 300, 3200), "FLOOR")
     element(ifc, body, first, "IfcSlab", "Main roof", (0, 0, 6000, 8000, 6000, 6200), "ROOF")
-    # Single-storey wing to the east with a flat roof abutting the east wall.
+    # Single-storey wing to the east: three walls turning two external corners, and a
+    # pitched roof (ridge along X) that meets the main east wall as a gable abutment.
     element(ifc, body, ground, "IfcWall", "Wing south wall", (8000, 1000, 0, 11000, 1300, 3500))
     element(ifc, body, ground, "IfcWall", "Wing east wall", (10700, 1000, 0, 11000, 4000, 3500))
     element(ifc, body, ground, "IfcWall", "Wing north wall", (8000, 3700, 0, 11000, 4000, 3500))
-    element(ifc, body, ground, "IfcRoof", "Wing roof", (7900, 1000, 3500, 11000, 4000, 3700), "FLAT_ROOF")
+    element(ifc, body, ground, "IfcRoof", "Wing roof south", None, "GABLE_ROOF",
+            shape=sloped(ifc, body, 7900, 11300, 700, 3400, 2500, 4500, 200))
+    element(ifc, body, ground, "IfcRoof", "Wing roof north", None, "GABLE_ROOF",
+            shape=sloped(ifc, body, 7900, 11300, 2500, 4500, 4300, 3400, 200))
     ifc.write(OUT)
     print("wrote", OUT, os.path.getsize(OUT), "bytes")
 

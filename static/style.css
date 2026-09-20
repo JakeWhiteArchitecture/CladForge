@@ -71,6 +71,7 @@ body {
 .file-drop:hover, .file-drop.over { border-color: var(--accent); color: var(--text); }
 .file-drop input { display: none; }
 
+.chain-head { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 4px; }
 .elev-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
 .elev-card.active { border-color: var(--accent); }
 .elev-head { display: flex; align-items: center; gap: 8px; }

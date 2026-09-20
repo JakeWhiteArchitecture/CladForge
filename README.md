@@ -57,9 +57,11 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
 1. Drop an IFC on the panel. The file is parsed in your browser and never uploaded.
 2. With **Pick faces** on, click a wall face. The coplanar patch joins the active
    elevation; click again to remove it. Click more patches on the same plane to
-   merge them. **New elevation** starts Elevation B.
-3. Check the detected abutments on the elevation card. Untick a false one, or
-   type a level and **Add level** where detection fails (pitched roof against a gable).
+   merge them. Click a face round the corner and it becomes the next elevation
+   in the chain. **New elevation** starts a separate chain.
+3. Check the detected abutments on the elevation card. Pitched ones say so and
+   the splash band follows the roof line. Untick a false one, or type a level and
+   **Add level** where detection fails.
 4. Set the buildup: sheathing, insulation, plank or panel, batten section and
    centres, counter-battens, splash zone.
 5. Drag the **horizontal offset** slider to control where the closing cuts land.
@@ -75,12 +77,13 @@ default. Each is one place in the code, so any of them can be flipped.
 | Region definition [ASSUMED] | Yes. A region is coplanar; openings are interior holes and never split a region. Separate patches on one plane merge into one elevation (one frame, one coursing, boards clipped to the union). | `fabric_extract._union_faces` |
 | Selection mode [OPEN] | Both. One click grows the connected coplanar patch (SunForm's flood fill), and further clicks merge more patches into the same elevation. | `viewer.coplanarFaces`, `app.onViewportClick` |
 | Openings source [OPEN] | Mesh voids. web-ifc punches `IfcRelVoidsElement` openings into the wall mesh, so they arrive free as holes. Penetrations (anything else crossing the face plane: pipes, beams, windows if the void was not punched) are sectioned and subtracted as convex-hull holes. Switch off with the *Subtract penetrations* checkbox. | `fabric_extract.extract_elevation` |
-| Abutments | Any `IfcSlab`/`IfcRoof` that reaches the face plane inside the region gives an abutment at its top, over its own u-range. A slab that passes through the face is also cut out of the region. Manual levels can be added per elevation. | `fabric_extract._section` |
+| Abutments | Any `IfcSlab`/`IfcRoof` that reaches the face plane inside the region is sectioned on the plane and its upper edge becomes the abutment *line*: level for a flat roof or slab, pitched where a roof meets a gable (two slopes meeting at the ridge, say). The splash zone is a band of constant vertical height above that line, so it follows the roof. A slab that passes through the face is also cut out of the region. Manual levels can be added per elevation. | `fabric_extract._section`, `_top_line`, `cladding_primitives.splash_rings` |
+| Chains (corners) | A click that is coplanar with the active elevation merges into it. A click on a face that turns a corner from any elevation in the active chain becomes the next elevation in that chain: Elevation A becomes "Chain 1 · A → B → C". A face that meets nothing starts a new chain. Coursing is centred on the whole run and the offset slider is per chain, so panel joints and batten centres carry round the corner (the run reverses through re-entrant corners). Corner allowances and trims are not modelled: the run length is the sum of the face widths. | `fabric_extract.chain_link`, `app.linkIntoChain`, `cladding_geometry.build_elevation` |
 | Splash zone applies to battens and cladding only [ASSUMED] | Yes. Sheathing and insulation follow the full outline. | `cladding_booleans.TRIMMABLE` |
 | Ground splash zone [OPEN] | Same rule. The elevation base is always an abutment ("Elevation base"); untick it to start boards at the base. | `fabric_extract._merge_abutments` |
 | Panel centres dependency [OPEN] | Width drives centres. Batten centres = (panel width + gap) / n, with n chosen so no span exceeds 600 mm. The centres field is locked in panel mode. Closing cuts are reported at both ends and the top. | `cladding_constants._parse` |
 | Planks lapped or butt-jointed [OPEN] | Both. Lap = 0 is open-jointed: cover = face + gap. Lap > 0 is lapped: cover = face − lap, and courses overlap by the lap. Planks are modelled flat (boxes only). | `cladding_constants._parse` |
-| Slider scope [OPEN] | Per elevation. Default 0 centres the coursing on the elevation. | `app.onSlider` |
+| Slider scope [OPEN] | Per chain, so joints align around corners. Default 0 centres the coursing on the run. | `app.onSlider` |
 | Plank vertical setting-out [OPEN] | Starts at the top of the ground splash zone and works up; the closing cut lands at the top. The slider only shifts along the wall. | `cladding_geometry._horizontal_planks` |
 | End joints [OPEN] | Must land on a batten, staggered course to course (odd courses start with a half-length board). Joints that cannot reach a batten are cut at max length and counted as a warning. | `cladding_primitives.split_run` |
 | Coursing at openings [OPEN] | Straight through and cut. Coursing never resets at a reveal. | `cladding_booleans.apply_boolean_ops` |
@@ -150,7 +153,7 @@ the title area.
 
 | File | Lines | Budget |
 |---|---|---|
-| fabric_extract.py | 261 | 400 |
+| fabric_extract.py | 335 | 400 |
 | cladding_constants.py | 79 | 80 |
 | cladding_geometry.py | 175 | 400 |
 | cladding_primitives.py | 150 | 300 |
@@ -180,8 +183,12 @@ unreachable; it serves Pyodide, Three.js and web-ifc from local copies.
 
 ## Limitations
 
-- Walls only: faces within 5° of vertical. Pitched abutments are detected at
-  their highest point and flagged; set the level manually.
+- Walls only: faces within 5° of vertical. Pitched abutment lines come from the
+  upper edge of the roof's section through the face plane; a roof that is an open
+  or broken mesh falls back to the convex hull of its section.
+- Chains join at vertical corners only, and the corner has to sit within 400 mm
+  of both faces' ends. Non-vertical junctions (a wall meeting a sloping face)
+  are not chained.
 - Penetrations are subtracted as convex hulls of their section through the
   face plane.
 - Planks and panels are flat boxes. Lapped profiles overlap in the plane
