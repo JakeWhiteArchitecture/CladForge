@@ -13,12 +13,12 @@ raised inside WASM cannot be caught by the caller, so it is caught here.
 
 import copy
 
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
-from cladding_primitives import splash_rings
+from cladding_primitives import clip_bounds, splash_rings
 
 TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel"})
 _MIN_AREA = 25.0   # mm² – slivers smaller than this are discarded
@@ -62,6 +62,56 @@ def region_polygon(elev):
         return unary_union(polys)
     except Exception:
         return polys[0]
+
+
+def clip_elevation(elev):
+    """The elevation with its polygons cut back to the clad part of the face. Where a
+    wall runs past a corner the rest of it belongs to the other face, and cladding it
+    would project through the corner."""
+    lo, hi = clip_bounds(elev)
+    if lo <= 0.001 and hi >= float(elev["width"]) - 0.001:
+        return elev
+    band = box(lo, -1e7, hi, 1e7)
+    polygons = []
+    for poly in elev.get("polygons", []):
+        try:
+            pg = Polygon(poly["exterior"], poly.get("holes") or [])
+            cut = _intersection(pg if pg.is_valid else pg.buffer(0), band)
+        except Exception:
+            continue
+        for part in iter_polygons(cut):
+            if part.area <= 1.0:
+                continue
+            ext, holes = polygon_to_rings(part)
+            polygons.append({"exterior": ext, "holes": holes})
+    return dict(elev, polygons=polygons)
+
+
+def strip_intervals(region, lo, hi, across=False, min_len=1.0):
+    """Where a course actually runs, as (start, end) along its own direction. Boards are
+    set out along these rather than the full face, so a run broken by a gable, a splash
+    zone or an opening is not given seams it does not need. *across* False takes a
+    horizontal band between the levels lo..hi; True takes a vertical column."""
+    if region is None or region.is_empty:
+        return []
+    strip = _intersection(region, box(lo, -1e7, hi, 1e7) if across else box(-1e7, lo, 1e7, hi))
+    spans = []
+    for part in iter_polygons(strip):
+        u0, v0, u1, v1 = part.bounds
+        a, b = (v0, v1) if across else (u0, u1)
+        if b - a >= min_len:
+            spans.append((a, b))
+    return _merge_spans(spans, min_len)
+
+
+def _merge_spans(spans, tol):
+    out = []
+    for u0, u1 in sorted(spans):
+        if out and u0 - out[-1][1] <= tol:
+            out[-1] = (out[-1][0], max(out[-1][1], u1))
+        else:
+            out.append((u0, u1))
+    return out
 
 
 def clip_region(elev, splash):

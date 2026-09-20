@@ -7,10 +7,11 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 """
 
 from cladding_constants import _prism, _rect, COUNTER_BATTEN_CENTRES, MAX_BATTEN_SPAN
+from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
-                                 base_level, corner_ends, openings, buildup_depth)
+                                 base_level, corner_ends, openings, buildup_depth, clip_bounds)
 
 
 def build_elevation(p, elev, layout=None):
@@ -22,10 +23,10 @@ def build_elevation(p, elev, layout=None):
     # Chains: coursing is centred on the whole run and shifted by the chain offset,
     # so modules carry on around corners. Each elevation occupies [start, start + W]
     # of the run, reversed where the corner flips the u direction.
-    start, run = layout or (0.0, W)
-    centre = run / 2.0 + float(elev.get("offset", 0.0)) - start        # in this elevation's u
-    if elev.get("chain_reversed"):
-        centre = W - centre
+    lo, hi = clip_bounds(elev)            # the clad part of the face, cut back at corners
+    start, run = layout or (0.0, hi - lo)
+    along = run / 2.0 + float(elev.get("offset", 0.0)) - start
+    centre = (hi - along) if elev.get("chain_reversed") else (lo + along)   # in this elevation's u
     offset = centre - W / 2.0
     meshes, dims = [], []
     info = {"elevation": name, "width": W, "height": H, "battens": p["battens"],
@@ -48,15 +49,23 @@ def build_elevation(p, elev, layout=None):
     info["base_level"] = v0
     bw, bd = p["batten_w"], p["batten_d"]
 
+    region = clip_region(elev, p["splash"])
+    layers = depth                       # depth of the face the cavity starts from
     if p["cladding_type"] == "panel":
         depth = _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset)
     elif p["battens"] == "vertical":
-        depth = _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset)
+        depth = _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
     else:
-        depth = _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset)
+        depth = _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
+    # Openings are closed and lined whatever the cladding is: the closer is solid
+    # timber filling the cavity, so it does not depend on the board above it.
+    board = p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"]
+    holes = openings(elev)
+    _openings_extras(p, elev, meshes, holes, layers, depth - board - layers, depth, board)
+    info["openings"] = len(holes)
 
     left, right, detail = corner_ends(elev, p)
-    _apply_corner(meshes, {0.0: left, W: right}, detail, skip=("reveal", "closer"))
+    _apply_corner(meshes, {lo: left, hi: right}, detail, skip=("reveal", "closer"))
     info["corner"] = {"detail": detail, "left": list(left), "right": list(right)}
     # Splash zone dimension at the left edge of the ground band.
     if v0 > 0:
@@ -117,7 +126,7 @@ def _horizontal_battens(p, vs, meshes, name, frame, depth, W, ifc_type="batten",
     return depth + d
 
 
-def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset):
+def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Horizontal boards on vertical battens (optionally on horizontal counter-battens)."""
     name, frame = elev["name"], elev["frame"]
     if p["has_cb"]:  # forced by override — flagged by check_rules, drainage is compromised
@@ -129,11 +138,17 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
     courses = stacked_positions(v0, H, cover)
     for j, v in enumerate(courses):
-        segs, bad = split_run(0, W, p["plank_len"], battens, j % 2 == 1, gap)
-        info["unsupported_joints"] += len(bad)
-        for k, (s, e) in enumerate(segs):
-            meshes.append(_prism(_rect(s, v, e, v + face), depth, p["plank_t"], frame, "plank",
-                                 "%s Plank C%d-%d" % (name, j + 1, k + 1), name))
+        # Set each course out along the part of the face it actually crosses, so a run
+        # broken by a gable or an opening gets no seam it does not need.
+        runs = strip_intervals(region, v, v + face) if region is not None else [(0.0, W)]
+        piece = 0
+        for a, b in runs:
+            segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap)
+            info["unsupported_joints"] += len(bad)
+            for s, e in segs:
+                piece += 1
+                meshes.append(_prism(_rect(s, v, e, v + face), depth, p["plank_t"], frame, "plank",
+                                     "%s Plank C%d-%d" % (name, j + 1, piece), name))
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
@@ -145,7 +160,7 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     return depth + p["plank_t"]
 
 
-def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset):
+def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Vertical boards on horizontal battens on vertical counter-battens."""
     name, frame = elev["name"], elev["frame"]
     if p["has_cb"]:
@@ -158,11 +173,15 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
     starts = centred_positions(W, cover, offset, face)
     for j, u in enumerate(starts):
-        segs, bad = split_run(v0, H, p["plank_len"], battens, j % 2 == 1, gap)
-        info["unsupported_joints"] += len(bad)
-        for k, (s, e) in enumerate(segs):
-            meshes.append(_prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
-                                 "%s Plank C%d-%d" % (name, j + 1, k + 1), name))
+        runs = strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)]
+        piece = 0
+        for a, b in runs:
+            segs, bad = split_run(max(a, v0), b, p["plank_len"], battens, j % 2 == 1, gap)
+            info["unsupported_joints"] += len(bad)
+            for s, e in segs:
+                piece += 1
+                meshes.append(_prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
+                                     "%s Plank C%d-%d" % (name, j + 1, piece), name))
     left_cut = (starts[0] + face) if starts and starts[0] < 0 else 0.0
     right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0
     info.update(n_courses=len(starts), cover=cover, batten_centres=p["batten_centres"],
@@ -213,13 +232,12 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
             meshes.append(_prism(_rect(s, v, e, v + p["panel_h"]), depth, p["panel_t"], frame, "panel",
                                  "%s Panel C%d-%d" % (name, j + 1, k + 1), name))
     face = depth + p["panel_t"]
-    _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face)
     fulls = [pn for pn in panels if pn[2]]
     widths = sorted({round(e - s, 1) for s, e, _f in panels})
     info.update(n_courses=len(courses), cover=p["panel_w"] + gap, batten_centres=p["batten_centres"],
                 closing_cut_left=(fulls[0][0] if fulls else W), closing_cut_right=(W - fulls[-1][1]) if fulls else 0.0,
                 closing_cut_top=(H - courses[-1]) if courses else 0.0, n_full=len(fulls) * len(courses),
-                openings=len(holes), set_out_from_openings=bool(jambs),
+                set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
     if len(battens) > 1:
         dims.append(_dim(name, [battens[0], 0], [battens[1], 0], "%.0f c/c" % (battens[1] - battens[0]), 300, [0, -1]))
@@ -234,14 +252,14 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     return face
 
 
-def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face):
+def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board):
     """Solid timber cavity closers at both vertical sides of every opening, and the
-    reveal linings, which the face panel is always mitred to whatever the corner
+    reveal linings, which the face board is always mitred to whatever the corner
     detail is. Heads and sills are not lined: a frame whose v is world Z cannot
     describe a surface that faces up or down."""
     name, frame = elev["name"], elev["frame"]
     cw = p["closer_w"]
-    jamb_cut = (-1.0, buildup_depth(p))        # bisector of the arris at the reveal
+    jamb_cut = (-1.0, face)                    # bisector of the arris at the reveal
     for i, (u0, u1, v0, v1) in enumerate(holes):
         for side, u in ((-1.0, u0), (1.0, u1)):
             # The closer sits in the wall side of the jamb and fills the cavity.
@@ -250,7 +268,7 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face):
                                  "%s Cavity Closer %d%s" % (name, i + 1, "L" if side < 0 else "R"), name))
             if not p["reveals"]:
                 continue
-            lining = _prism(_rect(0.0, v0, buildup_depth(p), v1), 0.0, p["panel_t"],
+            lining = _prism(_rect(0.0, v0, face, v1), 0.0, board,
                             _reveal_frame(frame, u, face, -side), "reveal",
                             "%s Reveal %d%s" % (name, i + 1, "L" if side < 0 else "R"), name)
             lining["corner"] = {"k_l": -1.0, "ext_l": 0.0, "u_l": 0.0}
@@ -259,7 +277,7 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face):
         # The face panel is always mitred to the reveal lining, whatever detail the
         # corners use. With no lining there is nothing to mitre to, so it stays square.
         jambs = {u: jamb_cut for o in holes for u in (o[0], o[1])}
-        _apply_corner(meshes, jambs, "reveal", types=("panel",))
+        _apply_corner(meshes, jambs, "reveal", types=("panel", "plank"))
 
 
 def _reveal_frame(frame, u_jamb, face_depth, sign):
