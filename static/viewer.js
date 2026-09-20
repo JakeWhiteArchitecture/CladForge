@@ -270,16 +270,25 @@ function meshTriangles(mesh) {
     return faceTriangles(mesh, Array.from({ length: count }, (_, i) => i));
 }
 
-function contextFor(pickedMeshes, tris, margin) {
-    // Every other element whose bounding box comes within *margin* of the picked faces.
+function contextFor(pickedMeshes, tris, margin, outward) {
+    // Every other element that could touch the picked face: its bounding box overlaps the
+    // faces' box (grown by *margin*) AND some corner of it lies within reach of the face
+    // plane, so elements wholly behind or wholly in front of the wall are never sent.
     const bb = new THREE.Box3();
     for (const t of tris) for (const q of t) bb.expandByPoint(new THREE.Vector3(q[0], q[2], -q[1]));
     bb.expandByScalar(margin);
+    const n = new THREE.Vector3(outward[0], outward[2], -outward[1]).normalize();
+    const d = n.dot(new THREE.Vector3(tris[0][0][0], tris[0][0][2], -tris[0][0][1]));
     const out = [];
     for (const meta of meshMeta) {
         if (pickedMeshes.has(meta.mesh)) continue;
         const mb = meta.mesh.geometry.boundingBox.clone().applyMatrix4(meta.mesh.matrixWorld);
         if (!mb.intersectsBox(bb)) continue;
+        let lo = Infinity, hi = -Infinity;
+        for (const x of [mb.min.x, mb.max.x]) for (const y of [mb.min.y, mb.max.y]) for (const z of [mb.min.z, mb.max.z]) {
+            const s = n.x * x + n.y * y + n.z * z - d; lo = Math.min(lo, s); hi = Math.max(hi, s);
+        }
+        if (hi < -margin || lo > margin) continue;
         out.push({ type: meta.type, name: meta.name, tris: meshTriangles(meta.mesh) });
     }
     return out;
@@ -358,7 +367,9 @@ function renderOutlines(elevations, splash) {
         }
         for (const ab of e.abutments) {
             if (!ab.enabled || splash <= 0) continue;
-            const ring = [[ab.u0, ab.v], [ab.u1, ab.v], [ab.u1, ab.v + splash], [ab.u0, ab.v + splash]];
+            // The band follows the abutment line: level for slabs, sloped where a roof pitches.
+            const line = ab.line || [[ab.u0, ab.v], [ab.u1, ab.v]];
+            const ring = line.concat(line.slice().reverse().map(p => [p[0], p[1] + splash]));
             outlineGroup.add(ringLine(ring, e.frame, 3, 0xe94560, true));
         }
     });

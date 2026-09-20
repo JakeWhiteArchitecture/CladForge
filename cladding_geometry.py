@@ -16,7 +16,15 @@ def build_elevation(p, elev):
     name = elev.get("name", "Elevation")
     W, H = float(elev["width"]), float(elev["height"])
     frame = elev["frame"]
-    offset = float(elev.get("offset", 0.0))
+    # Chains: coursing is centred on the whole run (chain_length) and shifted by the
+    # chain offset, so modules carry on around corners. Each elevation occupies
+    # [chain_start, chain_start + W] of the run, reversed where the corner flips u.
+    run = float(elev.get("chain_length") or W)
+    start = float(elev.get("chain_start") or 0.0)
+    centre = run / 2.0 + float(elev.get("offset", 0.0)) - start        # in this elevation's u
+    if elev.get("chain_reversed"):
+        centre = W - centre
+    offset = centre - W / 2.0
     meshes, dims = [], []
     info = {"elevation": name, "width": W, "height": H, "battens": p["battens"],
             "has_cb": p["has_cb"], "unsupported_joints": 0}

@@ -15,7 +15,7 @@ import tempfile
 
 from cladding_constants import (_parse, TOOL_NAME, IFC_SCHEMA_LABEL, SCOPE_NOTE, QUANTITY_NOTE,
                                 DISCLAIMER)
-from cladding_primitives import region_bands
+from cladding_primitives import splash_rings
 
 LAYERS = {
     "WALL":           {"color": 7, "linetype": "CONTINUOUS"},
@@ -193,8 +193,8 @@ def meshes_to_dxf_string(meshes, params, infos=None):
             dxf.add_ring(poly["exterior"], "WALL", ox, 0.0)
             for hole in poly.get("holes", []):
                 dxf.add_ring(hole, "OPENING", ox, 0.0)
-        for u0, u1, v0, v1 in region_bands(elev, p["splash"]):
-            dxf.add_ring([(u0, v0), (u1, v0), (u1, v1), (u0, v1)], "SPLASH_ZONE", ox, 0.0)
+        for ring in splash_rings(elev, p["splash"]):
+            dxf.add_ring(ring, "SPLASH_ZONE", ox, 0.0)
         for m in by_elev.get(name, []):
             layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
             dxf.add_ring(m["profile"], layer, ox, 0.0)
@@ -206,7 +206,9 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         _draw_dim_line(dxf, (ox, 0), (ox + W, 0), 900.0, "%.0f" % W, (0, -1))
         _draw_dim_line(dxf, (ox + W, 0), (ox + W, H), 1200.0, "%.0f" % H, (1, 0))
         storey = (elev.get("storey") or {}).get("name")
-        title = "%s  -  %.0f x %.0f mm%s" % (name.upper(), W, H, ("  -  " + storey) if storey else "")
+        chain = elev.get("chain")
+        title = "%s%s  -  %.0f x %.0f mm%s" % ((chain.upper() + " / ") if chain else "", name.upper(), W, H,
+                                              ("  -  " + storey) if storey else "")
         dxf.add_text(title, (ox, H + 500.0), _TITLE, "NOTES")
         dxf.add_text("Flattened elevation in the region plane, moved to origin. Looking at the face from outside.",
                      (ox, H + 350.0), _TEXT, "NOTES")

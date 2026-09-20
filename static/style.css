@@ -71,6 +71,7 @@ body {
 .file-drop:hover, .file-drop.over { border-color: var(--accent); color: var(--text); }
 .file-drop input { display: none; }
 
+.chain-head { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 4px; }
 .elev-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
 .elev-card.active { border-color: var(--accent); }
 .elev-head { display: flex; align-items: center; gap: 8px; }
@@ -83,6 +84,8 @@ body {
 .elev-abut input[type=number] { width: 90px; padding: 3px 6px; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 3px; font-size: 11px; }
 .elev-abut .mini { padding: 3px 8px; font-size: 11px; background: var(--border); color: var(--text); border: none; border-radius: 3px; cursor: pointer; }
 .elev-warn { font-size: 11px; color: #ff9800; margin-top: 4px; }
+.elev-error { color: #f44336; }
+.elev-card.error { border-color: #f44336; }
 
 input[type=range] { width: 100%; accent-color: var(--accent); }
 .slider-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }

@@ -109,14 +109,35 @@ async function main() {
     await page.screenshot({ path: path.join(__dirname, 'smoke_panel.png') });
     console.log('panel overlay:', await page.evaluate(() => document.getElementById('dim-overlay').innerText.replace(/\n/g, ' | ')));
 
-    // Second elevation on the east wall.
-    await page.click('button:has-text("New elevation")');
-    await page.evaluate(() => { camera.position.set(22000, 3000, -3000); controls.target.set(8000, 3000, -3000); controls.update(); });
+    // Click the wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
+    await page.evaluate(() => { camera.position.set(9500, 2000, 14000); controls.target.set(9500, 1700, -1000); controls.update(); });
     await page.waitForTimeout(300);
-    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.35);
-    await page.waitForFunction(() => state.elevations.length === 2 && state.elevations[1].result && state.elevations[1].result.ok, null, { timeout: 60000 });
+    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.45);
+    await page.waitForFunction(() => state.elevations.length === 2 && state.elevations[1].result && state.elevations[1].result.ok && state.elevations[1].chain !== state.elevations[0].chain, null, { timeout: 60000 });
     const r2 = await page.evaluate(() => state.elevations[1].result);
-    console.log('elevation B:', r2.width, 'x', r2.height, 'abutments', r2.abutments.map(a => `${a.source}@${a.v}[${a.u0}-${a.u1}]`).join(', '));
+    console.log('elevation B (wing south):', r2.width, 'x', r2.height, 'chain', await page.evaluate(() => state.elevations[1].chain.name));
+
+    // Then the wing's east wall: it turns the corner, so it joins B's chain with the run continued.
+    await page.evaluate(() => { camera.position.set(24000, 2500, -2500); controls.target.set(11000, 1700, -2500); controls.update(); });
+    await page.waitForTimeout(300);
+    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.45);
+    await page.waitForFunction(() => state.elevations.length === 3 && state.elevations[2].result && state.elevations[2].result.ok && state.elevations[2].link, null, { timeout: 60000 });
+    const chainInfo = await page.evaluate(() => ({ chain: state.elevations[2].chain.name, members: state.elevations[2].chain.members.map(m => [m.name, Math.round(m.start), m.rev]),
+                                                    length: Math.round(state.elevations[2].chain.length), link: state.elevations[2].link }));
+    console.log('chain:', JSON.stringify(chainInfo));
+    console.log('list header:', await page.evaluate(() => (document.querySelector('.chain-head') || {}).textContent));
+
+    // The main east wall carries the wing's pitched roof: its splash zone must follow the slope.
+    await page.click('button:has-text("New elevation")');
+    await page.evaluate(() => { camera.position.set(22000, 6000, -8000); controls.target.set(8000, 4500, -4800); controls.update(); });
+    await page.waitForTimeout(300);
+    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.40);
+    await page.waitForFunction(() => state.elevations.length === 4 && state.elevations[3].result && state.elevations[3].result.ok, null, { timeout: 60000 });
+    const r4 = await page.evaluate(() => state.elevations[3].result);
+    console.log('elevation D (main east):', r4.width, 'x', r4.height, 'abutments', r4.abutments.map(a => `${a.source}${a.pitched ? '(pitched)' : ''} line=${JSON.stringify(a.line)}`).join(' | '));
+    await page.evaluate(() => frameElevation(state.elevations[3].result));
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: path.join(__dirname, 'smoke_pitched.png') });
 
     // Exports: DXF via Pyodide, IFC via Flask.
     for (const [btn, ext] of [['#dxf-btn', 'dxf'], ['#ifc-btn', 'ifc']]) {

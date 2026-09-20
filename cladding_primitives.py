@@ -131,14 +131,20 @@ def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0):
     return segs, unsupported
 
 
-def region_bands(elev, splash):
-    """Splash-zone bands (u0, u1, v0, v1) from an elevation's enabled abutments."""
-    bands = []
+def splash_rings(elev, splash):
+    """Splash-zone polygons (rings of [u, v]) above each enabled abutment line.
+    A level abutment gives a rectangle; a pitched one gives a band that follows
+    the roof line, *splash* mm tall measured vertically."""
+    rings = []
     for ab in elev.get("abutments", []):
         if not ab.get("enabled", True) or splash <= 0:
             continue
-        bands.append((float(ab["u0"]), float(ab["u1"]), float(ab["v"]), float(ab["v"]) + splash))
-    return bands
+        line = ab.get("line") or [[float(ab["u0"]), float(ab["v"])], [float(ab["u1"]), float(ab["v"])]]
+        if len(line) < 2:
+            continue
+        rings.append([[float(u), float(v)] for u, v in line]
+                     + [[float(u), float(v) + splash] for u, v in reversed(line)])
+    return rings
 
 
 def base_level(elev, splash):

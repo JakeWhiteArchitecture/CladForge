@@ -32,6 +32,29 @@ def box_tris(u0, u1, v0, v1, d0, d1):
     return tris
 
 
+def prism_tris(profile_uv, d0, d1):
+    """Closed prism: a (u, v) polygon extruded along the wall normal from d0 to d1."""
+    n = len(profile_uv)
+    front = [world(u, v, d0) for u, v in profile_uv]
+    back = [world(u, v, d1) for u, v in profile_uv]
+    tris = []
+    for i in range(1, n - 1):
+        tris.append([front[0], front[i], front[i + 1]])
+        tris.append([back[0], back[i + 1], back[i]])
+    for i in range(n):
+        j = (i + 1) % n
+        tris.append([front[i], front[j], back[j]])
+        tris.append([front[i], back[j], back[i]])
+    return [[list(p) for p in t] for t in tris]
+
+
+def pitched_roof(u0=5000.0, ridge=6500.0, u1=8000.0, eaves=1500.0, apex=2400.0, t=200.0):
+    """Two sloped roof slabs meeting at a ridge, straddling the wall face (a gable)."""
+    south = prism_tris([(u0, eaves), (ridge, apex), (ridge, apex + t), (u0, eaves + t)], -100.0, 3000.0)
+    north = prism_tris([(ridge, apex), (u1 + 300, eaves), (u1 + 300, eaves + t), (ridge, apex + t)], -100.0, 3000.0)
+    return south, north
+
+
 def wall_face(width=8000.0, height=3000.0, window=(2000.0, 900.0, 3200.0, 2100.0)):
     """Outer face triangles with a rectangular window hole (4 rects around it)."""
     wu0, wv0, wu1, wv1 = window
@@ -46,20 +69,34 @@ def wall_face(width=8000.0, height=3000.0, window=(2000.0, 900.0, 3200.0, 2100.0
     return [[list(p) for p in t] for t in tris]
 
 
-def payload(name="Elevation A"):
+def payload(name="Elevation A", pitched=False):
     slab = box_tris(4500.0, 8000.0, 2000.0, 2200.0, -300.0, 1500.0)     # balcony slab through face
     roof = box_tris(-500.0, 1500.0, 1400.0, 1600.0, -100.0, 2500.0)     # lower flat roof abutting left
     pipe = box_tris(6000.0, 6100.0, 300.0, 400.0, -200.0, 200.0)        # pipe penetration
     floor = box_tris(0.0, 8000.0, 1450.0, 1700.0, -900.0, -300.0)       # internal slab, does not reach face
-    return {
-        "name": name,
-        "faces": wall_face(),
-        "outward": list(N),
-        "context": [
-            {"type": "IfcSlab", "name": "Balcony", "tris": [[list(p) for p in t] for t in slab]},
-            {"type": "IfcRoof", "name": "Lower roof", "tris": [[list(p) for p in t] for t in roof]},
-            {"type": "IfcPipeSegment", "name": "SVP", "tris": [[list(p) for p in t] for t in pipe]},
-            {"type": "IfcSlab", "name": "First floor", "tris": [[list(p) for p in t] for t in floor]},
-        ],
-        "options": {"penetrations": True},
-    }
+    context = [
+        {"type": "IfcSlab", "name": "Balcony", "tris": [[list(p) for p in t] for t in slab]},
+        {"type": "IfcRoof", "name": "Lower roof", "tris": [[list(p) for p in t] for t in roof]},
+        {"type": "IfcPipeSegment", "name": "SVP", "tris": [[list(p) for p in t] for t in pipe]},
+        {"type": "IfcSlab", "name": "First floor", "tris": [[list(p) for p in t] for t in floor]},
+    ]
+    if pitched:   # replace the balcony with a gable roof against the right half of the wall
+        south, north = pitched_roof()
+        context = [c for c in context if c["name"] != "Balcony"]
+        context += [{"type": "IfcRoof", "name": "Gable roof S", "tris": south},
+                    {"type": "IfcRoof", "name": "Gable roof N", "tris": north}]
+    return {"name": name, "faces": wall_face(), "outward": list(N), "context": context,
+            "options": {"penetrations": True}}
+
+
+def corner_payload(name="Elevation B"):
+    """A second wall face turning an external corner at the right end of the first
+    (its outward normal is the first wall's +u direction), 4000 long, 3000 high."""
+    n2 = (U[0], U[1], 0.0)                 # faces along the first wall's u direction
+    u2 = (-n2[1], n2[0], 0.0)              # = z × n2, runs away from the corner (-N direction)
+    corner = world(8000.0, 0.0, 0.0)       # corner point on both faces
+    def w2(u, v):
+        return (corner[0] + u2[0] * u, corner[1] + u2[1] * u, corner[2] + v)
+    a, b, c, d = w2(0, 0), w2(4000, 0), w2(4000, 3000), w2(0, 3000)
+    return {"name": name, "faces": [[list(a), list(b), list(c)], [list(a), list(c), list(d)]],
+            "outward": list(n2), "context": [], "options": {}}

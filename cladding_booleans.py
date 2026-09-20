@@ -13,12 +13,12 @@ raised inside WASM cannot be caught by the caller, so it is caught here.
 
 import copy
 
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
-from cladding_primitives import region_bands
+from cladding_primitives import splash_rings
 
 TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel"})
 _MIN_AREA = 25.0   # mm² – slivers smaller than this are discarded
@@ -67,7 +67,13 @@ def region_polygon(elev):
 def clip_region(elev, splash):
     """Outline minus splash-zone bands: the area battens and cladding may occupy."""
     region = region_polygon(elev)
-    bands = [box(u0, v0, u1, v1) for u0, u1, v0, v1 in region_bands(elev, splash)]
+    bands = []
+    for ring in splash_rings(elev, splash):
+        try:
+            pg = Polygon(ring)
+            bands.append(pg if pg.is_valid else pg.buffer(0))
+        except Exception:
+            continue
     if bands and not region.is_empty:
         cut = _difference(region, unary_union(bands))
         if cut is not None:
