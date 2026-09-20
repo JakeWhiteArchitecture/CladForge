@@ -79,6 +79,41 @@ def subdivide(a, b, max_span):
     return [a + (b - a) * i / n for i in range(1, n)]
 
 
+MIN_OPENING = 300.0   # mm – smaller holes are penetrations, not windows
+
+
+def openings(elev, limit=MIN_OPENING):
+    """Structural openings as (u0, u1, v0, v1), from the interior holes big enough to
+    be a window or door rather than a pipe penetration."""
+    out = []
+    for poly in elev.get("polygons", []):
+        for hole in poly.get("holes", []):
+            us = [q[0] for q in hole]
+            vs = [q[1] for q in hole]
+            if max(us) - min(us) >= limit and max(vs) - min(vs) >= limit:
+                out.append((min(us), max(us), min(vs), max(vs)))
+    return sorted(out)
+
+
+def bays_between(stops, max_panel, gap):
+    """Panels filling each span between consecutive *stops*, split equally into as few
+    bays as stay within *max_panel*. A stop is a fixed edge (an opening jamb or the end
+    of the elevation), so no joint gap is taken there; gaps fall between bays."""
+    panels, joints = [], []
+    for a, b in zip(stops, stops[1:]):
+        span = b - a
+        if span <= 1.0:
+            continue
+        n = max(1, int(math.ceil((span + gap) / (max_panel + gap))))
+        width = (span - gap * (n - 1)) / n
+        for i in range(n):
+            start = a + i * (width + gap)
+            panels.append((start, start + width, True))
+            if i:
+                joints.append(start - gap / 2.0)
+    return panels, sorted(joints)
+
+
 def panel_bays(length, panel, gap, offset):
     """Panels across *length* with a panel centred at length/2 + offset.
     Returns (panels, joints): panels as (start, end, full) clipped to [0, length],

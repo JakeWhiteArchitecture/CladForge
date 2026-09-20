@@ -50,10 +50,15 @@ def check_rules(params, infos=None):
         from cladding_preview import _build_all
         infos = _build_all(p)[2]
     for i in infos:
-        cuts = [c for c in (i.get("closing_cut_left", 0), i.get("closing_cut_right", 0)) if 0 < c < MIN_CLOSING_CUT]
+        if i.get("set_out_from_openings"):
+            add("Setting-out", "pass", "%s: %d opening(s) drive the setting-out; panel edges land on the "
+                "jambs and the widest bay is %.0fmm" % (i["elevation"], i.get("openings", 0),
+                                                        max(i.get("panel_widths") or [0])))
+        cuts = [c for c in (i.get("closing_cut_left", 0), i.get("closing_cut_right", 0),
+                            i.get("min_panel", 0)) if 0 < c < MIN_CLOSING_CUT]
         if cuts:
-            add("Closing cut", "warn", "%s: closing cut %.0fmm is narrower than %.0fmm — shift the setting-out"
-                % (i["elevation"], min(cuts), MIN_CLOSING_CUT), min(cuts))
+            add("Closing cut", "warn", "%s: a panel only %.0fmm wide is narrower than %.0fmm — shift the "
+                "setting-out or move a joint" % (i["elevation"], min(cuts), MIN_CLOSING_CUT), min(cuts))
     corners = [i.get("corner") or {} for i in infos]
     ends = sum(1 for c in corners for side in ("left", "right") if any(c.get(side) or ()))
     if ends:

@@ -6,8 +6,8 @@ CladForge — DXF export: one flattened elevation per detected region.
 
 Each elevation is drawn in its own (u, v) frame, moved to origin and laid out
 left to right. Layers: WALL, OPENING, SPLASH_ZONE, SHEATHING, INSULATION,
-COUNTER_BATTEN, BATTEN, CLADDING, DIMS, NOTES. Output is DXF R12 (AC1009),
-readable by every CAD package.
+COUNTER_BATTEN, BATTEN, CLADDING, CLOSER, DIMS, NOTES. Output is DXF R12
+(AC1009), readable by every CAD package.
 """
 
 import math
@@ -26,12 +26,13 @@ LAYERS = {
     "COUNTER_BATTEN": {"color": 3, "linetype": "CONTINUOUS"},
     "BATTEN":         {"color": 4, "linetype": "CONTINUOUS"},
     "CLADDING":       {"color": 5, "linetype": "CONTINUOUS"},
+    "CLOSER":         {"color": 1, "linetype": "CONTINUOUS"},
     "DIMS":           {"color": 7, "linetype": "CONTINUOUS"},
     "NOTES":          {"color": 7, "linetype": "CONTINUOUS"},
 }
 _LAYER_FOR_TYPE = {"batten": "BATTEN", "cross_batten": "BATTEN", "counter_batten": "COUNTER_BATTEN",
                    "sheathing": "SHEATHING", "insulation": "INSULATION", "panel": "CLADDING",
-                   "plank": "CLADDING"}
+                   "plank": "CLADDING", "closer": "CLOSER"}
 _ELEV_GAP = 2500.0     # mm between elevations on the sheet
 _TEXT = 50.0           # mm dimension / note text height
 _TITLE = 120.0
@@ -157,8 +158,16 @@ def _schedule(p, info, meshes):
         "insulation %.0fmm, " % p["insulation_t"] if p["insulation"] else "",
         info.get("battens", ""), p["batten_w"], p["batten_d"], info.get("batten_centres", 0),
         ", counter-battens %.0fx%.0f" % (p["cb_w"], p["cb_d"]) if p["has_cb"] else ""))
-    lines.append("Battens: %d no.  Counter-battens: %d no.  Noggins: %d no." % (
-        counts.get("batten", 0), counts.get("counter_batten", 0), counts.get("cross_batten", 0)))
+    lines.append("Battens: %d no.  Counter-battens: %d no.  Noggins: %d no.  Cavity closers: %d no." % (
+        counts.get("batten", 0), counts.get("counter_batten", 0), counts.get("cross_batten", 0),
+        counts.get("closer", 0)))
+    if counts.get("reveal"):
+        lines.append("Reveal linings: %d no., mitred to the face panel. Not drawn: they are "
+                     "perpendicular to this view." % counts["reveal"])
+    if info.get("openings"):
+        lines.append("Openings: %d. Setting-out %s." % (info["openings"], "starts from the structural "
+                     "openings, so panel edges land on the jambs" if info.get("set_out_from_openings")
+                     else "is centred on the elevation"))
     if p["cladding_type"] == "panel":
         lines.append("Panels: %d pieces (%d full %.0fx%.0f) in %d courses, joint gap %.0f" % (
             counts.get("panel", 0), info.get("n_full", 0), p["panel_w"], p["panel_h"],
@@ -210,6 +219,8 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for ring in splash_rings(elev, p["splash"]):
             dxf.add_ring(ring, "SPLASH_ZONE", ox, 0.0)
         for m in by_elev.get(name, []):
+            if m["ifc_type"] == "reveal":
+                continue        # a reveal lining is perpendicular to this view
             layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
             dxf.add_ring(_corner_ring(m["profile"], m), layer, ox, 0.0)
             for hole in m.get("holes") or []:
@@ -233,7 +244,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
 
     notes = ["%s  -  %s companion export  -  units mm" % (TOOL_NAME, IFC_SCHEMA_LABEL), DISCLAIMER]
     notes += _wrap(SCOPE_NOTE) + _wrap(QUANTITY_NOTE)
-    notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING DIMS NOTES")
+    notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING CLOSER DIMS NOTES")
     _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), sheet_min_y - 600.0, 60.0)
     return dxf.to_string()
 

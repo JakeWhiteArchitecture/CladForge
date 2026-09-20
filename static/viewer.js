@@ -10,7 +10,7 @@ let allMeshes = [], meshMeta = [], modelContext = {};
 // The scene works near the origin; modelOffset (IFC mm) puts exports back on the host model.
 let modelOffset = [0, 0, 0];
 const layerVisible = { model: true, sheathing: true, insulation: true, counter_batten: true,
-                       batten: true, cladding: true, dims: true };
+                       batten: true, cladding: true, closer: true, dims: true };
 const ELEV_COLORS = [0x2a9d8f, 0xe9c46a, 0xf4a261, 0xe76f51, 0x8ab17d, 0x9b5de5, 0x00b4d8];
 const VERT_TOL = Math.sin(Math.PI / 180);   // 1 degree: what counts as a vertical face
 
@@ -411,7 +411,8 @@ function shapeFromRings(profile, holes) {
 }
 
 const _layerOf = { sheathing: 'sheathing', insulation: 'insulation', counter_batten: 'counter_batten',
-                   batten: 'batten', cross_batten: 'batten', panel: 'cladding', plank: 'cladding' };
+                   batten: 'batten', cross_batten: 'batten', panel: 'cladding', plank: 'cladding',
+                   reveal: 'cladding', closer: 'closer' };
 
 function applyCorner(geo, m, tol = 0.6) {
     // Move the vertices on a corner end to u_end -/+ (ext + k x depth): k shears the

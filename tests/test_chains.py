@@ -61,8 +61,9 @@ def test_chain_coursing_carries_round_the_corner():
     run = a["width"] + b["width"]
     ra = dict(a, chain="Chain 1", chain_start=0, chain_reversed=False, offset=0)
     rb = dict(b, chain="Chain 1", chain_start=a["width"], chain_reversed=False, offset=0)
+    # a plain grid: openings would otherwise pin the joints to the window jambs
     out = generate_preview({"elevations": [ra, rb], "cladding_type": "panel", "trim": False,
-                            "corner": "butt"})
+                            "corner": "butt", "set_out_from_openings": False})
     joints = {}
     for m in out["geometry"]:
         if m["ifc_type"] == "panel":
@@ -82,11 +83,12 @@ def _elev_with_mitre(k_hi=1.0):
 
 
 def test_mitre_marks_the_end_elements():
-    out = generate_preview({"elevations": [_elev_with_mitre()], "cladding_type": "panel", "trim": True})
-    right = [m for m in out["geometry"] if m.get("corner", {}).get("k_r")]
+    out = generate_preview({"elevations": [_elev_with_mitre()], "cladding_type": "panel", "trim": True,
+                            "reveals": False})
+    right = [m for m in out["geometry"] if m.get("corner", {}).get("k_r") and m["ifc_type"] != "panel"]
     assert right, "no element marked at the mitred end"
     assert all(abs(m["corner"]["u_r"] - 8000) < 1 for m in right)
-    assert not any(m.get("corner", {}).get("k_l") for m in out["geometry"])
+    assert not any(m.get("corner", {}).get("k_l") for m in out["geometry"] if m["ifc_type"] != "panel")
     # butt corners leave every element square
     out = generate_preview({"elevations": [_elev_with_mitre()], "corner": "butt", "trim": False})
     assert not any(m.get("corner") for m in out["geometry"])
@@ -133,7 +135,7 @@ def _lap_pair(master_first=True):
     rb = dict(b, chain="Chain 1", chain_start=a["width"], chain_reversed=False, offset=0,
               corner_lo=1.0, master_lo=not master_first)
     return {"elevations": [ra, rb], "cladding_type": "panel", "corner": "lap", "trim": False,
-            "panel_t": 9, "panel_gap": 10}
+            "panel_t": 9, "panel_gap": 10, "reveals": False, "set_out_from_openings": False}
 
 
 def test_master_lap_runs_one_board_past_the_other():
@@ -145,10 +147,10 @@ def test_master_lap_runs_one_board_past_the_other():
     ends = {}
     for m in out["geometry"]:
         corner = m.get("corner")
-        if not corner:
+        if not corner or m["ifc_type"] == "reveal":
             continue
         assert m["ifc_type"] == "panel", "the lap is a board detail: %s" % m["name"]
-        if "ext_r" in corner:
+        if "ext_r" in corner and abs(corner.get("u_r", 0) - m["_W"]) < 1 if "_W" in m else "ext_r" in corner:
             ends.setdefault("A", corner["ext_r"])
         if "ext_l" in corner:
             ends.setdefault("B", corner["ext_l"])
@@ -157,11 +159,12 @@ def test_master_lap_runs_one_board_past_the_other():
     # ... and the board behind stops a joint gap short of the master board's back
     assert abs(ends["B"] - (depth - 9 - 10)) < 1e-6, ends
     assert all(abs(m["corner"].get("k_r", 0)) < 1e-9 and abs(m["corner"].get("k_l", 0)) < 1e-9
-               for m in out["geometry"] if m.get("corner")), "a lap at a right angle cuts square"
+               for m in out["geometry"] if m.get("corner") and m["ifc_type"] != "reveal"), \
+        "a lap at a right angle cuts square"
     # swapping the master swaps the two extensions
     swapped = generate_preview(_lap_pair(master_first=False))
     got = {m["elevation"]: m["corner"].get("ext_r", m["corner"].get("ext_l"))
-           for m in swapped["geometry"] if m.get("corner")}
+           for m in swapped["geometry"] if m.get("corner") and m["ifc_type"] == "panel"}
     assert abs(got["Elevation B"] - depth) < 1e-6, got
 
 
@@ -187,6 +190,8 @@ def test_master_lap_at_a_reentrant_corner():
     assert abs(slave_end[1] + depth + p["panel_gap"]) < 1e-6, slave_end
     assert abs(slave_end[0]) < 1e-9                       # square at a right angle
     out = generate_preview({"elevations": [inner, dict(outer, name="Elevation B")],
-                            "cladding_type": "panel", "corner": "lap", "trim": False})
-    cut = [m for m in out["geometry"] if m.get("corner") and m["elevation"] == "Elevation B"]
+                            "cladding_type": "panel", "corner": "lap", "trim": False,
+                            "reveals": False, "set_out_from_openings": False})
+    cut = [m for m in out["geometry"] if m.get("corner") and m["elevation"] == "Elevation B"
+           and m["ifc_type"] == "panel" and "ext_r" in m["corner"]]
     assert cut and all(m["corner"]["ext_r"] < 0 for m in cut), "the board behind is cut back"

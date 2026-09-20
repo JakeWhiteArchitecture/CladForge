@@ -80,6 +80,9 @@ default. Each is one place in the code, so any of them can be flipped.
 | Abutments | Any `IfcSlab`/`IfcRoof` that reaches the face plane inside the region is sectioned on the plane and its upper edge becomes the abutment *line*: level for a flat roof or slab, pitched where a roof meets a gable (two slopes meeting at the ridge, say). The splash zone is a band of constant vertical height above that line, so it follows the roof. A slab that passes through the face is also cut out of the region. Manual levels can be added per elevation. | `fabric_extract._section`, `_top_line`, `cladding_primitives.splash_rings` |
 | Corner detail | Three details, set for the whole job and reported per corner in the panel. **Mitred** (default) cuts the whole buildup on the corner's bisector plane, so every layer wraps. **Master-lap, open joint** is a panel detail: at an external corner the master board wraps past and runs out to the far face of the other side's cladding while the board behind stops a joint gap short of the master's back; at a re-entrant corner nothing wraps, so the master runs into the corner and the other board stops a joint gap clear of the master's whole buildup. The layers behind a lap stay square at the corner. **Square** stops everything at the wall corner. Away from a right angle both lap ends slope with depth. Each corner gets a row under its chain naming the two faces, the angle, whether it is external or re-entrant, and which face masters, with a Swap button; clicking the row highlights that corner in the model. A corner bead or profile is not modelled yet. | `cladding_primitives.corner_ends`, `app.cornerRows` |
 | Chains (corners) | A click that is coplanar with the active elevation merges into it. A click on a face that turns a corner from any elevation in the active chain becomes the next elevation in that chain: Elevation A becomes "Chain 1 · A → B → C". A face that meets nothing starts a new chain. Coursing is centred on the whole run and the offset slider is per chain, so panel joints and batten centres carry round the corner (the run reverses through re-entrant corners). Corner allowances and trims are not modelled: the run length is the sum of the face widths. | `fabric_extract.chain_link`, `app.linkIntoChain`, `cladding_geometry.build_elevation` |
+| Openings drive the setting-out | On by default in panel mode. Panel edges land on the structural jambs of every window and door, and each span between jambs is split into equal bays no wider than the maximum panel, so an opening that does not suit the panel centres still sets the joints. Bay widths then vary and there is no closing cut; a bay under 100 mm is flagged. Untick *Set out from the structural openings* for a centred array that ignores them. Only holes at least 300 mm both ways count as openings, so a pipe penetration does not move the joints. | `cladding_primitives.openings`, `bays_between` |
+| Cavity closer | A solid timber closer goes to both vertical sides of every opening, the full height of the opening, filling the cavity from the sheathing or insulation face out to the back of the cladding. It also backs the panel edge at the jamb, so no batten is placed there and it counts as support when spans are checked. Width is set in the Openings section. | `cladding_geometry._openings_extras` |
+| Reveals | The face panel is always mitred to the reveal lining, whatever detail the corners use, cut on the bisector of the arris so the outer face stops at the opening edge and the back runs into the reveal by the board thickness. The lining runs from the cladding face back to the wall face in its own frame. Heads and sills are not lined: a frame whose v is world Z cannot describe a surface that faces up or down. With *Reveal linings* off there is nothing to mitre to, so the panel stays square. | `cladding_geometry._reveal_frame`, `_openings_extras` |
 | Splash zone applies to battens and cladding only [ASSUMED] | Yes. Sheathing and insulation follow the full outline. | `cladding_booleans.TRIMMABLE` |
 | Ground splash zone [OPEN] | Same rule. The elevation base is always an abutment ("Elevation base"); untick it to start boards at the base. | `fabric_extract._merge_abutments` |
 | Panel centres dependency [OPEN] | Width drives centres. Batten centres = (panel width + gap) / n, with n chosen so no span exceeds 600 mm. The centres field is locked in panel mode. Closing cuts are reported at both ends and the top. | `cladding_constants._parse` |
@@ -134,6 +137,11 @@ is dragged and trims them with Shapely otherwise; export always trims.
 Coordinates are IFC millimetres, Z-up. The viewer swaps to Three.js Y-up.
 
 ## Exports
+
+Cavity closers export as `IfcMember` with ObjectType "Cavity closer"; reveal
+linings as `IfcCovering` with "Reveal lining". The DXF gains a `CLOSER` layer;
+reveal linings are left out of the flattened elevation because they are
+perpendicular to that view, and the schedule counts them instead.
 
 **IFC4X3.** `IfcProject → IfcSite → IfcBuilding → IfcBuildingStorey` named
 after the host model, one `IfcElementAssembly` per elevation in the storey of
@@ -193,6 +201,10 @@ unreachable; it serves Pyodide, Three.js and web-ifc from local copies.
   are not chained.
 - Corner beads and profiles are not modelled, and nothing supports the boards
   that overhang a corner: a corner batten or angle is the designer's to add.
+- Opening heads and sills get a cavity closer only at the jambs; head and sill
+  linings, cills and flashings are not modelled.
+- Opening-driven setting-out is a panel rule. Plank coursing still runs
+  straight through an opening and is cut.
 - Mitred elements are written to IFC as an explicit brep rather than a swept
   solid, because the end faces slope with depth. IfcOpenShell's boolean against
   an infinite half space was not dependable enough to cut the joint.

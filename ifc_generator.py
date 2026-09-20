@@ -37,12 +37,15 @@ _IFC_TYPE_MAP = {
     "insulation":     ("IfcCovering", "INSULATION",  "External insulation"),
     "panel":          ("IfcCovering", "CLADDING",    "Cladding panel"),
     "plank":          ("IfcCovering", "CLADDING",    "Cladding plank"),
+    "closer":         ("IfcMember",   "USERDEFINED", "Cavity closer"),
+    "reveal":         ("IfcCovering", "CLADDING",    "Reveal lining"),
 }
 _MATERIALS = {
     "batten": ("Timber (softwood) batten", "wood"), "counter_batten": ("Timber (softwood) batten", "wood"),
     "cross_batten": ("Timber (softwood) batten", "wood"), "sheathing": ("Sheathing board", "board"),
     "insulation": ("External insulation", "insulation"), "panel": ("Cladding panel", "cladding"),
-    "plank": ("Cladding plank", "cladding"),
+    "plank": ("Cladding plank", "cladding"), "closer": ("Timber (solid) cavity closer", "wood"),
+    "reveal": ("Reveal lining", "cladding"),
 }
 
 

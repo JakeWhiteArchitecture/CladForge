@@ -308,7 +308,8 @@ _json.dumps(_ex(_json.loads(_payload_json)))`);
 
 // ─── PARAMETERS ───
 const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d', 'splash',
-             'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap', 'plank_len'];
+             'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
+             'plank_len', 'closer_w'];
 function val(id) { return document.getElementById(id).value; }
 function toggleValue(id) { const b = document.querySelector('#' + id + ' .turn-btn.active'); return b ? b.dataset.value : null; }
 function selectToggle(id, value) {
@@ -337,6 +338,8 @@ function getParams() {
     for (const k of NUM) p[k] = parseFloat(val(k));
     p.sheathing = document.getElementById('sheathing').checked;
     p.insulation = document.getElementById('insulation').checked;
+    p.reveals = document.getElementById('reveals').checked;
+    p.set_out_from_openings = document.getElementById('set_out_from_openings').checked;
     p.cladding_type = toggleValue('cladding-type');
     p.plank_orient = toggleValue('plank-orient');
     p.counter_batten = val('counter_batten');
