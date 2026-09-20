@@ -16,7 +16,8 @@ function newElevation(chain) {
     const n = state.elevations.length;
     const name = 'Elevation ' + String.fromCharCode(65 + (n % 26)) + (n >= 26 ? Math.floor(n / 26) : '');
     const e = { name, color: ELEV_COLORS[n % ELEV_COLORS.length], picks: [], result: null, manual: [], disabled: {},
-                storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null };
+                storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
+                cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false };
     e.chain.members.push(e);
     state.elevations.push(e);
     setActive(n);
@@ -92,7 +93,9 @@ function elevationCard(e, i) {
     let warn = r && r.warnings && r.warnings.length ? `<div class="elev-warn">${r.warnings.join(' · ')}</div>` : '';
     if (e.error) warn = `<div class="elev-warn elev-error">✖ ${e.error} <button class="mini" onclick="event.stopPropagation(); runExtraction(state.elevations[${i}])">Retry</button></div>`;
     else if (!ok && e.picks.length) warn = `<div class="elev-warn">Extracting…</div>`;
-    const place = e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + r.width)}${e.rev ? ' ↺' : ''}` : '';
+    const corners = [e.cornerLo, e.cornerHi].filter(k => k);
+    const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + r.width)}${e.rev ? ' ↺' : ''}` : '')
+        + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
         <div class="elev-head"><span class="elev-swatch" style="background:#${e.color.toString(16).padStart(6, '0')}"></span>
             <input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
@@ -110,6 +113,7 @@ function renderElevationList() {
         const members = chain.members.slice().sort((a, b) => a.start - b.start);
         if (members.length > 1) {
             html += `<div class="chain-head">${chain.name} · ${members.map(m => m.name.replace('Elevation ', '')).join(' → ')} · run ${Math.round(chain.length)} mm</div>`;
+            html += cornerRows(chain, members);
         }
         for (const m of members) html += elevationCard(m, state.elevations.indexOf(m));
     }
@@ -117,6 +121,53 @@ function renderElevationList() {
 }
 
 // ─── CORNERS ───
+// One row per corner in a chain. The lap detail needs to know which face runs past
+// the other, so each row names the master and can swap it.
+function chainCorners(chain) {
+    const members = chain.members.filter(m => m.result && m.result.ok).sort((a, b) => a.start - b.start);
+    const out = [];
+    for (let i = 0; i < members.length - 1; i++) {
+        if (members[i].cornerHi) out.push({ lo: members[i], hi: members[i + 1], k: members[i].cornerHi });
+    }
+    return out;
+}
+
+function cornerRows(chain, members) {
+    const detail = toggleValue('corner-type') || 'mitre';
+    const rows = chainCorners(chain);
+    if (!rows.length) return '';
+    return rows.map((c, i) => {
+        const angle = c.hi.link ? Math.abs(c.hi.link.angle).toFixed(0) : '';
+        const kind = c.k > 0 ? 'external' : 're-entrant';
+        const master = c.lo.masterHi ? c.lo.name : c.hi.name;
+        const label = { mitre: 'Mitred', lap: 'Master-lap, open joint', butt: 'Square' }[detail];
+        const swap = detail === 'lap'
+            ? ` · <b>${master.replace('Elevation ', '')}</b> masters <button class="mini" onclick="event.stopPropagation(); swapCorner('${chain.name}', ${i})">Swap</button>`
+            : '';
+        return `<div class="corner-row" onclick="selectCorner('${chain.name}', ${i})">`
+            + `${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner`
+            + ` · ${angle}° ${kind} · ${label}${swap}</div>`;
+    }).join('');
+}
+
+function swapCorner(chainName, index) {
+    const chain = state.chains.find(c => c.name === chainName);
+    const corner = chain && chainCorners(chain)[index];
+    if (!corner) return;
+    corner.lo.masterHi = !corner.lo.masterHi;
+    corner.hi.masterLo = !corner.hi.masterLo;
+    renderElevationList();
+    updatePreview();
+}
+
+function selectCorner(chainName, index) {
+    const chain = state.chains.find(c => c.name === chainName);
+    const corner = chain && chainCorners(chain)[index];
+    if (!corner) return;
+    const e = corner.lo;
+    highlightCorner(e.result.frame, e.rev ? 0 : e.result.width, e.result.height);
+}
+
 function samePlane(hit, e) {
     if (!e.result || !e.result.ok) return e.picks.length === 0;
     const f = e.result.frame, n = toIfc(hit.normal), p = toIfc(hit.point);
@@ -140,8 +191,14 @@ function placeInChain(e, other, link) {
     // the corner sits at one of its ends, and e extends away from that corner.
     const W = e.result.width, Wo = other.result.width;
     const cornerC = (link.end_a === 'right') !== other.rev ? other.start + Wo : other.start;
-    if (cornerC >= other.start + Wo - 1) { e.start = cornerC; e.rev = link.end_b === 'right'; }
+    const after = cornerC >= other.start + Wo - 1;
+    if (after) { e.start = cornerC; e.rev = link.end_b === 'right'; }
     else { e.start = cornerC - W; e.rev = link.end_b === 'left'; }
+    // The corner's slope belongs to the touching end of both members. The face that
+    // was already in the chain masters the lap by default; the corner row swaps it.
+    const k = link.k || 0;
+    if (after) { other.cornerHi = k; e.cornerLo = k; other.masterHi = true; e.masterLo = false; }
+    else { other.cornerLo = k; e.cornerHi = k; other.masterLo = true; e.masterHi = false; }
     e.link = link;
 }
 
@@ -164,7 +221,7 @@ async function linkIntoChain(e) {
         chain.members = chain.members.filter(m => m !== e);
         e.chain = newChain(); e.chain.members.push(e);
     }
-    e.start = 0; e.rev = false; e.link = null;
+    e.start = 0; e.rev = false; e.link = null; e.cornerLo = 0; e.cornerHi = 0;
     relayoutChain(e.chain);
     return false;
 }
@@ -172,6 +229,7 @@ async function linkIntoChain(e) {
 async function relinkChain(chain) {
     const members = chain.members.slice().sort((a, b) => a.start - b.start);
     chain.members = [];
+    members.forEach(m => { m.cornerLo = 0; m.cornerHi = 0; m.masterLo = false; m.masterHi = false; m.link = null; });
     for (const m of members) { m.chain = chain; chain.members.push(m); if (m.result && m.result.ok) await linkIntoChain(m); }
     renderElevationList();
     updatePreview();
@@ -264,14 +322,18 @@ function elevationRecords() {
         for (const e of members) {
             out.push(Object.assign({}, e.result, { name: e.name, offset: chain.offset, abutments: abutmentsFor(e), storey: e.storey,
                                                    chain: members.length > 1 ? chain.name : null, chain_start: e.start,
-                                                   chain_length: chain.length, chain_reversed: e.rev }));
+                                                   chain_reversed: e.rev, corner_lo: e.cornerLo || 0,
+                                                   corner_hi: e.cornerHi || 0, master_lo: !!e.masterLo,
+                                                   master_hi: !!e.masterHi }));
         }
     }
     return out;
 }
 
 function getParams() {
-    const p = { elevations: elevationRecords(), context: modelContext || {}, trim: !state.sliderDragging && document.getElementById('live-trim').checked };
+    const p = { elevations: elevationRecords(), context: Object.assign({ offset: modelOffset }, modelContext),
+                corner: toggleValue('corner-type') || 'mitre',
+                trim: !state.sliderDragging && document.getElementById('live-trim').checked };
     for (const k of NUM) p[k] = parseFloat(val(k));
     p.sheathing = document.getElementById('sheathing').checked;
     p.insulation = document.getElementById('insulation').checked;
@@ -283,6 +345,12 @@ function getParams() {
 
 function onTypeChange() {
     const panel = toggleValue('cladding-type') === 'panel';
+    // The master-lap needs a board to run past the corner, so it is a panel detail.
+    const lap = document.querySelector('#corner-type .turn-btn[data-value="lap"]');
+    lap.disabled = !panel;
+    lap.title = panel ? '' : 'Panel cladding only';
+    lap.style.opacity = panel ? '' : '0.45';
+    if (!panel && lap.classList.contains('active')) selectToggle('corner-type', 'mitre');
     document.getElementById('panel-section').style.display = panel ? '' : 'none';
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
     document.getElementById('batten_centres').readOnly = panel;
@@ -394,17 +462,32 @@ async function onFileChosen(input) {
     await loadModel(input.files[0]);
 }
 
-async function loadModel(file) {
+function retryOnServer() {
+    if (state.file) loadModel(state.file, 'server');
+}
+
+async function loadModel(file, force) {
     const info = document.getElementById('model-info');
+    state.file = file;
     try {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
         state.elevations = []; state.chains = []; state.active = -1; state.seq = 0; renderElevationList();
-        const summary = await loadIFC(file, t => setStatus(t, 'busy'));
+        const summary = await loadIFC(file, t => setStatus(t, 'busy'), force);
         state.model = summary;
-        info.innerHTML = `<b>${file.name}</b><br>${summary.meshes} elements · ${summary.storeys} storeys · ${summary.context.project || 'unnamed project'}`;
+        const notes = (summary.warnings || []).filter(Boolean);
+        info.innerHTML = `<b>${file.name}</b><br>${summary.meshes} elements · ${summary.storeys} storeys · `
+            + `${summary.context.project || 'unnamed project'}<br><span class="hint">Read by ${summary.reader}.</span>`
+            + (notes.length ? `<div class="elev-warn">${notes.join('<br>')}</div>` : '')
+            + (summary.reader.indexOf('server') < 0
+                ? `<button class="btn btn-secondary btn-sm" style="margin-top:6px" onclick="retryOnServer()">Re-import on the server</button>` : '');
         setStatus(pyReady ? 'Ready — click a wall face' : 'Model loaded, engine still loading…', pyReady ? 'ready' : 'busy');
         newElevation();
-    } catch (err) { console.error(err); info.textContent = 'Load failed: ' + err.message; setStatus('Load failed', 'busy'); }
+    } catch (err) {
+        console.error(err);
+        info.innerHTML = `<div class="elev-warn elev-error">Load failed: ${err.message}</div>`
+            + `<button class="btn btn-secondary btn-sm" style="margin-top:6px" onclick="retryOnServer()">Try the server importer</button>`;
+        setStatus('Load failed', 'busy');
+    }
 }
 
 // ─── DOWNLOADS ───
@@ -504,7 +587,8 @@ async function initPyodide() {
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
         const modules = ['cladding_constants', 'cladding_primitives', 'cladding_geometry', 'cladding_booleans',
-                         'cladding_preview', 'fabric_extract', 'dxf_generator', 'ifc_generator'];
+                         'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
+                         'ifc_generator'];
         const v = Date.now();
         for (const mod of modules) {
             const src = await (await fetch(mod + '.py?v=' + v)).text();

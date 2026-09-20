@@ -319,8 +319,11 @@ def _merge_abutments(found, umin, vmin, width):
 
 def chain_link(a, b):
     """Do elevations a and b meet at a vertical corner? None if not, else
-    {"end_a": "left"|"right", "end_b": ..., "corner_u_a", "corner_u_b", "angle"}.
-    Ends are judged in each elevation's own frame (u = 0 is the viewer's left)."""
+    {"end_a": "left"|"right", "end_b", "corner_u_a", "corner_u_b", "angle",
+     "external", "k"}. Ends are judged in each elevation's own frame (u = 0 is
+    the viewer's left). *k* is the mitre slope du/ddepth on the corner's
+    bisector plane: positive wraps the buildup round an external corner,
+    negative cuts it back into a re-entrant one."""
     fa, fb = a["frame"], b["frame"]
     na, nb = fa["n"], fb["n"]
     cross = na[0] * nb[1] - na[1] * nb[0]
@@ -345,6 +348,14 @@ def chain_link(a, b):
     zb0, zb1 = fb["origin"][2], fb["origin"][2] + float(b["height"])
     if min(za1, zb1) - max(za0, zb0) < 300.0:
         return None                                   # no vertical overlap
+    # External where b's outward normal points the way a was running into the corner
+    # (round the outside of the building); re-entrant where it points back.
+    step = 1.0 if ends[0][0] == "right" else -1.0
+    ua = fa["u"]
+    external = (nb[0] * ua[0] + nb[1] * ua[1]) * step > 0
+    beta = math.acos(max(-1.0, min(1.0, na[0] * nb[0] + na[1] * nb[1])))
+    k = math.tan(min(beta, math.radians(170.0)) / 2.0)
     return {"end_a": ends[0][0], "end_b": ends[1][0], "corner_u_a": round(ends[0][1], 1),
-            "corner_u_b": round(ends[1][1], 1),
+            "corner_u_b": round(ends[1][1], 1), "external": external,
+            "k": round(k if external else -k, 4),
             "angle": round(math.degrees(math.atan2(cross, na[0] * nb[0] + na[1] * nb[1])), 1)}

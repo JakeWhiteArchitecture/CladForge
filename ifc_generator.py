@@ -7,10 +7,12 @@ One IfcElementAssembly per elevation, placed in the host wall's storey and
 aggregating IfcMember battens, IfcPlate sheathing and IfcCovering insulation
 and boards. Every prism becomes an IfcExtrudedAreaSolid whose placement axis
 is the elevation normal, so the profile drawn in (u, v) extrudes outward.
-Raw entity creation is used for property sets: the Pyodide/WASM wheel ships
+A mitred end slopes with depth, so those elements are written as an explicit
+brep instead. Raw entity creation is used for property sets: the WASM wheel ships
 without pset template files.
 """
 
+import math
 import tempfile
 import uuid
 
@@ -21,6 +23,7 @@ import ifcopenshell.guid
 
 from cladding_constants import (_parse, TOOL_NAME, TOOL_URL, IFC_SCHEMA_LABEL, SCOPE_NOTE,
                                 QUANTITY_NOTE, DISCLAIMER, frame_to_world)
+from cladding_primitives import corner_ring
 
 IFC_SCHEMA_VERSIONS = ("IFC4X3", "IFC4X3_ADD2", "IFC4")
 _GUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, TOOL_URL)
@@ -89,8 +92,14 @@ def _polyline(ifc, ring):
 
 
 def _prism_solid(ifc, mesh):
-    """IfcExtrudedAreaSolid for a prism: profile in the elevation frame, extruded along n."""
-    outer = _polyline(ifc, mesh["profile"])
+    """Solid for a prism. A square-ended one is an IfcExtrudedAreaSolid: the profile in
+    the elevation frame, extruded along the wall normal. A mitred one is an explicit
+    brep, because its end faces slope with depth; booleans against an infinite half
+    space are not dependable enough to cut a joint people will build from."""
+    corner = mesh.get("corner")
+    if corner and (corner.get("k_l") or corner.get("k_r")):
+        return _corner_brep(ifc, mesh), "Brep"      # end faces slope with depth
+    outer = _polyline(ifc, corner_ring(mesh["profile"], corner, 0.0))
     holes = [_polyline(ifc, h) for h in (mesh.get("holes") or []) if len(h) >= 3]
     if holes:
         profile = ifc.createIfcArbitraryProfileDefWithVoids("AREA", None, outer, holes)
@@ -103,12 +112,50 @@ def _prism_solid(ifc, mesh):
         ifc.createIfcDirection(tuple(float(c) for c in frame["n"])),
         ifc.createIfcDirection(tuple(float(c) for c in frame["u"])))
     return ifc.createIfcExtrudedAreaSolid(profile, placement, ifc.createIfcDirection((0.0, 0.0, 1.0)),
-                                          float(mesh["thickness"]))
+                                          float(mesh["thickness"])), "SweptSolid"
+
+
+def _point(ifc, cache, xyz):
+    key = tuple(round(float(c), 4) for c in xyz)
+    if key not in cache:
+        cache[key] = ifc.createIfcCartesianPoint(key)
+    return cache[key]
+
+
+def _face(ifc, outer, inner=()):
+    bounds = [ifc.createIfcFaceOuterBound(ifc.createIfcPolyLoop(outer), True)]
+    bounds += [ifc.createIfcFaceBound(ifc.createIfcPolyLoop(ring), True) for ring in inner]
+    return ifc.createIfcFace(bounds)
+
+
+def _corner_brep(ifc, mesh):
+    """Closed shell of a prism whose ends slope with depth. Profile rings run
+    anticlockwise in (u, v) and u x v = the outward normal, so the outer ring as given
+    faces outwards on the far cap and is reversed on the near one."""
+    frame, corner = mesh["frame"], mesh["corner"]
+    near = float(mesh["depth"])
+    far = near + float(mesh["thickness"])
+    cache, faces, layers = {}, [], []
+    for ring in [list(mesh["profile"])] + [list(h) for h in (mesh.get("holes") or [])]:
+        if len(ring) < 3:
+            continue
+        lo = [_point(ifc, cache, frame_to_world(frame, u, v, near)) for u, v in corner_ring(ring, corner, near)]
+        hi = [_point(ifc, cache, frame_to_world(frame, u, v, far)) for u, v in corner_ring(ring, corner, far)]
+        layers.append((lo, hi))
+        for i in range(len(lo)):                       # side faces, one quad per edge
+            j = (i + 1) % len(lo)
+            if lo[i] is not lo[j] or hi[i] is not hi[j]:
+                faces.append(_face(ifc, [lo[i], lo[j], hi[j], hi[i]]))
+    outer_lo, outer_hi = layers[0]
+    faces.append(_face(ifc, list(reversed(outer_lo)), [list(reversed(r)) for r, _h in layers[1:]]))
+    faces.append(_face(ifc, outer_hi, [h for _l, h in layers[1:]]))
+    return ifc.createIfcFacetedBrep(ifc.createIfcClosedShell(faces))
 
 
 def _make_element(ifc, body, ifc_class, name, solid, predefined=None, object_type=None):
     element = ifcopenshell.api.run("root.create_entity", ifc, ifc_class=ifc_class, name=name)
-    rep = ifc.createIfcShapeRepresentation(body, "Body", "SweptSolid", [solid])
+    solid, kind = solid
+    rep = ifc.createIfcShapeRepresentation(body, "Body", kind, [solid])
     element.Representation = ifc.createIfcProductDefinitionShape(None, None, [rep])
     origin = ifc.createIfcCartesianPoint((0.0, 0.0, 0.0))
     element.ObjectPlacement = ifc.createIfcLocalPlacement(None, ifc.createIfcAxis2Placement3D(origin, None, None))
@@ -207,6 +254,21 @@ def _spatial(ifc, context, elevations):
     return project, body, site, building, storeys
 
 
+def _unshift(meshes, offset):
+    """Put the elements back on the host model. The viewer works near the origin so
+    float32 keeps its millimetres, and reports the shift it applied as context.offset."""
+    if not offset or not any(offset):
+        return meshes
+    frames, out = {}, []
+    for mesh in meshes:
+        frame = mesh.get("frame")
+        key = id(frame)
+        if key not in frames:
+            frames[key] = dict(frame, origin=[frame["origin"][i] + float(offset[i]) for i in range(3)])
+        out.append(dict(mesh, frame=frames[key]))
+    return out
+
+
 def meshes_to_ifc(meshes, params, infos=None):
     """Convert prism meshes into an IFC4X3 file. Returns the temp file path."""
     p = _parse(params)
@@ -215,6 +277,7 @@ def meshes_to_ifc(meshes, params, infos=None):
         infos = _build_all(p)[2]
     info_by_name = {i["elevation"]: i for i in infos}
     context = p.get("context") or {}
+    meshes = _unshift(meshes, context.get("offset"))
     ifc = _create_file()
 
     person = ifcopenshell.api.run("owner.add_person", ifc, family_name="User")

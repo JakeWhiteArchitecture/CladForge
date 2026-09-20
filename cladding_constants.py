@@ -44,6 +44,7 @@ def _parse(params):
     p["cladding_type"] = "panel" if params.get("cladding_type") == "panel" else "plank"
     p["counter_batten"] = params.get("counter_batten", "auto")   # auto | yes | no
     p["plank_orient"] = "vertical" if params.get("plank_orient") == "vertical" else "horizontal"
+    p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))
     # Derived: battens perpendicular to boards; horizontal battens on vertical counter-battens.
     vertical_planks = p["cladding_type"] == "plank" and p["plank_orient"] == "vertical"

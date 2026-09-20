@@ -5,8 +5,10 @@
  */
 
 let scene, camera, renderer, controls, ifcApi = null;
-let modelGroup = null, cladGroup = null, outlineGroup = null, dimGroup = null, highlightGroup = null;
+let modelGroup = null, cladGroup = null, outlineGroup = null, dimGroup = null, highlightGroup = null, cornerGroup = null;
 let allMeshes = [], meshMeta = [], modelContext = {};
+// The scene works near the origin; modelOffset (IFC mm) puts exports back on the host model.
+let modelOffset = [0, 0, 0];
 const layerVisible = { model: true, sheathing: true, insulation: true, counter_batten: true,
                        batten: true, cladding: true, dims: true };
 const ELEV_COLORS = [0x2a9d8f, 0xe9c46a, 0xf4a261, 0xe76f51, 0x8ab17d, 0x9b5de5, 0x00b4d8];
@@ -36,8 +38,8 @@ function initThree() {
     scene.add(dir2);
     scene.add(new THREE.GridHelper(40000, 40, 0x222244, 0x111133));
     modelGroup = new THREE.Group(); cladGroup = new THREE.Group(); outlineGroup = new THREE.Group();
-    dimGroup = new THREE.Group(); highlightGroup = new THREE.Group();
-    scene.add(modelGroup, cladGroup, outlineGroup, dimGroup, highlightGroup);
+    dimGroup = new THREE.Group(); highlightGroup = new THREE.Group(); cornerGroup = new THREE.Group();
+    scene.add(modelGroup, cladGroup, outlineGroup, dimGroup, highlightGroup, cornerGroup);
     window.addEventListener('resize', () => {
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();
@@ -110,57 +112,126 @@ function readLengthUnitScale(modelID) {
     return 1000;
 }
 
-async function loadIFC(file, onStatus) {
-    if (!ifcApi) throw new Error('web-ifc is still loading — try again in a moment');
-    onStatus('Parsing IFC…');
+// ─── IMPORT ───
+// Two readers produce the same raw form: {verts (IFC mm, Z-up), idx, expressID,
+// type, name, storey}. web-ifc runs in the browser and keeps the file private;
+// the server reader uses IfcOpenShell and builds geometry web-ifc cannot.
+
+async function readWithWebIfc(file, onStatus) {
+    if (!ifcApi) throw new Error('web-ifc is still loading');
+    onStatus('Parsing IFC in the browser…');
     const data = new Uint8Array(await file.arrayBuffer());
-    const modelID = ifcApi.OpenModel(data);
+    let modelID = null;
+    try {
+        modelID = ifcApi.OpenModel(data, { COORDINATE_TO_ORIGIN: false });
+    } catch (err) {
+        throw new Error('web-ifc could not open the file: ' + err.message);
+    }
+    const spatial = readSpatial(modelID, 1000);
+    const raw = [];
+    let failed = 0;
+    try {
+        ifcApi.StreamAllMeshes(modelID, (mesh) => {
+            // One unbuildable element must not abandon the file.
+            try {
+                const verts = [], idx = [];
+                let off = 0;
+                for (let i = 0; i < mesh.geometries.size(); i++) {
+                    const pg = mesh.geometries.get(i);
+                    const g = ifcApi.GetGeometry(modelID, pg.geometryExpressID);
+                    const v = ifcApi.GetVertexArray(g.GetVertexData(), g.GetVertexDataSize());
+                    const ix = ifcApi.GetIndexArray(g.GetIndexData(), g.GetIndexDataSize());
+                    g.delete();
+                    if (!v.length || !ix.length) continue;
+                    const m = new THREE.Matrix4().fromArray(pg.flatTransformation);
+                    const n = v.length / 6;
+                    const p = new THREE.Vector3();
+                    for (let k = 0; k < n; k++) {
+                        p.set(v[k * 6], v[k * 6 + 1], v[k * 6 + 2]).applyMatrix4(m);
+                        verts.push(p.x * 1000, p.y * 1000, p.z * 1000);   // web-ifc emits metres
+                    }
+                    for (let k = 0; k < ix.length; k++) idx.push(ix[k] + off);
+                    off += n;
+                }
+                if (!verts.length) return;
+                let type = '', name = '';
+                try { type = ifcTypeName(ifcApi.GetLineType(modelID, mesh.expressID)); } catch (e) { /* unknown */ }
+                try { name = attr(ifcApi.GetLine(modelID, mesh.expressID), 'Name') || ''; } catch (e) { /* unnamed */ }
+                raw.push({ verts, idx, expressID: mesh.expressID, type, name,
+                           storey: spatial.elemStorey[mesh.expressID] || null });
+            } catch (err) { failed++; }
+        });
+    } catch (err) {
+        // The stream itself died: keep whatever was collected and let the caller decide.
+        if (!raw.length) { try { ifcApi.CloseModel(modelID); } catch (e) { /* gone */ } ifcApi = null; initWebIfc();
+                           throw new Error('web-ifc failed while reading geometry: ' + err.message); }
+        failed++;
+    }
+    try { ifcApi.CloseModel(modelID); } catch (e) { /* already closed */ }
+    if (!raw.length) throw new Error('web-ifc found no geometry in this file');
+    return { raw, context: spatial.ctx, failed, reader: 'web-ifc' };
+}
+
+function b64ToArray(b64, Type) {
+    const bin = atob(b64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Type(bytes.buffer);
+}
+
+async function readWithServer(file, onStatus) {
+    onStatus('Building geometry on the server…');
+    const body = new FormData();
+    body.append('file', file, file.name);
+    const resp = await fetch('api/import', { method: 'POST', body });
+    if (!resp.ok) throw new Error('server importer returned ' + resp.status);
+    const data = await resp.json();
+    if (!data.success) throw new Error(data.error || 'server importer failed');
+    const raw = data.elements.map(e => ({
+        verts: b64ToArray(e.verts, Float32Array), idx: b64ToArray(e.idx, Uint32Array),
+        expressID: e.expressID, type: e.type, name: e.name, storey: e.storey }));
+    if (!raw.length) throw new Error((data.warnings || []).join(' ') || 'no geometry in this file');
+    return { raw, context: data.context || {}, failed: (data.failed || []).length,
+             warnings: data.warnings || [], reader: 'IfcOpenShell (server)' };
+}
+
+function modelScale(raw) {
+    // Judge the unit by the model's SIZE, never by how far it sits from the origin:
+    // a georeferenced model has huge coordinates but ordinary dimensions.
+    let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const r of raw) for (let k = 0; k < r.verts.length; k += 3)
+        for (let a = 0; a < 3; a++) { const v = r.verts[k + a]; if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v; }
+    const diag = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+    for (const s of [1, 1000, 0.001]) if (diag * s > 1000 && diag * s < 5e6) return { scale: s, lo, hi, diag };
+    return { scale: 1, lo, hi, diag };    // implausible either way: leave it alone and say so
+}
+
+function buildScene(raw, context, warnings) {
     clearGroup(modelGroup); clearGroup(highlightGroup);
     allMeshes = []; meshMeta = [];
-    const unitScale = readLengthUnitScale(modelID);
-    const spatial = readSpatial(modelID, unitScale);
-    modelContext = spatial.ctx;
-    const raw = [];
-    ifcApi.StreamAllMeshes(modelID, (mesh) => {
-        const verts = [], idx = []; let off = 0;
-        for (let i = 0; i < mesh.geometries.size(); i++) {
-            const pg = mesh.geometries.get(i);
-            const g = ifcApi.GetGeometry(modelID, pg.geometryExpressID);
-            const v = ifcApi.GetVertexArray(g.GetVertexData(), g.GetVertexDataSize());
-            const ix = ifcApi.GetIndexArray(g.GetIndexData(), g.GetIndexDataSize());
-            g.delete();
-            if (!v.length || !ix.length) continue;
-            const m = new THREE.Matrix4().fromArray(pg.flatTransformation);
-            const n = v.length / 6;
-            const p = new THREE.Vector3();
-            for (let k = 0; k < n; k++) { p.set(v[k * 6], v[k * 6 + 1], v[k * 6 + 2]).applyMatrix4(m); verts.push(p.x, p.y, p.z); }
-            for (let k = 0; k < ix.length; k++) idx.push(ix[k] + off);
-            off += n;
-        }
-        if (!verts.length) return;
-        let type = '';
-        try { type = ifcTypeName(ifcApi.GetLineType(modelID, mesh.expressID)); } catch (e) { /* unknown */ }
-        let name = '';
-        try { name = attr(ifcApi.GetLine(modelID, mesh.expressID), 'Name') || ''; } catch (e) { /* unnamed */ }
-        raw.push({ verts, idx, expressID: mesh.expressID, type, name, storey: spatial.elemStorey[mesh.expressID] || null });
-    });
-    ifcApi.CloseModel(modelID);
-    if (!raw.length) throw new Error('No geometry found in this IFC');
-    // web-ifc normalises to metres; guard against files it left in millimetres.
-    let extent = 0;
-    for (const r of raw) for (let k = 0; k < r.verts.length; k++) extent = Math.max(extent, Math.abs(r.verts[k]));
-    const scale = extent > 2000 ? 1 : 1000;
+    modelContext = context || {};
+    const { scale, lo, hi, diag } = modelScale(raw);
+    if (scale !== 1) warnings.push('Model read as ' + (scale === 1000 ? 'metres' : 'kilometres') + ' and scaled to mm.');
+    if (diag * scale <= 1000 || diag * scale >= 5e6)
+        warnings.push('Model is ' + Math.round(diag * scale) + ' mm across, which looks wrong for a building.');
+    // Work near the origin: float32 loses millimetres on site coordinates in the
+    // hundreds of thousands, which wrecks picking and extraction.
+    modelOffset = [Math.round((lo[0] + hi[0]) / 2 * scale), Math.round((lo[1] + hi[1]) / 2 * scale),
+                   Math.round(lo[2] * scale)];
     for (const r of raw) {
         const pos = new Float32Array(r.verts.length);
-        for (let k = 0; k < r.verts.length; k++) pos[k] = r.verts[k] * scale;
+        for (let k = 0; k < r.verts.length; k += 3) {
+            pos[k] = r.verts[k] * scale - modelOffset[0];
+            pos[k + 1] = r.verts[k + 1] * scale - modelOffset[1];
+            pos[k + 2] = r.verts[k + 2] * scale - modelOffset[2];
+        }
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         geo.setIndex(new THREE.BufferAttribute(new Uint32Array(r.idx), 1));
         geo.computeVertexNormals();
         geo.computeBoundingBox();
-        const isWall = /WALL/.test(r.type);
-        const mat = new THREE.MeshPhongMaterial({ color: isWall ? 0xd8d8d8 : 0xa8a8b8, flatShading: true, side: THREE.DoubleSide,
-                                                  transparent: true, opacity: 0.95 });
+        const isWall = /WALL/i.test(r.type);
+        const mat = new THREE.MeshPhongMaterial({ color: isWall ? 0xd8d8d8 : 0xa8a8b8, flatShading: true,
+                                                  side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
         const th = new THREE.Mesh(geo, mat);
         th.userData.index = allMeshes.length;
         modelGroup.add(th);
@@ -168,8 +239,29 @@ async function loadIFC(file, onStatus) {
         meshMeta.push({ mesh: th, expressID: r.expressID, type: r.type, name: r.name, storey: r.storey });
     }
     fitCameraTo(modelGroup);
-    const storeyNames = new Set(meshMeta.filter(m => m.storey).map(m => m.storey.name));
-    return { meshes: allMeshes.length, storeys: storeyNames.size, context: modelContext, unitScale };
+    return new Set(meshMeta.filter(m => m.storey).map(m => m.storey.name)).size;
+}
+
+async function loadIFC(file, onStatus, force) {
+    // Browser first, server second. Either reader alone is enough to work with.
+    const warnings = [];
+    let read = null;
+    if (force !== 'server') {
+        try { read = await readWithWebIfc(file, onStatus); }
+        catch (err) { warnings.push('Browser importer: ' + err.message); }
+    }
+    if (!read) {
+        try { read = await readWithServer(file, onStatus); }
+        catch (err) {
+            warnings.push('Server importer: ' + err.message);
+            throw new Error(warnings.join(' | '));
+        }
+    }
+    warnings.push(...(read.warnings || []));
+    if (read.failed) warnings.push(read.failed + ' element(s) could not be built and were skipped.');
+    const storeys = buildScene(read.raw, read.context, warnings);
+    return { meshes: allMeshes.length, storeys, context: modelContext, reader: read.reader,
+             warnings, offset: modelOffset };
 }
 
 function fitCameraTo(obj) {
@@ -321,6 +413,35 @@ function shapeFromRings(profile, holes) {
 const _layerOf = { sheathing: 'sheathing', insulation: 'insulation', counter_batten: 'counter_batten',
                    batten: 'batten', cross_batten: 'batten', panel: 'cladding', plank: 'cladding' };
 
+function applyCorner(geo, m, tol = 0.6) {
+    // Move the vertices on a corner end to u_end -/+ (ext + k x depth): k shears the
+    // end onto the corner's bisector (a mitre), ext runs it past square (a lap).
+    // Local z runs 0..thickness along the wall normal, so a vertex is at m.depth + z.
+    const c = m.corner;
+    if (!c) return;
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), s = m.depth + pos.getZ(i);
+        if ((c.k_l || c.ext_l) && Math.abs(x - c.u_l) < tol) pos.setX(i, x - ((c.ext_l || 0) + (c.k_l || 0) * s));
+        else if ((c.k_r || c.ext_r) && Math.abs(x - c.u_r) < tol) pos.setX(i, x + ((c.ext_r || 0) + (c.k_r || 0) * s));
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+}
+
+function highlightCorner(frame, u, height) {
+    // Flash the corner edge so a row in the panel points at something in the model.
+    clearGroup(cornerGroup);
+    const M = frameMatrix(frame, 0);
+    const pts = [new THREE.Vector3(u, 0, 0), new THREE.Vector3(u, height, 0)].map(v => v.applyMatrix4(M));
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+                                new THREE.LineBasicMaterial({ color: 0xffd166, depthTest: false, linewidth: 2 }));
+    cornerGroup.add(line);
+    const mid = pts[0].clone().lerp(pts[1], 0.5);
+    controls.target.copy(mid);
+    controls.update();
+}
+
 function renderGeometry(meshes) {
     clearGroup(cladGroup);
     const byLayer = {};
@@ -330,6 +451,7 @@ function renderGeometry(meshes) {
         let geo;
         try { geo = new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false }); }
         catch (e) { continue; }
+        applyCorner(geo, m);
         const mat = new THREE.MeshPhongMaterial({ color: new THREE.Color(m.color), flatShading: true, transparent: m.opacity < 1,
                                                   opacity: m.opacity, side: THREE.DoubleSide, depthWrite: m.opacity >= 1 });
         const mesh = new THREE.Mesh(geo, mat);
