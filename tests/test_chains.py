@@ -59,9 +59,10 @@ def test_chain_coursing_carries_round_the_corner():
     a = extract_elevation(payload())
     b = extract_elevation(corner_payload())
     run = a["width"] + b["width"]
-    ra = dict(a, chain_start=0, chain_length=run, chain_reversed=False, offset=0)
-    rb = dict(b, chain_start=a["width"], chain_length=run, chain_reversed=False, offset=0)
-    out = generate_preview({"elevations": [ra, rb], "cladding_type": "panel", "trim": False})
+    ra = dict(a, chain="Chain 1", chain_start=0, chain_reversed=False, offset=0)
+    rb = dict(b, chain="Chain 1", chain_start=a["width"], chain_reversed=False, offset=0)
+    out = generate_preview({"elevations": [ra, rb], "cladding_type": "panel", "trim": False,
+                            "corner": "butt"})
     joints = {}
     for m in out["geometry"]:
         if m["ifc_type"] == "panel":
@@ -72,3 +73,120 @@ def test_chain_coursing_carries_round_the_corner():
     inner = [g for g in grid if 1 < g < run - 1 and abs(g - a["width"]) > 1]
     diffs = {round((g - inner[0]) % 1210, 1) for g in inner}
     assert diffs <= {0.0, 1210.0}, diffs
+
+
+def _elev_with_mitre(k_hi=1.0):
+    a = extract_elevation(payload())
+    return dict(a, chain="Chain 1", chain_start=0, chain_reversed=False, offset=0,
+                corner_lo=0.0, corner_hi=k_hi)
+
+
+def test_mitre_marks_the_end_elements():
+    out = generate_preview({"elevations": [_elev_with_mitre()], "cladding_type": "panel", "trim": True})
+    right = [m for m in out["geometry"] if m.get("corner", {}).get("k_r")]
+    assert right, "no element marked at the mitred end"
+    assert all(abs(m["corner"]["u_r"] - 8000) < 1 for m in right)
+    assert not any(m.get("corner", {}).get("k_l") for m in out["geometry"])
+    # butt corners leave every element square
+    out = generate_preview({"elevations": [_elev_with_mitre()], "corner": "butt", "trim": False})
+    assert not any(m.get("corner") for m in out["geometry"])
+
+
+def test_mitre_is_cut_on_the_bisector_plane_in_ifc():
+    """Read the written coordinates rather than tessellating them: IfcOpenShell's
+    shape builder is not dependable enough here to tell a bad export from a bad run."""
+    import ifcopenshell
+    from synthetic import N, U, ORIGIN
+    from ifc_generator import meshes_to_ifc
+    params = {"elevations": [_elev_with_mitre()], "cladding_type": "panel", "trim": True}
+    out = generate_preview(params)
+    ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
+    breps = ifc.by_type("IfcFacetedBrep")
+    assert breps, "mitred elements were not written as solids"
+    assert not ifc.by_type("IfcBooleanClippingResult"), "mitres must not depend on booleans"
+    worst = 0.0
+    for brep in breps:
+        for face in brep.Outer.CfsFaces:
+            for bound in face.Bounds:
+                for point in bound.Bound.Polygon:
+                    x, y, z = point.Coordinates
+                    p = (x - ORIGIN[0], y - ORIGIN[1], z - ORIGIN[2])
+                    u = p[0] * U[0] + p[1] * U[1]
+                    s = p[0] * N[0] + p[1] * N[1]
+                    # k = 1, so no material may sit beyond u = 8000 + depth
+                    assert u <= 8000 + s + 1e-6, (u, s)
+                    worst = max(worst, u - 8000)
+    assert worst > 40, "nothing wrapped past the corner (worst %.1f)" % worst
+    # every brep is a closed shell of planar quads
+    for brep in breps:
+        assert len(brep.Outer.CfsFaces) >= 6
+        for face in brep.Outer.CfsFaces:
+            assert len(face.Bounds[0].Bound.Polygon) >= 3
+
+
+def _lap_pair(master_first=True):
+    """Elevation A (right end) meeting B (left end) at an external 90 degree corner."""
+    a = extract_elevation(payload())
+    b = extract_elevation(corner_payload())
+    ra = dict(a, chain="Chain 1", chain_start=0, chain_reversed=False, offset=0,
+              corner_hi=1.0, master_hi=master_first)
+    rb = dict(b, chain="Chain 1", chain_start=a["width"], chain_reversed=False, offset=0,
+              corner_lo=1.0, master_lo=not master_first)
+    return {"elevations": [ra, rb], "cladding_type": "panel", "corner": "lap", "trim": False,
+            "panel_t": 9, "panel_gap": 10}
+
+
+def test_master_lap_runs_one_board_past_the_other():
+    from cladding_constants import _parse
+    from cladding_primitives import buildup_depth
+    params = _lap_pair(master_first=True)
+    depth = buildup_depth(_parse(params))
+    out = generate_preview(params)
+    ends = {}
+    for m in out["geometry"]:
+        corner = m.get("corner")
+        if not corner:
+            continue
+        assert m["ifc_type"] == "panel", "the lap is a board detail: %s" % m["name"]
+        if "ext_r" in corner:
+            ends.setdefault("A", corner["ext_r"])
+        if "ext_l" in corner:
+            ends.setdefault("B", corner["ext_l"])
+    # the master runs out to the far face of the other side's cladding ...
+    assert abs(ends["A"] - depth) < 1e-6, ends
+    # ... and the board behind stops a joint gap short of the master board's back
+    assert abs(ends["B"] - (depth - 9 - 10)) < 1e-6, ends
+    assert all(abs(m["corner"].get("k_r", 0)) < 1e-9 and abs(m["corner"].get("k_l", 0)) < 1e-9
+               for m in out["geometry"] if m.get("corner")), "a lap at a right angle cuts square"
+    # swapping the master swaps the two extensions
+    swapped = generate_preview(_lap_pair(master_first=False))
+    got = {m["elevation"]: m["corner"].get("ext_r", m["corner"].get("ext_l"))
+           for m in swapped["geometry"] if m.get("corner")}
+    assert abs(got["Elevation B"] - depth) < 1e-6, got
+
+
+def test_master_lap_is_panel_only():
+    params = dict(_lap_pair(), cladding_type="plank")
+    out = generate_preview(params)
+    assert out["info"][0]["corner"]["detail"] == "mitre", "planks have no master board to lap"
+
+
+def test_master_lap_at_a_reentrant_corner():
+    """Nothing wraps round a re-entrant corner: the master runs into it and the other
+    board stops a joint gap clear of the master's whole buildup."""
+    from cladding_constants import _parse
+    from cladding_primitives import buildup_depth, corner_ends
+    params = _lap_pair(master_first=True)
+    depth = buildup_depth(_parse(params))
+    inner = dict(params["elevations"][0], corner_hi=-1.0, master_hi=True)
+    outer = dict(params["elevations"][0], corner_hi=-1.0, master_hi=False)
+    p = _parse(params)
+    (_l, master_end, _d) = (corner_ends(inner, p)[0], corner_ends(inner, p)[1], None)
+    slave_end = corner_ends(outer, p)[1]
+    assert master_end == (0.0, 0.0), master_end          # runs into the corner
+    assert abs(slave_end[1] + depth + p["panel_gap"]) < 1e-6, slave_end
+    assert abs(slave_end[0]) < 1e-9                       # square at a right angle
+    out = generate_preview({"elevations": [inner, dict(outer, name="Elevation B")],
+                            "cladding_type": "panel", "corner": "lap", "trim": False})
+    cut = [m for m in out["geometry"] if m.get("corner") and m["elevation"] == "Elevation B"]
+    assert cut and all(m["corner"]["ext_r"] < 0 for m in cut), "the board behind is cut back"

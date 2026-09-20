@@ -8,19 +8,20 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 
 from cladding_constants import _prism, _rect, COUNTER_BATTEN_CENTRES, MAX_BATTEN_SPAN
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
-                                 dedupe_priority, subdivide, panel_bays, split_run, base_level)
+                                 dedupe_priority, subdivide, panel_bays, split_run, base_level,
+                                 corner_ends)
 
 
-def build_elevation(p, elev):
-    """Return (meshes, dims, info) for one elevation record."""
+def build_elevation(p, elev, layout=None):
+    """Return (meshes, dims, info) for one elevation record.
+    *layout* is (chain start, run length) measured along the cladding face."""
     name = elev.get("name", "Elevation")
     W, H = float(elev["width"]), float(elev["height"])
     frame = elev["frame"]
-    # Chains: coursing is centred on the whole run (chain_length) and shifted by the
-    # chain offset, so modules carry on around corners. Each elevation occupies
-    # [chain_start, chain_start + W] of the run, reversed where the corner flips u.
-    run = float(elev.get("chain_length") or W)
-    start = float(elev.get("chain_start") or 0.0)
+    # Chains: coursing is centred on the whole run and shifted by the chain offset,
+    # so modules carry on around corners. Each elevation occupies [start, start + W]
+    # of the run, reversed where the corner flips the u direction.
+    start, run = layout or (0.0, W)
     centre = run / 2.0 + float(elev.get("offset", 0.0)) - start        # in this elevation's u
     if elev.get("chain_reversed"):
         centre = W - centre
@@ -53,12 +54,35 @@ def build_elevation(p, elev):
     else:
         depth = _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset)
 
+    left, right, detail = corner_ends(elev, p)
+    _apply_corner(meshes, left, right, W, detail)
+    info["corner"] = {"detail": detail, "left": list(left), "right": list(right)}
     # Splash zone dimension at the left edge of the ground band.
     if v0 > 0:
         dims.append(_dim(name, [0, 0], [0, v0], "Splash %.0f" % v0, 300, [-1, 0]))
     info["total_depth"] = depth
     info["n_boards"] = sum(1 for m in meshes if m["ifc_type"] in ("plank", "panel"))
     return meshes, dims, info
+
+
+def _apply_corner(meshes, left, right, W, detail, tol=0.6):
+    """Mark the elements that reach a corner. Consumers move the vertices on that end
+    to u_end -/+ (ext + k x depth). A mitre cuts the whole buildup on the bisector; a
+    master-lap is a board detail, so the layers behind it stay square at the corner."""
+    if not any(left) and not any(right):
+        return
+    for m in meshes:
+        if detail == "lap" and m["ifc_type"] not in ("panel", "plank"):
+            continue
+        us = [q[0] for q in m["profile"]]
+        corner = {}
+        if any(left) and min(us) <= tol:
+            corner["k_l"], corner["ext_l"] = left
+        if any(right) and max(us) >= W - tol:
+            corner["k_r"], corner["ext_r"] = right
+        if corner:
+            corner["u_l"], corner["u_r"] = 0.0, W
+            m["corner"] = corner
 
 
 def _dim(elev, p1, p2, label, offset, norm):

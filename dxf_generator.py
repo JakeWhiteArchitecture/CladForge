@@ -15,7 +15,7 @@ import tempfile
 
 from cladding_constants import (_parse, TOOL_NAME, IFC_SCHEMA_LABEL, SCOPE_NOTE, QUANTITY_NOTE,
                                 DISCLAIMER)
-from cladding_primitives import splash_rings
+from cladding_primitives import buildup_depth, corner_ring, splash_rings
 
 LAYERS = {
     "WALL":           {"color": 7, "linetype": "CONTINUOUS"},
@@ -121,6 +121,12 @@ def _draw_dim_line(dxf, p1, p2, offset, label=None, norm=None, layer="DIMS"):
     dxf.add_text(text, ((d1[0] + d2[0]) / 2 + nx * 30, (d1[1] + d2[1]) / 2 + ny * 30), _TEXT, layer)
 
 
+def _corner_ring(ring, mesh):
+    """Ring drawn at the element's outer face, so a corner end shows its cut length."""
+    corner = mesh.get("corner")
+    return ring if not corner else corner_ring(ring, corner, float(mesh["depth"]) + float(mesh["thickness"]))
+
+
 def _wrap(text, width=70):
     words, lines, cur = text.split(), [], ""
     for w in words:
@@ -163,6 +169,14 @@ def _schedule(p, info, meshes):
             "lapped %.0f" % p["plank_lap"] if p["plank_lap"] > 0 else "open joint %.0f" % p["plank_gap"]))
     lines.append("Closing cuts: left %.0f  right %.0f  top %.0f.  Splash zone %.0f from abutments." % (
         info.get("closing_cut_left", 0), info.get("closing_cut_right", 0), info.get("closing_cut_top", 0), p["splash"]))
+    corner = info.get("corner") or {}
+    ends = [(side, corner.get(side) or (0.0, 0.0)) for side in ("left", "right")]
+    if any(any(v) for _s, v in ends):
+        detail = {"mitre": "mitred", "lap": "master-lap, open joint"}.get(corner.get("detail"), corner.get("detail"))
+        lines.append("Corners (%s): %s. Boards are drawn to their outer face, which is the cut length." % (
+            detail, ", ".join("%s end %s %.0fmm at the cladding face" % (
+                side, "wraps" if (k + ext) > 0 else "is cut back", abs(k * buildup_depth(p) + ext))
+                for side, (k, ext) in ends if k or ext)))
     return lines
 
 
@@ -197,7 +211,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
             dxf.add_ring(ring, "SPLASH_ZONE", ox, 0.0)
         for m in by_elev.get(name, []):
             layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
-            dxf.add_ring(m["profile"], layer, ox, 0.0)
+            dxf.add_ring(_corner_ring(m["profile"], m), layer, ox, 0.0)
             for hole in m.get("holes") or []:
                 dxf.add_ring(hole, layer, ox, 0.0)
         for d in [d for d in dims if d["elevation"] == name]:

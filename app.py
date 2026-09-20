@@ -10,6 +10,7 @@ wheel when the page is served statically.
 
 import datetime
 import os
+import tempfile
 
 from flask import Flask, jsonify, make_response, render_template, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
@@ -18,6 +19,7 @@ from cladding_preview import check_rules, generate_preview
 from dxf_generator import meshes_to_dxf
 from fabric_extract import extract_elevation
 from ifc_generator import meshes_to_ifc
+from ifc_import import import_ifc
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, template_folder=os.path.join(ROOT, "templates"),
@@ -25,7 +27,8 @@ app = Flask(__name__, template_folder=os.path.join(ROOT, "templates"),
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024
 
 PY_MODULES = ("cladding_constants", "cladding_primitives", "cladding_geometry", "cladding_booleans",
-              "cladding_preview", "fabric_extract", "dxf_generator", "ifc_generator")
+              "cladding_checks", "cladding_preview", "fabric_extract", "dxf_generator",
+              "ifc_generator")
 
 
 def _no_store(resp):
@@ -49,6 +52,21 @@ def serve_module(name):
     if name not in PY_MODULES:
         return jsonify({"success": False, "error": "unknown module"}), 404
     return _no_store(send_from_directory(ROOT, name + ".py", mimetype="text/plain"))
+
+
+@app.route("/api/import", methods=["POST"])
+def api_import():
+    """Server-side IFC tessellation, the fallback when web-ifc cannot build a model."""
+    upload = request.files.get("file")
+    if upload is None:
+        return jsonify({"success": False, "error": "no file uploaded"}), 400
+    tmp = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
+    try:
+        upload.save(tmp.name)
+        tmp.close()
+        return jsonify(dict(import_ifc(tmp.name), success=True))
+    finally:
+        _unlink(tmp.name)
 
 
 @app.route("/api/extract", methods=["POST"])

@@ -72,6 +72,9 @@ body {
 .file-drop input { display: none; }
 
 .chain-head { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 4px; }
+.corner-row { font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 4px; padding: 5px 8px; margin-bottom: 6px; cursor: pointer; }
+.corner-row:hover { border-color: var(--accent); }
+.corner-row b { color: var(--accent); }
 .elev-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
 .elev-card.active { border-color: var(--accent); }
 .elev-head { display: flex; align-items: center; gap: 8px; }

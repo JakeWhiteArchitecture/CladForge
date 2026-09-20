@@ -23,7 +23,7 @@ async function main() {
             [/^https:\/\/cdn\.jsdelivr\.net\/pyodide\/v0\.27\.4\/full\/(.+)$/, m => path.join(vendor, 'pyodide', m[1])],
             [/^https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/three\.js\/r128\/three\.min\.js$/, () => path.join(vendor, 'three', 'build', 'three.min.js')],
             [/^https:\/\/cdn\.jsdelivr\.net\/npm\/three@0\.128\.0\/(.+)$/, m => path.join(vendor, 'three', m[1])],
-            [/^https:\/\/cdn\.jsdelivr\.net\/npm\/web-ifc@0\.0\.57\/(.+)$/, m => path.join(vendor, 'web-ifc', m[1])],
+            [/^https:\/\/cdn\.jsdelivr\.net\/npm\/web-ifc@[\d.]+\/(.+)$/, m => path.join(vendor, 'web-ifc', m[1])],
         ];
         await page.route(/^https:\/\/(cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com)\//, route => {
             const url = route.request().url().split('?')[0];
@@ -50,15 +50,27 @@ async function main() {
     await page.waitForFunction(() => (typeof pyReady !== "undefined" && pyReady === true) || (document.getElementById('status-chip').classList.contains('ready')), null, { timeout: 300000 });
     console.log('engine ready');
 
-    // Look straight at the south wall from the south, then click its centre.
-    await page.evaluate(() => {
-        camera.position.set(4000, 3000, 16000);
-        controls.target.set(4000, 3000, 0);
-        controls.update();
-    });
-    await page.waitForTimeout(300);
+    // Aim at a named element's face and click the middle of the canvas. Named rather
+    // than positioned, because the viewer recentres the model on import.
     const box = await page.locator('#viewport canvas').boundingBox();
-    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.42);
+    async function lookAt(name, dir) {
+        const ok = await page.evaluate(([name, dir]) => {
+            const meta = meshMeta.find(m => m.name === name);
+            if (!meta) return false;
+            const bb = new THREE.Box3().setFromObject(meta.mesh);
+            const c = bb.getCenter(new THREE.Vector3());
+            const size = bb.getSize(new THREE.Vector3()).length();
+            camera.position.copy(c.clone().add(new THREE.Vector3(dir[0], dir[1], dir[2]).normalize().multiplyScalar(size * 1.4)));
+            controls.target.copy(c);
+            controls.update();
+            return true;
+        }, [name, dir]);
+        if (!ok) throw new Error('element not found: ' + name);
+        await page.waitForTimeout(350);
+        await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+        await page.waitForTimeout(1200);
+    }
+    await lookAt('South wall', [0, 0.35, 1]);
     await page.waitForFunction(() => typeof state !== "undefined" && state.elevations.length && state.elevations[0].result && state.elevations[0].result.ok, null, { timeout: 60000 });
     const result = await page.evaluate(() => state.elevations[0].result);
     console.log('elevation:', result.name, result.width, 'x', result.height, 'holes', result.n_holes,
@@ -109,18 +121,14 @@ async function main() {
     await page.screenshot({ path: path.join(__dirname, 'smoke_panel.png') });
     console.log('panel overlay:', await page.evaluate(() => document.getElementById('dim-overlay').innerText.replace(/\n/g, ' | ')));
 
-    // Click the wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
-    await page.evaluate(() => { camera.position.set(9500, 2000, 14000); controls.target.set(9500, 1700, -1000); controls.update(); });
-    await page.waitForTimeout(300);
-    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.45);
+    // The wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
+    await lookAt('Wing south wall', [0, 0.3, 1]);
     await page.waitForFunction(() => state.elevations.length === 2 && state.elevations[1].result && state.elevations[1].result.ok && state.elevations[1].chain !== state.elevations[0].chain, null, { timeout: 60000 });
     const r2 = await page.evaluate(() => state.elevations[1].result);
     console.log('elevation B (wing south):', r2.width, 'x', r2.height, 'chain', await page.evaluate(() => state.elevations[1].chain.name));
 
     // Then the wing's east wall: it turns the corner, so it joins B's chain with the run continued.
-    await page.evaluate(() => { camera.position.set(24000, 2500, -2500); controls.target.set(11000, 1700, -2500); controls.update(); });
-    await page.waitForTimeout(300);
-    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.45);
+    await lookAt('Wing east wall', [1, 0.3, 0]);
     await page.waitForFunction(() => state.elevations.length === 3 && state.elevations[2].result && state.elevations[2].result.ok && state.elevations[2].link, null, { timeout: 60000 });
     const chainInfo = await page.evaluate(() => ({ chain: state.elevations[2].chain.name, members: state.elevations[2].chain.members.map(m => [m.name, Math.round(m.start), m.rev]),
                                                     length: Math.round(state.elevations[2].chain.length), link: state.elevations[2].link }));
@@ -129,9 +137,7 @@ async function main() {
 
     // The main east wall carries the wing's pitched roof: its splash zone must follow the slope.
     await page.click('button:has-text("New elevation")');
-    await page.evaluate(() => { camera.position.set(22000, 6000, -8000); controls.target.set(8000, 4500, -4800); controls.update(); });
-    await page.waitForTimeout(300);
-    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.40);
+    await lookAt('East wall', [1, 0.25, 0]);
     await page.waitForFunction(() => state.elevations.length === 4 && state.elevations[3].result && state.elevations[3].result.ok, null, { timeout: 60000 });
     const r4 = await page.evaluate(() => state.elevations[3].result);
     console.log('elevation D (main east):', r4.width, 'x', r4.height, 'abutments', r4.abutments.map(a => `${a.source}${a.pitched ? '(pitched)' : ''} line=${JSON.stringify(a.line)}`).join(' | '));
@@ -148,6 +154,38 @@ async function main() {
         await download.saveAs(out);
         console.log(ext, 'download:', download.suggestedFilename(), fs.statSync(out).size, 'bytes');
     }
+    // Corners: the chain's corner row, the master-lap detail and the master swap.
+    await page.click('#cladding-type .turn-btn[data-value="panel"]');
+    await page.waitForTimeout(1200);
+    console.log('corner row (mitred):', await page.evaluate(() => (document.querySelector('.corner-row') || {}).textContent));
+    const mitred = await page.evaluate(() => window._lastPreview.geometry.filter(m => m.corner).length);
+    await page.click('#corner-type .turn-btn[data-value="lap"]');
+    await page.waitForTimeout(1500);
+    const lapped = await page.evaluate(() => ({
+        row: (document.querySelector('.corner-row') || {}).textContent,
+        marked: window._lastPreview.geometry.filter(m => m.corner).length,
+        types: Array.from(new Set(window._lastPreview.geometry.filter(m => m.corner).map(m => m.ifc_type))),
+        exts: Array.from(new Set(window._lastPreview.geometry.filter(m => m.corner)
+            .map(m => Math.round((m.corner.ext_r !== undefined ? m.corner.ext_r : m.corner.ext_l))))).sort((a, b) => a - b),
+    }));
+    console.log('mitred elements:', mitred, '| lapped:', JSON.stringify(lapped));
+    await page.click('.corner-row button');
+    await page.waitForTimeout(1200);
+    console.log('after swap:', await page.evaluate(() => (document.querySelector('.corner-row') || {}).textContent));
+    console.log('lap check:', await page.evaluate(() => (Array.from(document.querySelectorAll('.check-item span'))
+        .map(s => s.textContent).find(t => t.indexOf('corner end') >= 0) || 'none')));
+    // Planks cannot lap, so the option disables itself and falls back to a mitre.
+    await page.click('#cladding-type .turn-btn[data-value="plank"]');
+    await page.waitForTimeout(1200);
+    console.log('lap disabled for planks:', await page.evaluate(() =>
+        document.querySelector('#corner-type .turn-btn[data-value="lap"]').disabled
+        + ' active=' + document.querySelector('#corner-type .turn-btn.active').dataset.value));
+
+    // The server importer, the fallback for models web-ifc cannot build.
+    await page.evaluate(() => loadModel(state.file, 'server'));
+    await page.waitForFunction(() => state.model && state.model.reader.indexOf('server') >= 0, null, { timeout: 180000 });
+    console.log('server import:', await page.evaluate(() => `${state.model.meshes} elements, ${state.model.storeys} storeys, reader ${state.model.reader}`));
+
     console.log('SMOKE OK');
     await browser.close();
 }
