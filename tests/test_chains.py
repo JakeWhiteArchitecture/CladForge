@@ -89,8 +89,9 @@ def test_mitre_marks_the_end_elements():
     assert right, "no element marked at the mitred end"
     assert all(abs(m["corner"]["u_r"] - 8000) < 1 for m in right)
     assert not any(m.get("corner", {}).get("k_l") for m in out["geometry"] if m["ifc_type"] != "panel")
-    # butt corners leave every element square
-    out = generate_preview({"elevations": [_elev_with_mitre()], "corner": "butt", "trim": False})
+    # butt corners leave every element square (reveals are their own mitre)
+    out = generate_preview({"elevations": [_elev_with_mitre()], "corner": "butt", "trim": False,
+                            "reveals": False})
     assert not any(m.get("corner") for m in out["geometry"])
 
 

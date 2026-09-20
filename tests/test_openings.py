@@ -120,3 +120,52 @@ def test_openings_export_as_their_own_ifc_types(elevation):
     assert {e.ObjectType for e in closers} == {"Cavity closer"}
     assert {e.ObjectType for e in linings} == {"Reveal lining"}
     assert ifc.by_type("IfcFacetedBrep"), "the mitred reveal and panel need explicit solids"
+
+
+def test_face_is_cut_back_at_a_corner(elevation):
+    """A wall that runs past a corner is clad only up to it, so nothing projects
+    through into the other face."""
+    clipped = dict(elevation, clip_lo=500.0, clip_hi=6000.0, offset=0)
+    out = generate_preview({"elevations": [clipped], "cladding_type": "plank", "trim": True,
+                            "reveals": False})
+    assert out["geometry"]
+    for m in out["geometry"]:
+        if m["ifc_type"] == "closer":
+            continue
+        for u, _v in m["profile"]:
+            assert 500.0 - 1 <= u <= 6000.0 + 1, (m["name"], u)
+    # the sheathing outline follows the clip too
+    sheet = generate_preview({"elevations": [clipped], "sheathing": True, "trim": False})
+    face = [m for m in sheet["geometry"] if m["ifc_type"] == "sheathing"]
+    assert face and all(500.0 - 1 <= q[0] <= 6000.0 + 1 for m in face for q in m["profile"])
+
+
+def test_planks_only_seam_when_a_run_needs_two_boards(elevation):
+    """A course shorter than one board is a single piece. A course broken by a gable
+    or an opening is set out along each part, not across the whole face."""
+    out = generate_preview({"elevations": [dict(elevation, offset=0)], "cladding_type": "plank",
+                            "plank_len": 6000, "trim": True, "reveals": False})
+    courses = {}
+    for m in out["geometry"]:
+        if m["ifc_type"] != "plank":
+            continue
+        v = round(min(q[1] for q in m["profile"]), 1)
+        courses.setdefault(v, []).append((min(q[0] for q in m["profile"]),
+                                          max(q[0] for q in m["profile"])))
+    assert courses
+    for v, pieces in courses.items():
+        pieces.sort()
+        for (a0, a1), (b0, b1) in zip(pieces, pieces[1:]):
+            # two pieces in one course may only meet where the face is broken, never
+            # as a seam in a run a single board could have covered
+            if b0 - a1 < 20:
+                assert (a1 - a0) + (b1 - b0) > 6000, (v, pieces)
+    # a short face never seams at all
+    narrow = generate_preview({"elevations": [dict(elevation, clip_lo=0, clip_hi=1500.0, offset=0)],
+                               "cladding_type": "plank", "plank_len": 3600, "trim": True,
+                               "reveals": False})
+    by_course = {}
+    for m in narrow["geometry"]:
+        if m["ifc_type"] == "plank":
+            by_course.setdefault(round(min(q[1] for q in m["profile"]), 1), []).append(m)
+    assert by_course and all(len(v) == 1 for v in by_course.values()), "a 1500mm run was seamed"
