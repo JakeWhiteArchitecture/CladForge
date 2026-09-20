@@ -133,6 +133,16 @@ async function main() {
     const chainInfo = await page.evaluate(() => ({ chain: state.elevations[2].chain.name, members: state.elevations[2].chain.members.map(m => [m.name, Math.round(m.start), m.rev]),
                                                     length: Math.round(state.elevations[2].chain.length), link: state.elevations[2].link }));
     console.log('chain:', JSON.stringify(chainInfo));
+    console.log('corner clip:', await page.evaluate(() => state.elevations.slice(1).map(m =>
+        `${m.name}: face ${Math.round(m.result.width)} clad ${Math.round(m.clipLo)}-${Math.round(m.clipHi === null ? m.result.width : m.clipHi)}`).join(' | ')));
+    console.log('plank seams per course (max):', await page.evaluate(() => {
+        const c = {};
+        window._lastPreview.geometry.filter(m => m.ifc_type === 'plank').forEach(m => {
+            const key = m.elevation + '@' + Math.round(Math.min(...m.profile.map(q => q[1])));
+            c[key] = (c[key] || 0) + 1;
+        });
+        return Math.max(0, ...Object.values(c));
+    }));
     console.log('list header:', await page.evaluate(() => (document.querySelector('.chain-head') || {}).textContent));
 
     // The main east wall carries the wing's pitched roof: its splash zone must follow the slope.

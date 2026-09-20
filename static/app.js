@@ -17,7 +17,7 @@ function newElevation(chain) {
     const name = 'Elevation ' + String.fromCharCode(65 + (n % 26)) + (n >= 26 ? Math.floor(n / 26) : '');
     const e = { name, color: ELEV_COLORS[n % ELEV_COLORS.length], picks: [], result: null, manual: [], disabled: {},
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
-                cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false };
+                cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, clipLo: 0, clipHi: null };
     e.chain.members.push(e);
     state.elevations.push(e);
     setActive(n);
@@ -93,9 +93,11 @@ function elevationCard(e, i) {
     let warn = r && r.warnings && r.warnings.length ? `<div class="elev-warn">${r.warnings.join(' · ')}</div>` : '';
     if (e.error) warn = `<div class="elev-warn elev-error">✖ ${e.error} <button class="mini" onclick="event.stopPropagation(); runExtraction(state.elevations[${i}])">Retry</button></div>`;
     else if (!ok && e.picks.length) warn = `<div class="elev-warn">Extracting…</div>`;
+    const clipped = ok && (e.clipLo > 0.5 || (e.clipHi !== null && e.clipHi < r.width - 0.5));
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
-    const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + r.width)}${e.rev ? ' ↺' : ''}` : '')
-        + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '');
+    const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
+        + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
+        + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
         <div class="elev-head"><span class="elev-swatch" style="background:#${e.color.toString(16).padStart(6, '0')}"></span>
             <input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
@@ -194,6 +196,13 @@ function placeInChain(e, other, link) {
     const after = cornerC >= other.start + Wo - 1;
     if (after) { e.start = cornerC; e.rev = link.end_b === 'right'; }
     else { e.start = cornerC - W; e.rev = link.end_b === 'left'; }
+    // Cut each face back to the corner. A wall that runs past it belongs to the other
+    // face from there on, and cladding it would project through the corner.
+    const clamp = (u, width) => Math.max(0, Math.min(width, u));
+    if (link.end_a === 'right') other.clipHi = clamp(link.corner_u_a, Wo);
+    else other.clipLo = clamp(link.corner_u_a, Wo);
+    if (link.end_b === 'right') e.clipHi = clamp(link.corner_u_b, W);
+    else e.clipLo = clamp(link.corner_u_b, W);
     // The corner's slope belongs to the touching end of both members. The face that
     // was already in the chain masters the lap by default; the corner row swaps it.
     const k = link.k || 0;
@@ -202,11 +211,18 @@ function placeInChain(e, other, link) {
     e.link = link;
 }
 
+function cladWidth(m) {
+    // The clad part of the face: a wall running past a corner is cut back to it.
+    const hi = m.clipHi === null || m.clipHi === undefined ? m.result.width : m.clipHi;
+    const w = hi - (m.clipLo || 0);
+    return w > 1 ? w : m.result.width;
+}
+
 function relayoutChain(chain) {
     const placed = chain.members.filter(m => m.result && m.result.ok);
     const lo = placed.length ? Math.min(...placed.map(m => m.start)) : 0;
     placed.forEach(m => m.start -= lo);
-    chain.length = placed.length ? Math.max(...placed.map(m => m.start + m.result.width)) : 0;
+    chain.length = placed.length ? Math.max(...placed.map(m => m.start + cladWidth(m))) : 0;
 }
 
 async function linkIntoChain(e) {
@@ -222,6 +238,7 @@ async function linkIntoChain(e) {
         e.chain = newChain(); e.chain.members.push(e);
     }
     e.start = 0; e.rev = false; e.link = null; e.cornerLo = 0; e.cornerHi = 0;
+    e.clipLo = 0; e.clipHi = null;
     relayoutChain(e.chain);
     return false;
 }
@@ -229,7 +246,8 @@ async function linkIntoChain(e) {
 async function relinkChain(chain) {
     const members = chain.members.slice().sort((a, b) => a.start - b.start);
     chain.members = [];
-    members.forEach(m => { m.cornerLo = 0; m.cornerHi = 0; m.masterLo = false; m.masterHi = false; m.link = null; });
+    members.forEach(m => { m.cornerLo = 0; m.cornerHi = 0; m.masterLo = false; m.masterHi = false;
+                           m.link = null; m.clipLo = 0; m.clipHi = null; });
     for (const m of members) { m.chain = chain; chain.members.push(m); if (m.result && m.result.ok) await linkIntoChain(m); }
     renderElevationList();
     updatePreview();
@@ -325,7 +343,8 @@ function elevationRecords() {
                                                    chain: members.length > 1 ? chain.name : null, chain_start: e.start,
                                                    chain_reversed: e.rev, corner_lo: e.cornerLo || 0,
                                                    corner_hi: e.cornerHi || 0, master_lo: !!e.masterLo,
-                                                   master_hi: !!e.masterHi }));
+                                                   master_hi: !!e.masterHi, clip_lo: e.clipLo || 0,
+                                                   clip_hi: e.clipHi }));
         }
     }
     return out;

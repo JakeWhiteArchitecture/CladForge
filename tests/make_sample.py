@@ -75,7 +75,7 @@ def main():
     element(ifc, body, first, "IfcSlab", "Main roof", (0, 0, 6000, 8000, 6000, 6200), "ROOF")
     # Single-storey wing to the east: three walls turning two external corners, and a
     # pitched roof (ridge along X) that meets the main east wall as a gable abutment.
-    element(ifc, body, ground, "IfcWall", "Wing south wall", (8000, 1000, 0, 11000, 1300, 3500))
+    element(ifc, body, ground, "IfcWall", "Wing south wall", (8000, 1000, 0, 11300, 1300, 3500))  # runs 300 past the corner
     element(ifc, body, ground, "IfcWall", "Wing east wall", (10700, 1000, 0, 11000, 4000, 3500))
     element(ifc, body, ground, "IfcWall", "Wing north wall", (8000, 3700, 0, 11000, 4000, 3500))
     element(ifc, body, ground, "IfcRoof", "Wing roof south", None, "GABLE_ROOF",

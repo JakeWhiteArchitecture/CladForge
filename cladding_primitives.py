@@ -141,6 +141,8 @@ def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0):
     reported as unsupported. Returns (segments, unsupported_joints) with segments
     as (start, end) already shortened by half the joint gap at each internal joint.
     """
+    if b - a <= max_len + 1e-6:
+        return [(a, b)], []          # one whole board reaches: no seam to show
     stops = sorted(s for s in stops if a < s < b)
     segs, unsupported = [], []
     cur = a
@@ -249,6 +251,16 @@ def corner_ring(ring, corner, s):
     return [(corner_shift(float(u), corner, s), float(v)) for u, v in ring]
 
 
+def clip_bounds(elev):
+    """(lo, hi) in this elevation's u: the part of the face that is actually clad.
+    A wall that runs past a corner is cut back to it, so nothing projects through."""
+    width = float(elev["width"])
+    lo = max(0.0, float(elev.get("clip_lo") or 0.0))
+    hi = elev.get("clip_hi")
+    hi = min(width, float(hi)) if hi is not None else width
+    return (lo, hi) if hi - lo > 1.0 else (0.0, width)
+
+
 def chain_layout(elevations, face_depth, detail):
     """Run coordinates measured along the cladding face, so a corner adds the wrap on
     both of its sides. Returns {elevation name: (start, run length)}."""
@@ -260,7 +272,8 @@ def chain_layout(elevations, face_depth, detail):
         members.sort(key=lambda e: float(e.get("chain_start") or 0.0))
         run, spans = 0.0, []
         for e in members:
-            width = float(e["width"])
+            lo, hi = clip_bounds(e)
+            width = hi - lo
             spans.append((e.get("name"), run))
             k = float(e.get("corner_hi") or 0.0) if detail != "butt" else 0.0
             run += width + 2.0 * k * face_depth

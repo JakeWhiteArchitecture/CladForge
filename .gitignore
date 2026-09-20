@@ -7,4 +7,6 @@ __pycache__/
 dist/
 build/
 tests/smoke_*.png
+tests/shot_*.png
+tests/repro.png
 tests/smoke_out.*
