@@ -89,9 +89,11 @@ function elevationCard(e, i) {
     const abuts = abutmentsFor(e).map(ab => ab.source === 'manual'
         ? `<label><input type="checkbox" checked disabled> Manual level @ ${Math.round(ab.v)} <button class="mini" onclick="event.stopPropagation(); removeManualLevel(${i}, ${ab.k})">×</button></label>`
         : `<label onclick="event.stopPropagation()"><input type="checkbox" ${ab.enabled ? 'checked' : ''} onchange="toggleAbutment(${i}, '${abutKey(ab)}', this.checked)"> ${ab.name || ab.source} (${ab.source}) ${ab.pitched ? `pitched ${Math.round(ab.v_min)}–${Math.round(ab.v)}, splash follows the roof` : '@ ' + Math.round(ab.v)}</label>`).join('');
-    const warn = r && r.warnings && r.warnings.length ? `<div class="elev-warn">${r.warnings.join(' · ')}</div>` : '';
+    let warn = r && r.warnings && r.warnings.length ? `<div class="elev-warn">${r.warnings.join(' · ')}</div>` : '';
+    if (e.error) warn = `<div class="elev-warn elev-error">✖ ${e.error} <button class="mini" onclick="event.stopPropagation(); runExtraction(state.elevations[${i}])">Retry</button></div>`;
+    else if (!ok && e.picks.length) warn = `<div class="elev-warn">Extracting…</div>`;
     const place = e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + r.width)}${e.rev ? ' ↺' : ''}` : '';
-    return `<div class="elev-card ${i === state.active ? 'active' : ''}" onclick="setActive(${i})">
+    return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
         <div class="elev-head"><span class="elev-swatch" style="background:#${e.color.toString(16).padStart(6, '0')}"></span>
             <input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
             <span class="elev-meta">${meta}${e.storey ? ' · ' + e.storey.name : ''}${place}</span></div>
@@ -208,27 +210,38 @@ function onViewportClick(event) {
 async function runExtraction(e) {
     if (!e.picks.length) { e.result = null; renderElevationList(); updatePreview(); return; }
     if (!pyReady) { setStatus('Engine still loading…', 'busy'); return; }
-    setStatus('Extracting ' + e.name + '…', 'busy');
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
-    const payload = { name: e.name, faces: tris, outward: e.picks[0].normal,
-                      context: contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300),
+    const context = contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300, e.picks[0].normal);
+    const nTris = context.reduce((a, c) => a + c.tris.length, 0);
+    setStatus(`Extracting ${e.name}… ${tris.length} faces, ${context.length} nearby elements (${nTris} triangles)`, 'busy');
+    e.error = null;
+    renderElevationList();
+    await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
+    const payload = { name: e.name, faces: tris, outward: e.picks[0].normal, context,
                       options: { penetrations: document.getElementById('penetrations').checked } };
     try {
+        const t0 = performance.now();
         pyodide.globals.set('_payload_json', JSON.stringify(payload));
         const out = await pyodide.runPythonAsync(`
 import json as _json
 from fabric_extract import extract_elevation as _ex
 _json.dumps(_ex(_json.loads(_payload_json)))`);
         e.result = JSON.parse(out);
-        setStatus(e.result.ok ? 'Ready' : (e.result.warnings.join('; ') || 'Extraction failed'), e.result.ok ? 'ready' : 'busy');
+        console.log(`extract ${e.name}: ${Math.round(performance.now() - t0)} ms, ok=${e.result.ok}`, e.result.warnings);
         if (e.result.ok) {
+            setStatus('Ready', 'ready');
             const linked = await linkIntoChain(e);
             if (linked) setStatus(`${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)`, 'ready');
             frameElevation(e.result);
+        } else {
+            e.error = e.result.warnings.join('; ') || 'Extraction failed';
+            e.result = null;
+            setStatus(e.name + ': ' + e.error, 'busy');
         }
     } catch (err) {
-        console.error(err); e.result = null; setStatus('Extraction error: ' + err.message, 'busy');
+        console.error(err); e.result = null; e.error = 'Extraction error: ' + err.message;
+        setStatus(e.name + ': ' + e.error, 'busy');
     }
     renderElevationList();
     updateSliderRange();

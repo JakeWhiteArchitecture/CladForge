@@ -84,6 +84,8 @@ body {
 .elev-abut input[type=number] { width: 90px; padding: 3px 6px; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 3px; font-size: 11px; }
 .elev-abut .mini { padding: 3px 8px; font-size: 11px; background: var(--border); color: var(--text); border: none; border-radius: 3px; cursor: pointer; }
 .elev-warn { font-size: 11px; color: #ff9800; margin-top: 4px; }
+.elev-error { color: #f44336; }
+.elev-card.error { border-color: #f44336; }
 
 input[type=range] { width: 100%; accent-color: var(--accent); }
 .slider-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }

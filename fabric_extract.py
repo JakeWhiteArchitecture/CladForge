@@ -204,7 +204,16 @@ def _top_line(poly, u0, u1):
 
 
 def extract_elevation(payload):
-    """Main entry point. See module docstring for the payload format."""
+    """Main entry point. See module docstring for the payload format.
+    Never raises: a failure comes back as ok=False with the reason in warnings."""
+    try:
+        return _extract(payload)
+    except Exception as exc:   # noqa: BLE001 — surfaced to the UI, never silent
+        return {"ok": False, "name": payload.get("name") or "Elevation", "n_faces": 0,
+                "warnings": ["Extraction failed: %s: %s" % (type(exc).__name__, exc)]}
+
+
+def _extract(payload):
     name = payload.get("name") or "Elevation"
     faces = _dedupe([[tuple(float(c) for c in v) for v in tri] for tri in payload.get("faces", [])])
     result = {"ok": False, "name": name, "warnings": [], "n_faces": len(faces)}
@@ -225,25 +234,31 @@ def extract_elevation(payload):
     options = payload.get("options") or {}
     abutments, cuts = [], []
     umin0, vmin0, umax0, vmax0 = region.bounds
+    skipped = 0
     for elem in payload.get("context", []):
         etype = (elem.get("type") or "").upper()
-        tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem.get("tris", [])]
-        if not tris or etype in IGNORE_TYPES:
+        if etype in IGNORE_TYPES or not elem.get("tris"):
             continue
-        straddles, touches, poly, pts = _section(tris, n, d, u)
-        if not touches or poly is None:
-            continue
-        if etype in ABUTMENT_TYPES:
-            line = _top_line(poly, umin0, umax0)
-            if line:
-                top = max(v for _u, v in line)
-                if vmin0 + EDGE_MARGIN < top < vmax0 - EDGE_MARGIN:
-                    abutments.append({"line": line, "source": elem.get("type") or etype,
-                                      "name": elem.get("name", "")})
-            if straddles:
+        try:   # one awkward element must not sink the whole extraction
+            tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
+            straddles, touches, poly, pts = _section(tris, n, d, u)
+            if not touches or poly is None:
+                continue
+            if etype in ABUTMENT_TYPES:
+                line = _top_line(poly, umin0, umax0)
+                if line:
+                    top = max(v for _u, v in line)
+                    if vmin0 + EDGE_MARGIN < top < vmax0 - EDGE_MARGIN:
+                        abutments.append({"line": line, "source": elem.get("type") or etype,
+                                          "name": elem.get("name", "")})
+                if straddles:
+                    cuts.append(poly)
+            elif straddles and options.get("penetrations", True):
                 cuts.append(poly)
-        elif straddles and options.get("penetrations", True):
-            cuts.append(poly)
+        except Exception:   # noqa: BLE001
+            skipped += 1
+    if skipped:
+        result["warnings"].append("%d context element(s) could not be sectioned and were ignored" % skipped)
     for cut_poly in cuts:
         try:
             if cut_poly.intersection(region).area > MIN_HOLE_AREA:
