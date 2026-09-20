@@ -1,0 +1,417 @@
+/* CladForge viewer — Three.js scene, web-ifc import, face picking, prism rendering.
+ *
+ * Scene units are millimetres, Y-up (Three.js). IFC coordinates are Z-up, so
+ * Three (x, y, z) <-> IFC (x, -z, y). web-ifc returns metres, scaled here.
+ */
+
+let scene, camera, renderer, controls, ifcApi = null;
+let modelGroup = null, cladGroup = null, outlineGroup = null, dimGroup = null, highlightGroup = null;
+let allMeshes = [], meshMeta = [], modelContext = {};
+const layerVisible = { model: true, sheathing: true, insulation: true, counter_batten: true,
+                       batten: true, cladding: true, dims: true };
+const ELEV_COLORS = [0x2a9d8f, 0xe9c46a, 0xf4a261, 0xe76f51, 0x8ab17d, 0x9b5de5, 0x00b4d8];
+const VERT_TOL = Math.sin(Math.PI / 180);   // 1 degree: what counts as a vertical face
+
+// ─── SCENE ───
+function initThree() {
+    const container = document.getElementById('viewport');
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a1a);
+    camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 10, 2000000);
+    camera.position.set(15000, 12000, 15000);
+    renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(renderer.domElement);
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.target.set(0, 1500, 0);
+    scene.add(new THREE.AmbientLight(0x404040, 0.9));
+    const dir1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir1.position.set(20000, 30000, 10000);
+    scene.add(dir1);
+    const dir2 = new THREE.DirectionalLight(0x8888ff, 0.3);
+    dir2.position.set(-10000, 10000, -20000);
+    scene.add(dir2);
+    scene.add(new THREE.GridHelper(40000, 40, 0x222244, 0x111133));
+    modelGroup = new THREE.Group(); cladGroup = new THREE.Group(); outlineGroup = new THREE.Group();
+    dimGroup = new THREE.Group(); highlightGroup = new THREE.Group();
+    scene.add(modelGroup, cladGroup, outlineGroup, dimGroup, highlightGroup);
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+    (function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); })();
+}
+
+function clearGroup(group) {
+    while (group.children.length) {
+        const c = group.children.pop();
+        c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); });
+    }
+}
+
+// ─── WEB-IFC IMPORT ───
+async function initWebIfc() {
+    try { ifcApi = new WebIFC.IfcAPI(); await ifcApi.Init(); }
+    catch (err) { console.error('web-ifc init failed', err); ifcApi = null; }
+}
+
+let _typeNames = null;
+function ifcTypeName(code) {
+    if (!_typeNames) {
+        _typeNames = {};
+        for (const k of Object.keys(WebIFC)) if (typeof WebIFC[k] === 'number' && k.startsWith('IFC')) _typeNames[WebIFC[k]] = k;
+    }
+    return _typeNames[code] || '';
+}
+
+function attr(line, name) {
+    const v = line && line[name];
+    return (v && typeof v === 'object' && 'value' in v) ? v.value : (v === undefined ? null : v);
+}
+
+function readSpatial(modelID, unitScale) {
+    const elemStorey = {}, storeys = {}, ctx = {};
+    try {
+        const names = { IFCPROJECT: 'project', IFCSITE: 'site', IFCBUILDING: 'building' };
+        for (const key of Object.keys(names)) {
+            const ids = ifcApi.GetLineIDsWithType(modelID, WebIFC[key]);
+            if (ids.size() > 0) ctx[names[key]] = attr(ifcApi.GetLine(modelID, ids.get(0)), 'Name') || '';
+        }
+        const rels = ifcApi.GetLineIDsWithType(modelID, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE);
+        for (let i = 0; i < rels.size(); i++) {
+            const rel = ifcApi.GetLine(modelID, rels.get(i));
+            const sid = attr(rel, 'RelatingStructure');
+            if (!storeys[sid]) {
+                const st = ifcApi.GetLine(modelID, sid);
+                storeys[sid] = { name: attr(st, 'Name') || ('Storey ' + sid), elevation: (parseFloat(attr(st, 'Elevation')) || 0) * unitScale };
+            }
+            for (const r of (rel.RelatedElements || [])) elemStorey[r.value] = storeys[sid];
+        }
+    } catch (e) { console.warn('spatial read failed', e); }
+    return { elemStorey, ctx };
+}
+
+function readLengthUnitScale(modelID) {
+    // mm per model length unit, from IfcSIUnit (default: metres).
+    try {
+        const ids = ifcApi.GetLineIDsWithType(modelID, WebIFC.IFCSIUNIT);
+        for (let i = 0; i < ids.size(); i++) {
+            const u = ifcApi.GetLine(modelID, ids.get(i));
+            if (attr(u, 'UnitType') === 'LENGTHUNIT') {
+                const prefix = attr(u, 'Prefix');
+                return prefix === 'MILLI' ? 1 : (prefix === 'CENTI' ? 10 : (prefix === 'DECI' ? 100 : 1000));
+            }
+        }
+    } catch (e) { /* fall through */ }
+    return 1000;
+}
+
+async function loadIFC(file, onStatus) {
+    if (!ifcApi) throw new Error('web-ifc is still loading — try again in a moment');
+    onStatus('Parsing IFC…');
+    const data = new Uint8Array(await file.arrayBuffer());
+    const modelID = ifcApi.OpenModel(data);
+    clearGroup(modelGroup); clearGroup(highlightGroup);
+    allMeshes = []; meshMeta = [];
+    const unitScale = readLengthUnitScale(modelID);
+    const spatial = readSpatial(modelID, unitScale);
+    modelContext = spatial.ctx;
+    const raw = [];
+    ifcApi.StreamAllMeshes(modelID, (mesh) => {
+        const verts = [], idx = []; let off = 0;
+        for (let i = 0; i < mesh.geometries.size(); i++) {
+            const pg = mesh.geometries.get(i);
+            const g = ifcApi.GetGeometry(modelID, pg.geometryExpressID);
+            const v = ifcApi.GetVertexArray(g.GetVertexData(), g.GetVertexDataSize());
+            const ix = ifcApi.GetIndexArray(g.GetIndexData(), g.GetIndexDataSize());
+            g.delete();
+            if (!v.length || !ix.length) continue;
+            const m = new THREE.Matrix4().fromArray(pg.flatTransformation);
+            const n = v.length / 6;
+            const p = new THREE.Vector3();
+            for (let k = 0; k < n; k++) { p.set(v[k * 6], v[k * 6 + 1], v[k * 6 + 2]).applyMatrix4(m); verts.push(p.x, p.y, p.z); }
+            for (let k = 0; k < ix.length; k++) idx.push(ix[k] + off);
+            off += n;
+        }
+        if (!verts.length) return;
+        let type = '';
+        try { type = ifcTypeName(ifcApi.GetLineType(modelID, mesh.expressID)); } catch (e) { /* unknown */ }
+        let name = '';
+        try { name = attr(ifcApi.GetLine(modelID, mesh.expressID), 'Name') || ''; } catch (e) { /* unnamed */ }
+        raw.push({ verts, idx, expressID: mesh.expressID, type, name, storey: spatial.elemStorey[mesh.expressID] || null });
+    });
+    ifcApi.CloseModel(modelID);
+    if (!raw.length) throw new Error('No geometry found in this IFC');
+    // web-ifc normalises to metres; guard against files it left in millimetres.
+    let extent = 0;
+    for (const r of raw) for (let k = 0; k < r.verts.length; k++) extent = Math.max(extent, Math.abs(r.verts[k]));
+    const scale = extent > 2000 ? 1 : 1000;
+    for (const r of raw) {
+        const pos = new Float32Array(r.verts.length);
+        for (let k = 0; k < r.verts.length; k++) pos[k] = r.verts[k] * scale;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setIndex(new THREE.BufferAttribute(new Uint32Array(r.idx), 1));
+        geo.computeVertexNormals();
+        geo.computeBoundingBox();
+        const isWall = /WALL/.test(r.type);
+        const mat = new THREE.MeshPhongMaterial({ color: isWall ? 0xd8d8d8 : 0xa8a8b8, flatShading: true, side: THREE.DoubleSide,
+                                                  transparent: true, opacity: 0.95 });
+        const th = new THREE.Mesh(geo, mat);
+        th.userData.index = allMeshes.length;
+        modelGroup.add(th);
+        allMeshes.push(th);
+        meshMeta.push({ mesh: th, expressID: r.expressID, type: r.type, name: r.name, storey: r.storey });
+    }
+    fitCameraTo(modelGroup);
+    const storeyNames = new Set(meshMeta.filter(m => m.storey).map(m => m.storey.name));
+    return { meshes: allMeshes.length, storeys: storeyNames.size, context: modelContext, unitScale };
+}
+
+function fitCameraTo(obj) {
+    const bb = new THREE.Box3().setFromObject(obj);
+    if (bb.isEmpty()) return;
+    const c = bb.getCenter(new THREE.Vector3());
+    const size = bb.getSize(new THREE.Vector3()).length();
+    camera.position.set(c.x + size * 0.7, c.y + size * 0.5, c.z + size * 0.7);
+    controls.target.copy(c);
+    controls.update();
+}
+
+function setModelVisible(on) { layerVisible.model = on; modelGroup.visible = on; }
+
+// ─── PICKING ───
+function pickAt(event) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const mouse = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1,
+                                    -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(mouse, camera);
+    const hits = rc.intersectObjects(allMeshes, false);
+    if (!hits.length) return null;
+    const hit = hits[0];
+    const normal = hit.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize();
+    if (normal.dot(camera.position.clone().sub(hit.point)) < 0) normal.negate();   // face the viewer
+    return { mesh: hit.object, faceIndex: hit.faceIndex, point: hit.point, normal };
+}
+
+function faceNormals(geo) {
+    const pos = geo.attributes.position.array, idx = geo.index ? geo.index.array : null;
+    const count = idx ? idx.length / 3 : pos.length / 9, out = new Array(count);
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    for (let f = 0; f < count; f++) {
+        const i0 = (idx ? idx[f * 3] : f * 3) * 3, i1 = (idx ? idx[f * 3 + 1] : f * 3 + 1) * 3, i2 = (idx ? idx[f * 3 + 2] : f * 3 + 2) * 3;
+        a.set(pos[i0], pos[i0 + 1], pos[i0 + 2]); b.set(pos[i1], pos[i1 + 1], pos[i1 + 2]); c.set(pos[i2], pos[i2 + 1], pos[i2 + 2]);
+        out[f] = b.sub(a).cross(c.sub(a)).normalize().clone();
+    }
+    return out;
+}
+
+function coplanarFaces(mesh, hitFaceIndex) {
+    // Flood fill from the hit face over faces that share a vertex *position* (web-ifc
+    // duplicates vertices per triangle, so index adjacency would stop at every fan),
+    // within 1 degree of the hit normal and on the same plane. Vertical faces only.
+    const geo = mesh.geometry, pos = geo.attributes.position.array, idx = geo.index ? geo.index.array : null;
+    const normals = faceNormals(geo), hitN = normals[hitFaceIndex];
+    if (Math.abs(hitN.y) >= VERT_TOL) return null;
+    const count = normals.length, vertToFaces = new Map();
+    const keyOf = vi => { const p = vi * 3; return Math.round(pos[p] * 10) + ',' + Math.round(pos[p + 1] * 10) + ',' + Math.round(pos[p + 2] * 10); };
+    for (let f = 0; f < count; f++) for (let v = 0; v < 3; v++) {
+        const k = keyOf(idx ? idx[f * 3 + v] : f * 3 + v);
+        if (!vertToFaces.has(k)) vertToFaces.set(k, []);
+        vertToFaces.get(k).push(f);
+    }
+    const vi0 = (idx ? idx[hitFaceIndex * 3] : hitFaceIndex * 3) * 3;
+    const d0 = hitN.x * pos[vi0] + hitN.y * pos[vi0 + 1] + hitN.z * pos[vi0 + 2];
+    const collected = new Set([hitFaceIndex]), queue = [hitFaceIndex];
+    while (queue.length) {
+        const f = queue.shift();
+        for (let v = 0; v < 3; v++) {
+            const k = keyOf(idx ? idx[f * 3 + v] : f * 3 + v);
+            for (const nb of vertToFaces.get(k) || []) {
+                if (collected.has(nb)) continue;
+                const n = normals[nb];
+                const p = (idx ? idx[nb * 3] : nb * 3) * 3;
+                const d = hitN.x * pos[p] + hitN.y * pos[p + 1] + hitN.z * pos[p + 2];
+                if (Math.abs(n.dot(hitN)) >= 1 - VERT_TOL && Math.abs(n.y) < VERT_TOL && Math.abs(d - d0) < 5) {
+                    collected.add(nb); queue.push(nb);
+                }
+            }
+        }
+    }
+    return Array.from(collected);
+}
+
+function toIfc(v) { return [v.x, -v.z, v.y]; }
+
+function faceTriangles(mesh, faceIndices) {
+    mesh.updateWorldMatrix(true, false);
+    const geo = mesh.geometry, pos = geo.attributes.position.array, idx = geo.index ? geo.index.array : null;
+    const wm = mesh.matrixWorld, out = [], p = new THREE.Vector3();
+    for (const f of faceIndices) {
+        const tri = [];
+        for (let v = 0; v < 3; v++) {
+            const vi = (idx ? idx[f * 3 + v] : f * 3 + v) * 3;
+            p.set(pos[vi], pos[vi + 1], pos[vi + 2]).applyMatrix4(wm);
+            tri.push(toIfc(p));
+        }
+        out.push(tri);
+    }
+    return out;
+}
+
+function meshTriangles(mesh) {
+    const geo = mesh.geometry, idx = geo.index ? geo.index.array : null;
+    const count = idx ? idx.length / 3 : geo.attributes.position.count / 3;
+    return faceTriangles(mesh, Array.from({ length: count }, (_, i) => i));
+}
+
+function contextFor(pickedMeshes, tris, margin) {
+    // Every other element whose bounding box comes within *margin* of the picked faces.
+    const bb = new THREE.Box3();
+    for (const t of tris) for (const q of t) bb.expandByPoint(new THREE.Vector3(q[0], q[2], -q[1]));
+    bb.expandByScalar(margin);
+    const out = [];
+    for (const meta of meshMeta) {
+        if (pickedMeshes.has(meta.mesh)) continue;
+        const mb = meta.mesh.geometry.boundingBox.clone().applyMatrix4(meta.mesh.matrixWorld);
+        if (!mb.intersectsBox(bb)) continue;
+        out.push({ type: meta.type, name: meta.name, tris: meshTriangles(meta.mesh) });
+    }
+    return out;
+}
+
+function highlightFaces(mesh, faceIndices, color) {
+    const tris = faceTriangles(mesh, faceIndices), positions = [];
+    for (const t of tris) for (const q of t) positions.push(q[0], q[2], -q[1]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const hl = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthTest: false }));
+    highlightGroup.add(hl);
+    return hl;
+}
+
+// ─── PRISM RENDERING ───
+function frameMatrix(frame, depth) {
+    const u = new THREE.Vector3(frame.u[0], 0, -frame.u[1]);
+    const n = new THREE.Vector3(frame.n[0], 0, -frame.n[1]);
+    const o = new THREE.Vector3(frame.origin[0], frame.origin[2], -frame.origin[1]).addScaledVector(n, depth || 0);
+    return new THREE.Matrix4().makeBasis(u, new THREE.Vector3(0, 1, 0), n).setPosition(o);
+}
+
+function shapeFromRings(profile, holes) {
+    const shape = new THREE.Shape(profile.map(p => new THREE.Vector2(p[0], p[1])));
+    for (const h of holes || []) shape.holes.push(new THREE.Path(h.map(p => new THREE.Vector2(p[0], p[1]))));
+    return shape;
+}
+
+const _layerOf = { sheathing: 'sheathing', insulation: 'insulation', counter_batten: 'counter_batten',
+                   batten: 'batten', cross_batten: 'batten', panel: 'cladding', plank: 'cladding' };
+
+function renderGeometry(meshes) {
+    clearGroup(cladGroup);
+    const byLayer = {};
+    for (const m of meshes) {
+        const layer = _layerOf[m.ifc_type] || 'cladding';
+        if (!byLayer[layer]) { byLayer[layer] = new THREE.Group(); byLayer[layer].name = layer; cladGroup.add(byLayer[layer]); }
+        let geo;
+        try { geo = new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false }); }
+        catch (e) { continue; }
+        const mat = new THREE.MeshPhongMaterial({ color: new THREE.Color(m.color), flatShading: true, transparent: m.opacity < 1,
+                                                  opacity: m.opacity, side: THREE.DoubleSide, depthWrite: m.opacity >= 1 });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.matrixAutoUpdate = false;
+        mesh.matrix.copy(frameMatrix(m.frame, m.depth));
+        mesh.userData.name = m.name;
+        byLayer[layer].add(mesh);
+        if (m.opacity >= 1 || m.ifc_type === 'panel' || m.ifc_type === 'plank') {
+            const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), new THREE.LineBasicMaterial({ color: 0x1b2a3a, transparent: true, opacity: 0.6 }));
+            edges.matrixAutoUpdate = false; edges.matrix.copy(mesh.matrix);
+            byLayer[layer].add(edges);
+        }
+    }
+    for (const key of Object.keys(byLayer)) byLayer[key].visible = layerVisible[key] !== false;
+}
+
+function ringLine(ring, frame, depth, color, dashed) {
+    const pts = ring.map(p => new THREE.Vector3(p[0], p[1], 0));
+    pts.push(pts[0].clone());
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = dashed ? new THREE.LineDashedMaterial({ color, dashSize: 60, gapSize: 40 }) : new THREE.LineBasicMaterial({ color });
+    const line = new THREE.Line(geo, mat);
+    if (dashed) line.computeLineDistances();
+    line.matrixAutoUpdate = false; line.matrix.copy(frameMatrix(frame, depth));
+    return line;
+}
+
+function renderOutlines(elevations, splash) {
+    clearGroup(outlineGroup);
+    elevations.forEach((e, i) => {
+        const color = ELEV_COLORS[i % ELEV_COLORS.length];
+        for (const poly of e.polygons) {
+            outlineGroup.add(ringLine(poly.exterior, e.frame, 2, color, false));
+            for (const h of poly.holes) outlineGroup.add(ringLine(h, e.frame, 2, 0xff5c5c, false));
+        }
+        for (const ab of e.abutments) {
+            if (!ab.enabled || splash <= 0) continue;
+            const ring = [[ab.u0, ab.v], [ab.u1, ab.v], [ab.u1, ab.v + splash], [ab.u0, ab.v + splash]];
+            outlineGroup.add(ringLine(ring, e.frame, 3, 0xe94560, true));
+        }
+    });
+}
+
+function makeLabel(text) {
+    const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d');
+    ctx.font = 'bold 40px sans-serif';
+    canvas.width = Math.ceil(ctx.measureText(text).width) + 24; canvas.height = 56;
+    ctx.font = 'bold 40px sans-serif'; ctx.fillStyle = 'rgba(10,10,26,0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00ccff'; ctx.textBaseline = 'middle'; ctx.fillText(text, 12, 28);
+    const tex = new THREE.CanvasTexture(canvas);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+    sprite.scale.set(canvas.width * 4, canvas.height * 4, 1);
+    return sprite;
+}
+
+function renderDimensions(dims, elevByName) {
+    clearGroup(dimGroup);
+    for (const d of dims) {
+        const e = elevByName[d.elevation];
+        if (!e) continue;
+        const M = frameMatrix(e.frame, 60);
+        const [nx, ny] = d.norm, off = d.offset;
+        const p1 = new THREE.Vector3(d.p1[0], d.p1[1], 0), p2 = new THREE.Vector3(d.p2[0], d.p2[1], 0);
+        const q1 = new THREE.Vector3(d.p1[0] + nx * off, d.p1[1] + ny * off, 0), q2 = new THREE.Vector3(d.p2[0] + nx * off, d.p2[1] + ny * off, 0);
+        // extension lines p→q at each end, then the dimension line q1→q2
+        const pts = [p1, q1, p2, q2, q1, q2].map(v => v.clone().applyMatrix4(M));
+        const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),
+                                            new THREE.LineBasicMaterial({ color: 0x00ccff, depthTest: false }));
+        dimGroup.add(line);
+        const label = makeLabel(d.label);
+        label.position.copy(new THREE.Vector3((d.p1[0] + d.p2[0]) / 2 + nx * (off + 120), (d.p1[1] + d.p2[1]) / 2 + ny * (off + 120), 0).applyMatrix4(M));
+        dimGroup.add(label);
+    }
+    dimGroup.visible = layerVisible.dims;
+}
+
+function setLayerVisible(key, on) {
+    layerVisible[key] = on;
+    if (key === 'model') { modelGroup.visible = on; return; }
+    if (key === 'dims') { dimGroup.visible = on; return; }
+    for (const g of cladGroup.children) if (g.name === key) g.visible = on;
+}
+
+function frameElevation(e) {
+    // Three-quarter view of one elevation, looking at the face from outside.
+    const M = frameMatrix(e.frame, 0);
+    const c = new THREE.Vector3(e.width / 2, e.height / 2, 0).applyMatrix4(M);
+    const dist = Math.max(e.width, e.height) * 1.2;
+    const eye = new THREE.Vector3(e.width / 2 + dist * 0.55, e.height / 2 + dist * 0.35, dist * 0.8).applyMatrix4(M);
+    camera.position.copy(eye);
+    controls.target.copy(c);
+    controls.update();
+}
