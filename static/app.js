@@ -335,7 +335,8 @@ _json.dumps(_ex(_json.loads(_payload_json)))`);
 }
 
 // ─── PARAMETERS ───
-const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d', 'splash',
+const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
+             'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
              'plank_len', 'closer_w'];
 function val(id) { return document.getElementById(id).value; }

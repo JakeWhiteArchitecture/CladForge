@@ -72,9 +72,13 @@ async function main() {
     }
     // Picking generates nothing: the chain has to be built through the wizard first.
     async function buildChain(type, orient, useButton) {
-        await page.waitForSelector('#make-chain', { state: 'visible', timeout: 60000 });
-        console.log('make chain button:', await page.evaluate(() => document.getElementById('make-chain').textContent.trim()));
-        if (useButton) await page.click('#make-chain');
+        // The button only shows while a chain is unbuilt; Enter reopens the wizard either way.
+        const pending = await page.evaluate(() => pendingChains().length > 0);
+        if (pending) {
+            await page.waitForSelector('#make-chain', { state: 'visible', timeout: 60000 });
+            console.log('make chain button:', await page.evaluate(() => document.getElementById('make-chain').textContent.trim()));
+        }
+        if (useButton && pending) await page.click('#make-chain');
         else { await page.evaluate(() => document.activeElement && document.activeElement.blur()); await page.keyboard.press('Enter'); }
         await page.waitForSelector('#chain-wizard.open', { timeout: 10000 });
         console.log('wizard:', await page.evaluate(() => [document.getElementById('wiz-title').textContent,
@@ -82,9 +86,17 @@ async function main() {
                                                           document.getElementById('wiz-chain').textContent].join(' | ')));
         await page.click(`#wiz-body .wiz-option >> nth=${type === 'panel' ? 1 : 0}`);
         if (type !== 'panel') await page.click(`#wiz-body .wiz-option >> nth=${orient === 'vertical' ? 1 : 0}`);
-        console.log('wizard dims step:', await page.evaluate(() => [document.getElementById('wiz-step').textContent,
-            Array.from(document.querySelectorAll('#wiz-body input')).map(i => i.id.replace('wiz-', '') + '=' + i.value).join(' ')].join(' | ')));
-        await page.click('#wiz-next');
+        // The remaining steps are all number fields; walk them to Build.
+        for (let i = 0; i < 6; i++) {
+            const step = await page.evaluate(() => [document.getElementById('wiz-title').textContent,
+                document.getElementById('wiz-step').textContent,
+                Array.from(document.querySelectorAll('#wiz-body input')).map(n => n.id.replace('wiz-', '') + '=' + n.value + (n.disabled ? '(derived)' : '')).join(' '),
+                document.getElementById('wiz-next').textContent]);
+            console.log('  wizard step:', step.slice(0, 3).join(' | '));
+            await page.click('#wiz-next');
+            if (step[3] === 'Build') break;
+            await page.waitForTimeout(150);
+        }
         await page.waitForFunction(() => !document.getElementById('chain-wizard').classList.contains('open'), null, { timeout: 10000 });
         await page.waitForTimeout(1200);
     }
@@ -99,6 +111,12 @@ async function main() {
     await page.waitForFunction(() => cladGroup.children.length > 0, null, { timeout: 60000 });
     const counts = await page.evaluate(() => { const c = {}; cladGroup.children.forEach(g => c[g.name] = g.children.length); return c; });
     console.log('preview groups:', JSON.stringify(counts));
+    // The south wall has a window (an interior hole) and a door (a notch in the outline):
+    // both are openings, so both get a closer at each jamb.
+    console.log('openings and closers:', await page.evaluate(() =>
+        window._lastPreview.info.map(i => `${i.elevation}: ${i.openings} opening(s), `
+            + window._lastPreview.geometry.filter(m => m.ifc_type === 'closer' && m.elevation === i.elevation).length + ' closers').join(' | ')));
+    console.log('notches:', await page.evaluate(() => JSON.stringify(state.elevations[0].result.notches)));
     console.log('checks:', await page.evaluate(() => Array.from(document.querySelectorAll('.check-item span')).map(s => s.textContent)));
     console.log('overlay:', await page.evaluate(() => document.getElementById('dim-overlay').innerText.replace(/\n/g, ' | ')));
     await page.evaluate(() => frameElevation(state.elevations[0].result));
@@ -207,6 +225,12 @@ async function main() {
     console.log('after swap:', await page.evaluate(() => (document.querySelector('.corner-row') || {}).textContent));
     console.log('lap check:', await page.evaluate(() => (Array.from(document.querySelectorAll('.check-item span'))
         .map(s => s.textContent).find(t => t.indexOf('corner end') >= 0) || 'none')));
+    // Vertical planks need counter-battens, so the wizard grows a step for them.
+    await buildChain('plank', 'vertical');
+    console.log('counter-battens built:', await page.evaluate(() =>
+        window._lastPreview.geometry.filter(m => m.ifc_type === 'counter_batten').length + ' at '
+        + document.getElementById('cb_centres').value + ' c/c'));
+
     // Planks cannot lap, so the option disables itself and falls back to a mitre.
     await page.click('#cladding-type .turn-btn[data-value="plank"]');
     await page.waitForTimeout(1200);

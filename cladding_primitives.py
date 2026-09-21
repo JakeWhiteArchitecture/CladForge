@@ -84,7 +84,9 @@ MIN_OPENING = 300.0   # mm – smaller holes are penetrations, not windows
 
 def openings(elev, limit=MIN_OPENING):
     """Structural openings as (u0, u1, v0, v1), from the interior holes big enough to
-    be a window or door rather than a pipe penetration."""
+    be a window or door rather than a pipe penetration, plus the notches the extractor
+    found: a door reaching the foot of the wall breaks the outline instead of leaving
+    a hole, and it still needs closing and lining."""
     out = []
     for poly in elev.get("polygons", []):
         for hole in poly.get("holes", []):
@@ -92,6 +94,10 @@ def openings(elev, limit=MIN_OPENING):
             vs = [q[1] for q in hole]
             if max(us) - min(us) >= limit and max(vs) - min(vs) >= limit:
                 out.append((min(us), max(us), min(vs), max(vs)))
+    lo, hi = clip_bounds(elev)
+    for u0, u1, v0, v1 in elev.get("notches") or []:
+        if min(u1, hi) - max(u0, lo) >= limit and v1 - v0 >= limit:
+            out.append((max(u0, lo), min(u1, hi), v0, v1))
     return sorted(out)
 
 

@@ -138,6 +138,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .wiz-option b { font-size: 14px; color: var(--text); }
 .wiz-option span { font-size: 11px; color: var(--muted); line-height: 1.5; }
 .wiz-dims { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.wiz-off { opacity: 0.5; }
+.wiz-off input { cursor: not-allowed; }
 
 @media (max-width: 900px) {
     body { flex-direction: column; }

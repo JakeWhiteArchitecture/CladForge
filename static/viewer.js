@@ -10,7 +10,8 @@ let allMeshes = [], meshMeta = [], modelContext = {};
 // The scene works near the origin; modelOffset (IFC mm) puts exports back on the host model.
 let modelOffset = [0, 0, 0];
 const layerVisible = { model: true, sheathing: true, insulation: true, counter_batten: true,
-                       batten: true, cladding: true, closer: true, dims: true };
+                       batten: true, cladding: true, closer: true, dims: true,
+                       faces: true, outline: true };
 // One colour for every picked face and one for every wall outline: which elevation a
 // face belongs to is the list's job, not the viewport's.
 const PICK_COLOR = 0x2a9d8f, OUTLINE_COLOR = 0x8ea3b8;
@@ -537,6 +538,8 @@ function setLayerVisible(key, on) {
     layerVisible[key] = on;
     if (key === 'model') { modelGroup.visible = on; return; }
     if (key === 'dims') { dimGroup.visible = on; return; }
+    if (key === 'faces') { highlightGroup.visible = on; return; }     // the picked wall surface
+    if (key === 'outline') { outlineGroup.visible = on; return; }     // outline, openings, splash
     for (const g of cladGroup.children) if (g.name === key) g.visible = on;
 }
 

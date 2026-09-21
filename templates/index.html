@@ -75,6 +75,7 @@
                     </div>
                     <div class="field"><label>C/B width</label><input type="number" id="cb_w" value="50" min="25" max="100" oninput="onNumeric()"></div>
                     <div class="field"><label>C/B depth</label><input type="number" id="cb_d" value="38" min="19" max="100" oninput="onNumeric()"></div>
+                    <div class="field"><label>C/B centres</label><input type="number" id="cb_centres" value="600" min="300" max="900" step="10" oninput="onNumeric()"></div>
                 </div>
                 <div class="field"><label>Splash zone above abutments <span class="unit">0–300 mm, 150 recommended</span></label>
                     <input type="number" id="splash" value="150" min="0" max="300" step="10" oninput="onNumeric()"></div>
@@ -164,6 +165,8 @@
             <label><input type="checkbox" checked onchange="setLayerVisible('cladding', this.checked)"><i style="background:#6b8fa3"></i> Cladding &amp; reveals</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('closer', this.checked)"><i style="background:#a0522d"></i> Cavity closers</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('dims', this.checked)"><i style="background:#00ccff"></i> Dimensions</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('faces', this.checked)"><i style="background:#2a9d8f"></i> Picked wall faces</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('outline', this.checked)"><i style="background:#8ea3b8"></i> Outline &amp; splash</label>
         </div>
         <div class="dim-overlay" id="dim-overlay">
             <div><span class="dim-label">Elevation:</span> <span class="dim-value" id="dim-size">--</span></div>

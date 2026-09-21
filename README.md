@@ -25,9 +25,9 @@ genuinely new code in the stack.
 | 1 | Import IFC, render in viewer | browser (web-ifc + Three.js, from SunForm) |
 | 2 | Click wall faces | browser (`static/viewer.js`) |
 | 3 | Grow picks into coplanar regions, name Elevation A, B, C | Pyodide (`fabric_extract.py`) |
-| 4 | Subtract openings and penetrations as interior holes | Pyodide (`fabric_extract.py`) |
+| 4 | Subtract openings and penetrations: interior holes, plus the notches openings cut in the outline | Pyodide (`fabric_extract.py`) |
 | 5 | Detect slab and roof abutments, set out the splash zone | Pyodide (`fabric_extract.py`) |
-| 6 | Build the chain: plank or panel, orientation, dimensions | UI wizard (`static/wizard.js`) |
+| 6 | Build the chain: plank or panel, orientation, board, batten and counter-batten sizes | UI wizard (`static/wizard.js`) |
 | 7 | Refine buildup, corners, openings, setting-out | UI |
 | 8 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
 | 9 | Export IFC4X3 and DXF | Flask or Pyodide (IFC), Pyodide (DXF) |
@@ -40,8 +40,12 @@ coursing path touches the server.
 Picking and generating are separate. Clicking faces grows elevations and chains
 and nothing else: no cladding exists until the chain is built. Once a face is
 extracted, **Make chain** appears at the top right of the view and **Enter**
-opens the wizard — plank or panel, horizontal or vertical (planks only), then
-the board dimensions — and **Build** generates that chain. Every pending chain
+opens the wizard — plank or panel, horizontal or vertical (planks only), the
+board dimensions, the battens, and the counter-battens where the buildup has
+them — and **Build** generates that chain. A step that does not apply is not
+asked: panels never course, so they skip the orientation, and a buildup with
+no counter-battens skips their step. In panel mode the batten centres are
+shown but not editable, because the panel bay sets them. Every pending chain
 is built together. After a chain is built the whole panel edits it live, and a
 face picked round a corner joins the built chain and is clad straight away.
 
@@ -71,10 +75,15 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
 3. Check the detected abutments on the elevation card. Pitched ones say so and
    the splash band follows the roof line. Untick a false one, or type a level and
    **Add level** where detection fails.
-4. Set the buildup: sheathing, insulation, plank or panel, batten section and
-   centres, counter-battens, splash zone.
-5. Drag the **horizontal offset** slider to control where the closing cuts land.
-6. Read the checks, then download IFC4X3 or DXF.
+4. Press **Enter** (or **Make chain**, top right) to build the chain: the wizard
+   asks for plank or panel, the orientation, the board sizes, the battens, and
+   the counter-battens if the buildup has them. Nothing is generated before this.
+5. Refine anything in the panel — sheathing, insulation, splash zone, corners,
+   openings, batten section and centres. It all previews live from here on.
+6. Drag the **horizontal offset** slider to control where the closing cuts land.
+7. Read the checks, then download IFC4X3 or DXF. The legend toggles every layer,
+   including the picked wall faces and the outline, so the buildup can be read on
+   its own.
 
 ## Decisions on open items
 
@@ -174,16 +183,16 @@ the title area.
 
 | File | Lines | Budget |
 |---|---|---|
-| fabric_extract.py | 335 | 400 |
-| cladding_constants.py | 79 | 80 |
-| cladding_geometry.py | 175 | 400 |
-| cladding_primitives.py | 150 | 300 |
-| cladding_booleans.py | 150 | 200 |
-| cladding_preview.py | 100 | 100 |
-| ifc_generator.py | 317 | 400 |
-| dxf_generator.py | 229 | 500 |
-| app.py | 115 | 150 |
-| templates/index.html | 210 | 500 |
+| fabric_extract.py | 397 | 400 |
+| cladding_constants.py | 82 | 80 |
+| cladding_geometry.py | 289 | 400 |
+| cladding_primitives.py | 297 | 300 |
+| cladding_booleans.py | 206 | 200 |
+| cladding_preview.py | 45 | 100 |
+| ifc_generator.py | 384 | 400 |
+| dxf_generator.py | 256 | 500 |
+| app.py | 133 | 150 |
+| templates/index.html | 213 | 500 |
 
 The frontend logic lives beside the template in `static/viewer.js` (Three.js,
 web-ifc, picking, rendering), `static/app.js` (state, Pyodide, downloads) and
@@ -216,6 +225,11 @@ unreachable; it serves Pyodide, Three.js and web-ifc from local copies.
   that overhang a corner: a corner batten or angle is the designer's to add.
 - Opening heads and sills get a cavity closer only at the jambs; head and sill
   linings, cills and flashings are not modelled.
+- An opening that breaks the face outline rather than leaving a hole — a door to
+  the ground, a window at a wall end — is recovered as a notch: a rectangular
+  bite out of the patch's bounding box, open on exactly one side. A gable is
+  triangular and a stepped wall is open on two sides, so neither is mistaken for
+  one, but a genuine rectangular step in the top of a wall would be.
 - Opening-driven setting-out is a panel rule. Plank coursing still runs
   straight through an opening and is cut.
 - Mitred elements are written to IFC as an explicit brep rather than a swept

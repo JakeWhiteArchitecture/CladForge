@@ -282,14 +282,50 @@ def _extract(payload):
     if len(polygons) > 1:
         result["warnings"].append("%d separate patches merged into one elevation" % len(polygons))
 
+    notches = _notches(polygons)
     result.update({"ok": True, "frame": make_frame(n, d, umin, vmin), "polygons": polygons,
                    "width": round(width, 2), "height": round(height, 2),
-                   "area": round(region.area, 1),
+                   "area": round(region.area, 1), "notches": notches,
                    "abutments": _merge_abutments(abutments, umin, vmin, width),
-                   "n_holes": sum(len(pg["holes"]) for pg in polygons)})
+                   "n_holes": sum(len(pg["holes"]) for pg in polygons) + len(notches)})
     if any(a.get("pitched") for a in result["abutments"]):
         result["warnings"].append("Pitched abutment detected — the splash zone follows the roof line; check it")
     return result
+
+
+def _notches(polygons, limit=300.0):
+    """Openings that break the outline, returned as (u0, u1, v0, v1).
+
+    A door runs to the foot of the wall and a window can reach its end, so the void
+    is a bite out of the exterior ring rather than an interior hole — and everything
+    that keys off holes (cavity closers, reveal linings, panel set-out) misses it.
+    Each bite is the difference between a patch and its own bounding box; the ones
+    that count are rectangular and open on exactly one side, which is what tells a
+    door from a gable (triangular) or a stepped wall (open on two)."""
+    out = []
+    for pg in polygons:
+        try:
+            shell = Polygon(pg["exterior"])
+            if not shell.is_valid:
+                shell = shell.buffer(0)
+            rest = _difference(shell.envelope, shell)
+            if rest is None or rest.is_empty:
+                continue
+            umin, vmin, umax, vmax = shell.bounds
+            for piece in iter_polygons(rest):
+                u0, v0, u1, v1 = piece.bounds
+                if piece.area < MIN_HOLE_AREA or u1 - u0 < limit or v1 - v0 < limit:
+                    continue
+                if piece.area < 0.9 * (u1 - u0) * (v1 - v0):    # not a rectangular bite
+                    continue
+                open_sides = [abs(u0 - umin) < 1.0, abs(u1 - umax) < 1.0,
+                              abs(v0 - vmin) < 1.0, abs(v1 - vmax) < 1.0]
+                if sum(open_sides) != 1:
+                    continue
+                out.append([round(u0, 2), round(u1, 2), round(v0, 2), round(v1, 2)])
+        except Exception:   # noqa: BLE001 — a malformed ring just yields no notches
+            continue
+    return sorted(out)
 
 
 def _merge_abutments(found, umin, vmin, width):

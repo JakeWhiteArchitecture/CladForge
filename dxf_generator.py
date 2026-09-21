@@ -157,7 +157,7 @@ def _schedule(p, info, meshes):
         "sheathing %.0fmm, " % p["sheathing_t"] if p["sheathing"] else "",
         "insulation %.0fmm, " % p["insulation_t"] if p["insulation"] else "",
         info.get("battens", ""), p["batten_w"], p["batten_d"], info.get("batten_centres", 0),
-        ", counter-battens %.0fx%.0f" % (p["cb_w"], p["cb_d"]) if p["has_cb"] else ""))
+        ", counter-battens %.0fx%.0f @ %.0f c/c" % (p["cb_w"], p["cb_d"], p["cb_centres"]) if p["has_cb"] else ""))
     lines.append("Battens: %d no.  Counter-battens: %d no.  Noggins: %d no.  Cavity closers: %d no." % (
         counts.get("batten", 0), counts.get("counter_batten", 0), counts.get("cross_batten", 0),
         counts.get("closer", 0)))
