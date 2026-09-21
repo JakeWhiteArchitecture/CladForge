@@ -70,11 +70,32 @@ async function main() {
         await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
         await page.waitForTimeout(1200);
     }
+    // Picking generates nothing: the chain has to be built through the wizard first.
+    async function buildChain(type, orient, useButton) {
+        await page.waitForSelector('#make-chain', { state: 'visible', timeout: 60000 });
+        console.log('make chain button:', await page.evaluate(() => document.getElementById('make-chain').textContent.trim()));
+        if (useButton) await page.click('#make-chain');
+        else { await page.evaluate(() => document.activeElement && document.activeElement.blur()); await page.keyboard.press('Enter'); }
+        await page.waitForSelector('#chain-wizard.open', { timeout: 10000 });
+        console.log('wizard:', await page.evaluate(() => [document.getElementById('wiz-title').textContent,
+                                                          document.getElementById('wiz-step').textContent,
+                                                          document.getElementById('wiz-chain').textContent].join(' | ')));
+        await page.click(`#wiz-body .wiz-option >> nth=${type === 'panel' ? 1 : 0}`);
+        if (type !== 'panel') await page.click(`#wiz-body .wiz-option >> nth=${orient === 'vertical' ? 1 : 0}`);
+        console.log('wizard dims step:', await page.evaluate(() => [document.getElementById('wiz-step').textContent,
+            Array.from(document.querySelectorAll('#wiz-body input')).map(i => i.id.replace('wiz-', '') + '=' + i.value).join(' ')].join(' | ')));
+        await page.click('#wiz-next');
+        await page.waitForFunction(() => !document.getElementById('chain-wizard').classList.contains('open'), null, { timeout: 10000 });
+        await page.waitForTimeout(1200);
+    }
+
     await lookAt('South wall', [0, 0.35, 1]);
     await page.waitForFunction(() => typeof state !== "undefined" && state.elevations.length && state.elevations[0].result && state.elevations[0].result.ok, null, { timeout: 60000 });
     const result = await page.evaluate(() => state.elevations[0].result);
     console.log('elevation:', result.name, result.width, 'x', result.height, 'holes', result.n_holes,
                 'abutments', result.abutments.map(a => `${a.source}@${a.v}[${a.u0}-${a.u1}]`).join(', '), 'warnings', result.warnings);
+    console.log('nothing built yet, preview empty:', await page.evaluate(() => cladGroup.children.length === 0));
+    await buildChain('plank', 'horizontal');
     await page.waitForFunction(() => cladGroup.children.length > 0, null, { timeout: 60000 });
     const counts = await page.evaluate(() => { const c = {}; cladGroup.children.forEach(g => c[g.name] = g.children.length); return c; });
     console.log('preview groups:', JSON.stringify(counts));
@@ -133,6 +154,7 @@ async function main() {
     const chainInfo = await page.evaluate(() => ({ chain: state.elevations[2].chain.name, members: state.elevations[2].chain.members.map(m => [m.name, Math.round(m.start), m.rev]),
                                                     length: Math.round(state.elevations[2].chain.length), link: state.elevations[2].link }));
     console.log('chain:', JSON.stringify(chainInfo));
+    await buildChain('plank', 'horizontal');   // the wing chain, built once both faces are picked
     console.log('corner clip:', await page.evaluate(() => state.elevations.slice(1).map(m =>
         `${m.name}: face ${Math.round(m.result.width)} clad ${Math.round(m.clipLo)}-${Math.round(m.clipHi === null ? m.result.width : m.clipHi)}`).join(' | ')));
     console.log('plank seams per course (max):', await page.evaluate(() => {
@@ -151,6 +173,7 @@ async function main() {
     await page.waitForFunction(() => state.elevations.length === 4 && state.elevations[3].result && state.elevations[3].result.ok, null, { timeout: 60000 });
     const r4 = await page.evaluate(() => state.elevations[3].result);
     console.log('elevation D (main east):', r4.width, 'x', r4.height, 'abutments', r4.abutments.map(a => `${a.source}${a.pitched ? '(pitched)' : ''} line=${JSON.stringify(a.line)}`).join(' | '));
+    await buildChain('plank', 'horizontal', true);   // this one through the button rather than Enter
     await page.evaluate(() => frameElevation(state.elevations[3].result));
     await page.waitForTimeout(800);
     await page.screenshot({ path: path.join(__dirname, 'smoke_pitched.png') });

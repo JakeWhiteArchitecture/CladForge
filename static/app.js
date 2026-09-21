@@ -6,8 +6,10 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
 // meet at corners; coursing is set out along the whole run so joints carry round.
+// A chain generates nothing until it is built: picking is a selection, the wizard
+// turns it into cladding. See static/wizard.js.
 function newChain() {
-    const chain = { name: 'Chain ' + (++state.seq), offset: 0, members: [], length: 0 };
+    const chain = { name: 'Chain ' + (++state.seq), offset: 0, members: [], length: 0, built: false };
     state.chains.push(chain);
     return chain;
 }
@@ -109,17 +111,26 @@ function elevationCard(e, i) {
 
 function renderElevationList() {
     const box = document.getElementById('elevation-list');
-    if (!state.elevations.length) { box.innerHTML = '<p class="hint">No elevations yet. Load a model, then click a wall face.</p>'; return; }
+    if (!state.elevations.length) {
+        box.innerHTML = '<p class="hint">No elevations yet. Load a model, then click a wall face.</p>';
+        updateMakeChain();
+        return;
+    }
     let html = '';
     for (const chain of state.chains) {
         const members = chain.members.slice().sort((a, b) => a.start - b.start);
+        const pending = !chain.built && members.some(m => m.result && m.result.ok)
+            ? ` · <b class="chain-pending">not built — press Enter</b>` : '';
         if (members.length > 1) {
-            html += `<div class="chain-head">${chain.name} · ${members.map(m => m.name.replace('Elevation ', '')).join(' → ')} · run ${Math.round(chain.length)} mm</div>`;
+            html += `<div class="chain-head">${chain.name} · ${members.map(m => m.name.replace('Elevation ', '')).join(' → ')} · run ${Math.round(chain.length)} mm${pending}</div>`;
             html += cornerRows(chain, members);
+        } else if (pending) {
+            html += `<div class="chain-head">${chain.name}${pending}</div>`;
         }
         for (const m of members) html += elevationCard(m, state.elevations.indexOf(m));
     }
     box.innerHTML = html;
+    updateMakeChain();
 }
 
 // ─── CORNERS ───
@@ -306,9 +317,9 @@ _json.dumps(_ex(_json.loads(_payload_json)))`);
         e.result = JSON.parse(out);
         console.log(`extract ${e.name}: ${Math.round(performance.now() - t0)} ms, ok=${e.result.ok}`, e.result.warnings);
         if (e.result.ok) {
-            setStatus('Ready', 'ready');
             const linked = await linkIntoChain(e);
-            if (linked) setStatus(`${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)`, 'ready');
+            const corner = linked ? `${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)` : e.name + ' extracted';
+            setStatus(e.chain.built ? corner : corner + ' — press Enter to build', 'ready');
             frameElevation(e.result);
         } else {
             e.error = e.result.warnings.join('; ') || 'Extraction failed';
@@ -337,6 +348,7 @@ function selectToggle(id, value) {
 function elevationRecords() {
     const out = [];
     for (const chain of state.chains) {
+        if (!chain.built) continue;   // picked but not built: nothing is generated for it yet
         const members = chain.members.filter(e => e.result && e.result.ok).sort((a, b) => a.start - b.start);
         for (const e of members) {
             out.push(Object.assign({}, e.result, { name: e.name, offset: chain.offset, abutments: abutmentsFor(e), storey: e.storey,
@@ -537,7 +549,7 @@ function busy(btn, on, label) {
 
 async function downloadIFC() {
     const params = getParams(); params.trim = true;
-    if (!params.elevations.length) { alert('Extract at least one elevation first.'); return; }
+    if (!params.elevations.length) { alert('Pick some faces and build the chain first (press Enter).'); return; }
     const btn = document.getElementById('ifc-btn');
     busy(btn, true, 'Generating IFC4X3…');
     try {
@@ -583,7 +595,7 @@ import ifc_generator`);
 async function downloadDXF() {
     if (!pyReady) { alert('The engine is still loading.'); return; }
     const params = getParams(); params.trim = true;
-    if (!params.elevations.length) { alert('Extract at least one elevation first.'); return; }
+    if (!params.elevations.length) { alert('Pick some faces and build the chain first (press Enter).'); return; }
     const btn = document.getElementById('dxf-btn');
     busy(btn, true, 'Generating DXF…');
     try {
@@ -632,6 +644,7 @@ function initApp() {
     initThree();
     initWebIfc();
     initPyodide();
+    initWizard();
     renderElevationList();
     onTypeChange();
     const vp = document.getElementById('viewport');

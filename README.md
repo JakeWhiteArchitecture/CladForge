@@ -27,14 +27,23 @@ genuinely new code in the stack.
 | 3 | Grow picks into coplanar regions, name Elevation A, B, C | Pyodide (`fabric_extract.py`) |
 | 4 | Subtract openings and penetrations as interior holes | Pyodide (`fabric_extract.py`) |
 | 5 | Detect slab and roof abutments, set out the splash zone | Pyodide (`fabric_extract.py`) |
-| 6 | Define buildup and cladding type | UI |
-| 7 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
-| 8 | Export IFC4X3 and DXF | Flask or Pyodide (IFC), Pyodide (DXF) |
+| 6 | Build the chain: plank or panel, orientation, dimensions | UI wizard (`static/wizard.js`) |
+| 7 | Refine buildup, corners, openings, setting-out | UI |
+| 8 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
+| 9 | Export IFC4X3 and DXF | Flask or Pyodide (IFC), Pyodide (DXF) |
 
 Extraction runs once per selection and is cached on the elevation. Coursing
 and buildup run in Pyodide on every parameter change, so the offset slider is
 live with no debounce; typed numbers are debounced at 300 ms. Nothing in the
 coursing path touches the server.
+
+Picking and generating are separate. Clicking faces grows elevations and chains
+and nothing else: no cladding exists until the chain is built. Once a face is
+extracted, **Make chain** appears at the top right of the view and **Enter**
+opens the wizard — plank or panel, horizontal or vertical (planks only), then
+the board dimensions — and **Build** generates that chain. Every pending chain
+is built together. After a chain is built the whole panel edits it live, and a
+face picked round a corner joins the built chain and is clad straight away.
 
 ## Running it
 
@@ -174,11 +183,12 @@ the title area.
 | ifc_generator.py | 317 | 400 |
 | dxf_generator.py | 229 | 500 |
 | app.py | 115 | 150 |
-| templates/index.html | 176 | 500 |
+| templates/index.html | 210 | 500 |
 
 The frontend logic lives beside the template in `static/viewer.js` (Three.js,
-web-ifc, picking, rendering) and `static/app.js` (state, Pyodide, downloads),
-with the design system in `static/style.css`.
+web-ifc, picking, rendering), `static/app.js` (state, Pyodide, downloads) and
+`static/wizard.js` (the build gate and its wizard), with the design system in
+`static/style.css`.
 
 ## Tests
 
@@ -189,8 +199,9 @@ VENDOR_DIR=... node tests/smoke.js    # browser smoke test against a running app
 ```
 
 The smoke test drives Chromium through Playwright: loads the sample house,
-picks the south and east walls, moves the slider, switches to panels, and
-downloads both exports. `VENDOR_DIR` is only needed where the CDNs are
+picks the south and east walls, builds each chain through the wizard (by Enter
+and by the button), moves the slider, switches to panels, and downloads both
+exports. It also checks that picking alone generates nothing. `VENDOR_DIR` is only needed where the CDNs are
 unreachable; it serves Pyodide, Three.js and web-ifc from local copies.
 
 ## Limitations

@@ -33,6 +33,7 @@
                     <button class="turn-btn" data-value="orbit" onclick="setPickMode(false)">Orbit only</button>
                 </div>
                 <p class="hint">Click a wall face to add its coplanar patch to the active elevation; click again to remove it. Click a face round a corner and it becomes the next elevation in the chain, with the coursing carried round. Faces that don't meet the chain start a new one. Openings punched by the importer become holes.</p>
+                <p class="hint">Picking generates nothing on its own. When the chain is complete, press <b>Enter</b> or use <b>Make chain</b> at the top right of the view to choose the cladding and build it. After that the whole panel edits live.</p>
                 <label class="chk"><input type="checkbox" id="penetrations" checked onchange="state.elevations.forEach(runExtraction)"> Subtract penetrations crossing the face</label>
                 <div id="elevation-list"></div>
                 <div class="row">
@@ -172,6 +173,20 @@
             <div><span class="dim-label">Boards:</span> <span class="dim-value" id="dim-boards">--</span></div>
         </div>
         <div class="status-chip busy" id="status-chip">Loading…</div>
+        <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
+    </div>
+
+    <div id="chain-wizard" role="dialog" aria-modal="true" aria-label="Make chain">
+        <div class="reminder-dialog">
+            <div class="wiz-head"><span class="reminder-heading" id="wiz-title">Plank or panel?</span>
+                <span class="wiz-step" id="wiz-step">Step 1 of 3</span></div>
+            <p class="hint" id="wiz-chain"></p>
+            <div id="wiz-body"></div>
+            <div class="wiz-actions">
+                <button class="btn btn-secondary btn-sm" id="wiz-back" onclick="wizBack()">Back</button>
+                <button class="btn btn-primary btn-sm" id="wiz-next" onclick="wizNext()">Next</button>
+            </div>
+        </div>
     </div>
 
     <div id="download-reminder" role="dialog" aria-modal="true" aria-label="Download Reminder">
@@ -189,6 +204,7 @@
     <script src="https://cdn.jsdelivr.net/npm/web-ifc@0.0.77/web-ifc-api-iife.js" crossorigin="anonymous"></script>
     <script src="static/viewer.js"></script>
     <script src="static/app.js"></script>
+    <script src="static/wizard.js"></script>
     <script>initApp();</script>
 </body>
 </html>
