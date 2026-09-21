@@ -17,7 +17,7 @@ function newChain() {
 function newElevation(chain) {
     const n = state.elevations.length;
     const name = 'Elevation ' + String.fromCharCode(65 + (n % 26)) + (n >= 26 ? Math.floor(n / 26) : '');
-    const e = { name, color: ELEV_COLORS[n % ELEV_COLORS.length], picks: [], result: null, manual: [], disabled: {},
+    const e = { name, picks: [], result: null, manual: [], disabled: {},
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
                 cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, clipLo: 0, clipHi: null };
     e.chain.members.push(e);
@@ -101,8 +101,7 @@ function elevationCard(e, i) {
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
-        <div class="elev-head"><span class="elev-swatch" style="background:#${e.color.toString(16).padStart(6, '0')}"></span>
-            <input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
+        <div class="elev-head"><input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
             <span class="elev-meta">${meta}${e.storey ? ' · ' + e.storey.name : ''}${place}</span></div>
         ${ok ? `<div class="elev-abut">Abutments (splash zone above each):${abuts}
             <div class="row" style="margin-top:4px"><input type="number" id="manual-level-${i}" placeholder="Level mm above base" onclick="event.stopPropagation()">
@@ -289,7 +288,7 @@ function onViewportClick(event) {
     if (existing >= 0) e.picks.splice(existing, 1);
     else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal) });
     e.highlights.forEach(h => { highlightGroup.remove(h); h.geometry.dispose(); });
-    e.highlights = e.picks.map(p => highlightFaces(p.mesh, p.faces, e.color));
+    e.highlights = e.picks.map(p => highlightFaces(p.mesh, p.faces));
     if (!e.storey) { const meta = meshMeta[hit.mesh.userData.index]; e.storey = meta && meta.storey ? meta.storey : null; }
     runExtraction(e);
 }

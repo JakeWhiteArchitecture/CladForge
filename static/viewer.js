@@ -11,7 +11,9 @@ let allMeshes = [], meshMeta = [], modelContext = {};
 let modelOffset = [0, 0, 0];
 const layerVisible = { model: true, sheathing: true, insulation: true, counter_batten: true,
                        batten: true, cladding: true, closer: true, dims: true };
-const ELEV_COLORS = [0x2a9d8f, 0xe9c46a, 0xf4a261, 0xe76f51, 0x8ab17d, 0x9b5de5, 0x00b4d8];
+// One colour for every picked face and one for every wall outline: which elevation a
+// face belongs to is the list's job, not the viewport's.
+const PICK_COLOR = 0x2a9d8f, OUTLINE_COLOR = 0x8ea3b8;
 const VERT_TOL = Math.sin(Math.PI / 180);   // 1 degree: what counts as a vertical face
 
 // ─── SCENE ───
@@ -386,7 +388,7 @@ function contextFor(pickedMeshes, tris, margin, outward) {
     return out;
 }
 
-function highlightFaces(mesh, faceIndices, color) {
+function highlightFaces(mesh, faceIndices, color = PICK_COLOR) {
     const tris = faceTriangles(mesh, faceIndices), positions = [];
     for (const t of tris) for (const q of t) positions.push(q[0], q[2], -q[1]);
     const geo = new THREE.BufferGeometry();
@@ -482,10 +484,9 @@ function ringLine(ring, frame, depth, color, dashed) {
 
 function renderOutlines(elevations, splash) {
     clearGroup(outlineGroup);
-    elevations.forEach((e, i) => {
-        const color = ELEV_COLORS[i % ELEV_COLORS.length];
+    elevations.forEach(e => {
         for (const poly of e.polygons) {
-            outlineGroup.add(ringLine(poly.exterior, e.frame, 2, color, false));
+            outlineGroup.add(ringLine(poly.exterior, e.frame, 2, OUTLINE_COLOR, false));
             for (const h of poly.holes) outlineGroup.add(ringLine(h, e.frame, 2, 0xff5c5c, false));
         }
         for (const ab of e.abutments) {
