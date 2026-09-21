@@ -89,6 +89,14 @@ def test_vertical_planks_have_counter_battens(elevation):
     types = {m["ifc_type"] for m in out["geometry"]}
     assert "counter_batten" in types and "batten" in types and "plank" in types
     assert out["info"][0]["battens"] == "horizontal"
+    # Counter-batten centres are a parameter, not a constant: they set the spacing.
+    for centres in (400.0, 800.0):
+        cbs = sorted(min(q[0] for q in m["profile"])
+                     for m in generate_preview(_params(elevation, plank_orient="vertical",
+                                                       cb_centres=centres, trim=False))["geometry"]
+                     if m["ifc_type"] == "counter_batten")
+        gaps = [round(b - a, 1) for a, b in zip(cbs, cbs[1:])]
+        assert gaps and max(gaps) <= centres + 1, (centres, gaps)
 
 
 def test_panels_joints_on_battens(elevation):

@@ -6,7 +6,7 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 (full rectangles); cladding_booleans.py cuts them at openings and splash zones.
 """
 
-from cladding_constants import _prism, _rect, COUNTER_BATTEN_CENTRES, MAX_BATTEN_SPAN
+from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN
 from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
@@ -130,7 +130,7 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     """Horizontal boards on vertical battens (optionally on horizontal counter-battens)."""
     name, frame = elev["name"], elev["frame"]
     if p["has_cb"]:  # forced by override — flagged by check_rules, drainage is compromised
-        vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, COUNTER_BATTEN_CENTRES) + [H - p["cb_w"] / 2], p["cb_w"])
+        vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, p["cb_centres"]) + [H - p["cb_w"] / 2], p["cb_w"])
         depth = _horizontal_battens(p, vs, meshes, name, frame, depth, W, "counter_batten", p["cb_w"], p["cb_d"])
     battens = batten_positions(W, p["batten_w"], p["batten_centres"], offset)
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
@@ -164,7 +164,7 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
     """Vertical boards on horizontal battens on vertical counter-battens."""
     name, frame = elev["name"], elev["frame"]
     if p["has_cb"]:
-        cbs = batten_positions(W, p["cb_w"], COUNTER_BATTEN_CENTRES, 0.0)
+        cbs = batten_positions(W, p["cb_w"], p["cb_centres"], 0.0)
         depth = _vertical_battens(p, cbs, meshes, name, frame, depth, H, "counter_batten", p["cb_w"], p["cb_d"])
     bw = p["batten_w"]
     battens = dedupe(stacked_positions(v0 + bw / 2, H - bw / 2, p["batten_centres"]) + [H - bw / 2], bw)
@@ -203,7 +203,7 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     bw, gap = p["batten_w"], p["panel_gap"]
     cavity_start = depth
     if p["has_cb"]:  # forced by override
-        vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, COUNTER_BATTEN_CENTRES) + [H - p["cb_w"] / 2], p["cb_w"])
+        vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, p["cb_centres"]) + [H - p["cb_w"] / 2], p["cb_w"])
         depth = _horizontal_battens(p, vs, meshes, name, frame, depth, W, "counter_batten", p["cb_w"], p["cb_d"])
     holes = openings(elev)
     jambs = sorted({u for o in holes for u in (o[0], o[1]) if bw < u < W - bw}) if p["set_out_from_openings"] else []

@@ -204,6 +204,7 @@ def _setting_out_props(p, info, elev):
         "BattenCentres": ("IfcPositiveLengthMeasure", float(p["batten_centres"])),
         "CounterBattens": ("IfcBoolean", bool(p["has_cb"])),
         "CounterBattenSection": ("IfcLabel", "%.0f x %.0f" % (p["cb_w"], p["cb_d"])) if p["has_cb"] else ("IfcLabel", None),
+        "CounterBattenCentres": ("IfcPositiveLengthMeasure", float(p["cb_centres"]) if p["has_cb"] else None),
         "SheathingThickness": ("IfcPositiveLengthMeasure", float(p["sheathing_t"]) if p["sheathing"] else None),
         "InsulationThickness": ("IfcPositiveLengthMeasure", float(p["insulation_t"]) if p["insulation"] else None),
         "SplashZone": ("IfcLengthMeasure", float(p["splash"])),

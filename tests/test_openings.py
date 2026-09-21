@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pytest  # noqa: E402
 
-from synthetic import payload, N, U, ORIGIN  # noqa: E402
+from synthetic import payload, wall_face_with_door, N, U, ORIGIN  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
 from cladding_constants import _parse, frame_to_world  # noqa: E402
 from cladding_primitives import buildup_depth, openings  # noqa: E402
@@ -169,3 +169,29 @@ def test_planks_only_seam_when_a_run_needs_two_boards(elevation):
         if m["ifc_type"] == "plank":
             by_course.setdefault(round(min(q[1] for q in m["profile"]), 1), []).append(m)
     assert by_course and all(len(v) == 1 for v in by_course.values()), "a 1500mm run was seamed"
+
+
+def test_a_door_that_breaks_the_outline_is_still_an_opening():
+    """A door reaches the foot of the wall, so the void is a bite out of the outline
+    rather than an interior hole. It still has to be closed and lined."""
+    pay = payload()
+    pay["faces"] = wall_face_with_door()
+    pay["context"] = []
+    elev = extract_elevation(pay)
+    assert elev["ok"], elev["warnings"]
+    assert elev["notches"] == [[5000.0, 5900.0, 0.0, 2100.0]]
+    assert (5000.0, 5900.0, 0.0, 2100.0) in openings(elev)
+    assert elev["n_holes"] == 2
+    out = generate_preview({"elevations": [dict(elev, offset=0)], "cladding_type": "plank",
+                            "trim": True, "reveals": True})
+    jambs = sorted(round(min(q[0] for q in m["profile"]), 1)
+                   for m in out["geometry"] if m["ifc_type"] == "closer")
+    assert len(jambs) == 4, jambs                      # both jambs of the window and the door
+    assert 4950.0 in jambs and 5900.0 in jambs, jambs  # the door's, either side of the reveal
+
+
+def test_a_gable_is_not_mistaken_for_an_opening():
+    """The wall under a pitched roof loses two triangles from its bounding box, and a
+    stepped wall loses a corner. Neither is an opening."""
+    assert extract_elevation(payload(pitched=True))["notches"] == []
+    assert extract_elevation(payload())["notches"] == []
