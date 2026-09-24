@@ -77,13 +77,24 @@ def _header(ifc):
 
 
 def _create_file():
-    last = None
+    """Newest schema this build carries. Ask before trying: the browser's WASM wheel
+    ships IFC2X3 and IFC4 only, and requesting a schema it does not have raises a C++
+    exception that kills the Pyodide runtime outright rather than something Python can
+    catch — so a try/except ladder cannot be the fallback."""
+    try:
+        import ifcopenshell.ifcopenshell_wrapper as _wrapper
+        available = set(_wrapper.schema_names())
+    except Exception:   # noqa: BLE001 — an old build without the introspection
+        available = set()
     for version in IFC_SCHEMA_VERSIONS:
-        try:
+        if not available or version in available:
             return ifcopenshell.api.run("project.create_file", version=version)
-        except Exception as exc:  # schema not available in this build
-            last = exc
-    raise last
+    return ifcopenshell.api.run("project.create_file", version=IFC_SCHEMA_VERSIONS[-1])
+
+
+def _schema_label(ifc):
+    """What was actually written, which is not always the headline schema."""
+    return getattr(ifc, "schema_identifier", None) or getattr(ifc, "schema", None) or IFC_SCHEMA_LABEL
 
 
 # ── geometry ─────────────────────────────────────────────────────────────
@@ -194,9 +205,9 @@ def _pset(ifc, products, name, props):
     ifc.createIfcRelDefinesByProperties(ifcopenshell.guid.new(), _owner(ifc), None, None, products, pset)
 
 
-def _setting_out_props(p, info, elev):
+def _setting_out_props(p, info, elev, schema=IFC_SCHEMA_LABEL):
     return {
-        "SchemaLabel": ("IfcLabel", IFC_SCHEMA_LABEL),
+        "SchemaLabel": ("IfcLabel", schema),
         "CladdingType": ("IfcLabel", p["cladding_type"]),
         "BoardOrientation": ("IfcLabel", p["boards_run"]),
         "BattenOrientation": ("IfcLabel", p["battens"]),
@@ -229,7 +240,7 @@ def _spatial(ifc, context, elevations):
     project = ifcopenshell.api.run("root.create_entity", ifc, ifc_class="IfcProject",
                                    name=context.get("project") or "%s Cladding" % TOOL_NAME)
     try:
-        project.LongName = "%s cladding setting-out (%s)" % (TOOL_NAME, IFC_SCHEMA_LABEL)
+        project.LongName = "%s cladding setting-out (%s)" % (TOOL_NAME, _schema_label(ifc))
         project.Phase = "Preliminary design"
     except Exception:
         pass
@@ -333,7 +344,8 @@ def meshes_to_ifc(meshes, params, infos=None):
                 _pset(ifc, [elem], "Pset_PlateCommon", common)
         if parts:
             ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=assembly, products=parts)
-        _pset(ifc, [assembly], "%s_SettingOut" % TOOL_NAME, _setting_out_props(p, info_by_name.get(name, {}), elev))
+        _pset(ifc, [assembly], "%s_SettingOut" % TOOL_NAME,
+              _setting_out_props(p, info_by_name.get(name, {}), elev, _schema_label(ifc)))
         elements += parts
         assemblies.append((name, assembly))
 
@@ -348,13 +360,13 @@ def meshes_to_ifc(meshes, params, infos=None):
 
     _pset(ifc, [project], "%s_Disclaimer" % TOOL_NAME, {
         "Notice": ("IfcText", DISCLAIMER), "ScopeNote": ("IfcText", SCOPE_NOTE),
-        "QuantityNote": ("IfcText", QUANTITY_NOTE), "Schema": ("IfcLabel", IFC_SCHEMA_LABEL),
+        "QuantityNote": ("IfcText", QUANTITY_NOTE), "Schema": ("IfcLabel", _schema_label(ifc)),
         "ToolURL": ("IfcText", TOOL_URL)})
     try:
         hdr = _header(ifc)
         hdr.file_name.authorization = "User must verify all outputs before use."
         hdr.file_description.description = ("ViewDefinition [ReferenceView]",
-                                            "%s %s cladding setting-out. %s" % (TOOL_NAME, IFC_SCHEMA_LABEL, SCOPE_NOTE))
+                                            "%s %s cladding setting-out. %s" % (TOOL_NAME, _schema_label(ifc), SCOPE_NOTE))
     except Exception:
         pass
 

@@ -30,7 +30,7 @@ genuinely new code in the stack.
 | 6 | Build the chain: plank or panel, orientation, board, batten and counter-batten sizes | UI wizard (`static/wizard.js`) |
 | 7 | Refine buildup, corners, openings, setting-out | UI |
 | 8 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
-| 9 | Export IFC4X3 and DXF | Flask or Pyodide (IFC), Pyodide (DXF) |
+| 9 | Export IFC and DXF | Pyodide (both) |
 
 Extraction runs once per selection and is cached on the elevation. Coursing
 and buildup run in Pyodide on every parameter change, so the offset slider is
@@ -56,11 +56,19 @@ pip install -r requirements.txt
 python app.py            # http://localhost:8080
 ```
 
-Flask serves the page, the Python sources for Pyodide, and a JSON mirror of
-the engine (`/api/extract`, `/api/preview`, `/api/check`, `/api/download`,
-`/api/download_dxf`). The page also works on static hosting: copy
-`templates/index.html` to the root next to `static/` and the `.py` files. In
-that mode IFC export falls back to the IfcOpenShell WASM wheel in the browser.
+Flask serves two things: the page, and the Python sources for Pyodide to
+import. The only route that does work is `/api/import`, the IfcOpenShell
+fallback for models web-ifc cannot build. Everything else — extraction,
+coursing, checks, and both exports — runs in the browser, so the page also
+works on static hosting: copy `templates/index.html` to the root next to
+`static/` and the `.py` files, and the only thing lost is that import fallback.
+
+**Schema.** IFC export runs through the IfcOpenShell WASM wheel, which carries
+IFC2X3 and IFC4 only — no IFC4X3. `_create_file` asks the build which schemas
+it has and takes the newest, so the browser writes **IFC4**, and the exported
+file reports the schema it actually used rather than a headline one. A
+server-side export route would restore IFC4X3, since the native IfcOpenShell
+in `requirements.txt` has it.
 
 A demo model is in `tests/sample_house.ifc` (regenerate with
 `python tests/make_sample.py`).
@@ -193,9 +201,9 @@ the title area.
 | cladding_primitives.py | 297 | 300 |
 | cladding_booleans.py | 206 | 200 |
 | cladding_preview.py | 45 | 100 |
-| ifc_generator.py | 384 | 400 |
-| dxf_generator.py | 256 | 500 |
-| app.py | 133 | 150 |
+| ifc_generator.py | 396 | 400 |
+| dxf_generator.py | 248 | 500 |
+| app.py | 78 | 150 |
 | templates/index.html | 224 | 500 |
 
 `fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 21 and

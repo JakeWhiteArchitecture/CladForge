@@ -592,15 +592,9 @@ async function downloadIFC() {
     const btn = document.getElementById('ifc-btn');
     busy(btn, true, 'Generating IFC4X3…');
     try {
-        let blob = null;
-        try {   // served by Flask: fast server-side export
-            const r = await fetch('api/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
-            if (r.ok && (r.headers.get('content-type') || '').indexOf('json') < 0) blob = await r.blob();
-        } catch (e) { /* static hosting — fall back to the WASM wheel */ }
-        if (!blob) {
-            await ensureIfcOpenShell(btn);
-            pyodide.globals.set('_params_json', JSON.stringify(params));
-            const proxy = await pyodide.runPythonAsync(`
+        await ensureIfcOpenShell(btn);
+        pyodide.globals.set('_params_json', JSON.stringify(params));
+        const proxy = await pyodide.runPythonAsync(`
 import json as _json, os as _os
 from cladding_preview import generate_preview as _gp
 from ifc_generator import meshes_to_ifc as _to_ifc
@@ -611,9 +605,8 @@ with open(_path, 'rb') as _f:
     _data = _f.read()
 _os.unlink(_path)
 _data`);
-            blob = new Blob([proxy.toJs()], { type: 'application/x-step' });
-            if (proxy.destroy) proxy.destroy();
-        }
+        const blob = new Blob([proxy.toJs()], { type: 'application/x-step' });
+        if (proxy.destroy) proxy.destroy();
         showReminder(blob, 'ifc');
     } catch (err) { alert('IFC export failed: ' + err.message); }
     finally { busy(btn, false); }

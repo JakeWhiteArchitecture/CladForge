@@ -15,7 +15,8 @@ async function main() {
     page = await browser.newPage({ viewport: { width: 1500, height: 900 }, acceptDownloads: true });
     logs = [];
     // VENDOR_DIR: serve the CDN runtimes from local copies (sandboxes that block CDNs).
-    // Expected layout: <dir>/pyodide/*, <dir>/three/{build,examples}, <dir>/web-ifc/*.
+    // Expected layout: <dir>/pyodide/*, <dir>/three/{build,examples}, <dir>/web-ifc/*,
+    // <dir>/wasm-wheels/* (the IfcOpenShell wheel the browser installs for IFC export).
     const vendor = process.env.VENDOR_DIR;
     if (vendor) {
         const mime = { js: 'application/javascript', wasm: 'application/wasm', json: 'application/json', zip: 'application/zip', whl: 'application/octet-stream' };
@@ -24,8 +25,21 @@ async function main() {
             [/^https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/three\.js\/r128\/three\.min\.js$/, () => path.join(vendor, 'three', 'build', 'three.min.js')],
             [/^https:\/\/cdn\.jsdelivr\.net\/npm\/three@0\.128\.0\/(.+)$/, m => path.join(vendor, 'three', m[1])],
             [/^https:\/\/cdn\.jsdelivr\.net\/npm\/web-ifc@[\d.]+\/(.+)$/, m => path.join(vendor, 'web-ifc', m[1])],
+            [/^https:\/\/ifcopenshell\.github\.io\/wasm-wheels\/(.+)$/, m => path.join(vendor, 'wasm-wheels', m[1])],
+            [/^https:\/\/files\.pythonhosted\.org\/vendored\/(.+)$/, m => path.join(vendor, 'pypi', m[1])],
         ];
-        await page.route(/^https:\/\/(cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com)\//, route => {
+        // micropip resolves the IFC export's pure-Python deps through the PyPI simple
+        // index; answer it from <dir>/pypi so the install needs no network either.
+        await page.route(/^https:\/\/pypi\.org\/simple\/([^/]+)\//, route => {
+            const name = route.request().url().match(/simple\/([^/]+)\//)[1];
+            const files = fs.existsSync(path.join(vendor, 'pypi'))
+                ? fs.readdirSync(path.join(vendor, 'pypi')).filter(f => f.toLowerCase().startsWith(name.replace(/-/g, '_').toLowerCase() + '-')) : [];
+            if (!files.length) { logs.push('vendor miss: pypi ' + name); return route.fulfill({ status: 404, body: '' }); }
+            return route.fulfill({ contentType: 'application/vnd.pypi.simple.v1+json', body: JSON.stringify({
+                meta: { 'api-version': '1.0' }, name,
+                files: files.map(f => ({ filename: f, url: 'https://files.pythonhosted.org/vendored/' + f, hashes: {} })) }) });
+        });
+        await page.route(/^https:\/\/(cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com|ifcopenshell\.github\.io|files\.pythonhosted\.org)\//, route => {
             const url = route.request().url().split('?')[0];
             for (const [re, fn] of map) {
                 const m = url.match(re);
