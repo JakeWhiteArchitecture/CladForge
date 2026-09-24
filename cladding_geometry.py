@@ -195,7 +195,8 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
 
 
 def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
-    """Panels on vertical battens, joints on battens, noggins at horizontal joints.
+    """Panels on vertical battens, joints on battens, noggins at horizontal joints only
+    where a counter-batten layer is there to keep the drainage plane clear.
     Where the elevation has openings the setting-out starts from them: panel edges land
     on the structural jambs and each span between jambs is split into equal bays no
     wider than the maximum panel."""
@@ -221,12 +222,16 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cavity_t = depth - cavity_start
     courses = stacked_positions(v0, H, p["panel_h"] + gap)
-    for j, v in enumerate(courses[:-1]):   # noggins behind every horizontal joint
+    # A noggin between vertical battens sits on the drainage plane and dams it, so the
+    # horizontal seams are left unsupported unless a counter-batten layer holds the
+    # battens off the wall and the water can run down behind them.
+    for j, v in enumerate(courses[:-1] if p["has_cb"] else []):
         vj = v + p["panel_h"] + gap / 2
         for k, (a, b) in enumerate(zip(battens, battens[1:])):
             if b - a > bw + 1:
                 meshes.append(_prism(_rect(a + bw / 2, vj - bw / 2, b - bw / 2, vj + bw / 2), depth - p["batten_d"],
                                      p["batten_d"], frame, "cross_batten", "%s Cross Batten C%d-%d" % (name, j + 1, k + 1), name))
+    info["seam_noggins"] = bool(p["has_cb"]) and len(courses) > 1
     for j, v in enumerate(courses):
         for k, (s, e, _full) in enumerate(panels):
             meshes.append(_prism(_rect(s, v, e, v + p["panel_h"]), depth, p["panel_t"], frame, "panel",

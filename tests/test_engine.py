@@ -105,7 +105,7 @@ def test_panels_joints_on_battens(elevation):
     out = generate_preview(_params(elevation, cladding_type="panel", trim=False, offset=300))
     battens = sorted(m["profile"][0][0] + 25 for m in out["geometry"] if m["ifc_type"] == "batten")
     panels = [m for m in out["geometry"] if m["ifc_type"] == "panel"]
-    assert panels and any(m["ifc_type"] == "cross_batten" for m in out["geometry"])
+    assert panels
     # Every panel edge is backed: a batten centred on the joint gap, or, at a window
     # jamb, the solid timber cavity closer that the setting-out started from.
     jambs = {2000.0, 3200.0}
@@ -142,3 +142,22 @@ def test_check_rules(elevation):
     checks = {c["name"]: c["status"] for c in check_rules(
         _params(elevation, plank_orient="vertical", counter_batten="no"))}
     assert checks["Buildup"] == "fail"
+
+
+def test_panel_seam_noggins_wait_for_counter_battens(elevation):
+    """A noggin between vertical battens sits on the drainage plane and dams it. The
+    horizontal seams stay unsupported until a counter-batten layer holds the battens
+    off the wall."""
+    def build(cb):
+        out = generate_preview(_params(elevation, cladding_type="panel", counter_batten=cb,
+                                       panel_h=1200, trim=False))
+        types = [m["ifc_type"] for m in out["geometry"]]
+        check = next(c for c in check_rules(_params(elevation, cladding_type="panel",
+                                                    counter_batten=cb, panel_h=1200), out["info"])
+                     if c["name"] == "Panel seams")
+        return types.count("cross_batten"), types.count("counter_batten"), check["status"]
+
+    noggins, cbs, status = build("no")
+    assert (noggins, cbs, status) == (0, 0, "warn")
+    noggins, cbs, status = build("yes")
+    assert noggins > 0 and cbs > 0 and status == "pass"
