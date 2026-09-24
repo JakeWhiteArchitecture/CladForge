@@ -123,6 +123,30 @@ async function main() {
     await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(__dirname, 'smoke_plank.png') });
 
+    // Clicking a face that is already clad edits its chain instead of picking it again.
+    await page.evaluate(() => { window.battenEdges = () => window._lastPreview.geometry
+        .filter(m => m.ifc_type === 'batten' && m.elevation === 'Elevation A')
+        .map(m => Math.round(Math.min(...m.profile.map(q => q[0])))).sort((a, b) => a - b).slice(0, 4); });
+    const before = await page.evaluate(() => ({ n: state.elevations.length,
+        battens: window.battenEdges() }));
+    await lookAt('South wall', [0, 0.35, 1]);
+    console.log('re-click on built cladding:', await page.evaluate(() => JSON.stringify({
+        elevations: state.elevations.length, editing: state.editing && state.editing.name,
+        widget: document.getElementById('edit-widget').style.display !== 'none' })), '| was', before.n, 'elevation(s)');
+    const shifted = await page.evaluate(async () => {
+        document.getElementById('edit-offset').value = 60;
+        onEditSlide(60);
+        await new Promise(r => setTimeout(r, 1500));
+        return { offset: state.elevations[0].chain.offset, label: document.getElementById('edit-offset-val').textContent,
+                 battens: window.battenEdges() };
+    });
+    console.log('edit widget shift:', JSON.stringify(shifted), '| battens were at', JSON.stringify(before.battens));
+    await page.keyboard.press('Escape');
+    await page.evaluate(async () => { document.getElementById('edit-offset').value = 0; onEditSlide(0); await new Promise(r => setTimeout(r, 1200)); });
+    console.log('widget closed:', await page.evaluate(() => document.getElementById('edit-widget').style.display === 'none'));
+    console.log('pick seeds recorded:', await page.evaluate(() =>
+        state.elevations[0].picks.map(p => p.point && p.point.map(c => Math.round(c)).join(',')).join(' | ')));
+
     // Live slider: time one full preview round trip (Pyodide coursing + trimming + render).
     const ms = await page.evaluate(async () => {
         const e = state.elevations[state.active]; e.offset = 120;

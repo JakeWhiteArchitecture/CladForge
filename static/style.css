@@ -127,6 +127,16 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
     cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
 #make-chain:hover { background: var(--accent-hover); }
 .chain-pending { color: #ff9800; }
+.mini { padding: 3px 8px; font-size: 11px; background: var(--border); color: var(--text); border: none; border-radius: 3px; cursor: pointer; }
+.mini:hover { background: #1a4a80; }
+
+/* Edit mode: a built chain's setting-out, brought over the view by clicking its cladding. */
+.edit-widget { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 6;
+    background: rgba(22,33,62,0.96); border: 1px solid var(--accent); border-radius: 8px;
+    padding: 10px 14px; width: 400px; max-width: calc(100% - 40px); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.edit-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 4px; }
+.edit-widget .slider-row span { min-width: 64px; }
 .wiz-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .wiz-step { font-size: 11px; color: var(--hint); white-space: nowrap; }
 .wiz-actions { display: flex; justify-content: space-between; gap: 10px; }

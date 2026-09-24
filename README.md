@@ -71,7 +71,9 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
 2. With **Pick faces** on, click a wall face. The coplanar patch joins the active
    elevation; click again to remove it. Click more patches on the same plane to
    merge them. Click a face round the corner and it becomes the next elevation
-   in the chain. **New elevation** starts a separate chain.
+   in the chain. **New elevation** starts a separate chain. Where a slab or roof
+   cuts clean through the face, only the patch you clicked is taken: the click
+   position is the seed, so the piece beyond the junction is left alone.
 3. Check the detected abutments on the elevation card. Pitched ones say so and
    the splash band follows the roof line. Untick a false one, or type a level and
    **Add level** where detection fails.
@@ -80,7 +82,9 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
    the counter-battens if the buildup has them. Nothing is generated before this.
 5. Refine anything in the panel — sheathing, insulation, splash zone, corners,
    openings, batten section and centres. It all previews live from here on.
-6. Drag the **horizontal offset** slider to control where the closing cuts land.
+6. Drag the **horizontal offset** slider to control where the closing cuts land,
+   or click the cladding itself: a face that is already clad is not re-picked,
+   it opens its chain's setting-out over the view.
 7. Read the checks, then download IFC4X3 or DXF. The legend toggles every layer,
    including the picked wall faces and the outline, so the buildup can be read on
    its own.
@@ -93,7 +97,7 @@ default. Each is one place in the code, so any of them can be flipped.
 | Item | Decision | Where |
 |---|---|---|
 | Region definition [ASSUMED] | Yes. A region is coplanar; openings are interior holes and never split a region. Separate patches on one plane merge into one elevation (one frame, one coursing, boards clipped to the union). | `fabric_extract._union_faces` |
-| Selection mode [OPEN] | Both. One click grows the connected coplanar patch (SunForm's flood fill), and further clicks merge more patches into the same elevation. | `viewer.coplanarFaces`, `app.onViewportClick` |
+| Selection mode [OPEN] | Both. One click grows the connected coplanar patch (SunForm's flood fill), and further clicks merge more patches into the same elevation. Each click's position is kept as a seed: if the cuts leave the region in pieces, only the pieces a seed falls in are clad, so a slab or roof crossing a face does not carry the cladding past it. A face that is already clad is not a selection any more — clicking it opens that chain's setting-out over the view instead. | `viewer.coplanarFaces`, `app.onViewportClick` |
 | Openings source [OPEN] | Mesh voids. web-ifc punches `IfcRelVoidsElement` openings into the wall mesh, so they arrive free as holes. Penetrations (anything else crossing the face plane: pipes, beams, windows if the void was not punched) are sectioned and subtracted as convex-hull holes. Switch off with the *Subtract penetrations* checkbox. | `fabric_extract.extract_elevation` |
 | Abutments | Any `IfcSlab`/`IfcRoof` that reaches the face plane inside the region is sectioned on the plane and its upper edge becomes the abutment *line*: level for a flat roof or slab, pitched where a roof meets a gable (two slopes meeting at the ridge, say). The splash zone is a band of constant vertical height above that line, so it follows the roof. A slab that passes through the face is also cut out of the region. Manual levels can be added per elevation. | `fabric_extract._section`, `_top_line`, `cladding_primitives.splash_rings` |
 | Corner detail | Three details, set for the whole job and reported per corner in the panel. **Mitred** (default) cuts the whole buildup on the corner's bisector plane, so every layer wraps. **Master-lap, open joint** is a panel detail: at an external corner the master board wraps past and runs out to the far face of the other side's cladding while the board behind stops a joint gap short of the master's back; at a re-entrant corner nothing wraps, so the master runs into the corner and the other board stops a joint gap clear of the master's whole buildup. The layers behind a lap stay square at the corner. **Square** stops everything at the wall corner. Away from a right angle both lap ends slope with depth. Each corner gets a row under its chain naming the two faces, the angle, whether it is external or re-entrant, and which face masters, with a Swap button; clicking the row highlights that corner in the model. A corner bead or profile is not modelled yet. | `cladding_primitives.corner_ends`, `app.cornerRows` |
@@ -183,7 +187,7 @@ the title area.
 
 | File | Lines | Budget |
 |---|---|---|
-| fabric_extract.py | 397 | 400 |
+| fabric_extract.py | 421 | 400 |
 | cladding_constants.py | 82 | 80 |
 | cladding_geometry.py | 289 | 400 |
 | cladding_primitives.py | 297 | 300 |
@@ -192,7 +196,11 @@ the title area.
 | ifc_generator.py | 384 | 400 |
 | dxf_generator.py | 256 | 500 |
 | app.py | 133 | 150 |
-| templates/index.html | 213 | 500 |
+| templates/index.html | 224 | 500 |
+
+`fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 21 and
+6 lines); splitting the region clean-up — notches, seeded patches — into its own
+module would bring both back inside.
 
 The frontend logic lives beside the template in `static/viewer.js` (Three.js,
 web-ifc, picking, rendering), `static/app.js` (state, Pyodide, downloads) and

@@ -2,25 +2,28 @@
 CladForge — fabric extraction.
 
 Turns picked wall-face triangles into a named elevation: a coplanar region in
-its own (u, v) frame, with openings as interior holes, penetrations subtracted
-and slab/roof abutments detected as lines (level or pitched) for the splash
-zone. Also decides whether two elevations meet at a corner so the UI can
-chain them. Runs once per selection (in Pyodide or via Flask).
+its own (u, v) frame, with openings as interior holes (or notches where they
+break the outline), penetrations subtracted, slab/roof abutments detected as
+lines (level or pitched) for the splash zone, and the region cut back to the
+patches the clicks landed on. Also decides whether two elevations meet at a
+corner so the UI can chain them. Runs once per selection (Pyodide or Flask).
 
 Payload (all coordinates IFC mm, Z-up):
   {"name": "Elevation A",
    "faces":   [[[x,y,z],[x,y,z],[x,y,z]], ...],        # picked triangles
    "outward": [nx,ny,nz],                              # hit normal facing the viewer
+   "seeds":   [[x,y,z], ...],                          # where each pick was clicked
    "context": [{"type": "IfcSlab", "name": "...", "tris": [...]}, ...],
    "options": {"penetrations": true}}
 
-Result: {"ok", "name", "warnings", "frame", "polygons", "width", "height",
-         "area", "abutments": [{"u0","u1","v","line":[[u,v],...],"source",...}], "n_faces"}
+Result: {"ok", "name", "warnings", "frame", "polygons", "notches", "width",
+         "height", "area", "n_holes", "n_faces",
+         "abutments": [{"u0","u1","v","line":[[u,v],...],"source",...}]}
 """
 
 import math
 
-from shapely.geometry import Polygon, MultiPoint, LineString
+from shapely.geometry import Polygon, MultiPoint, LineString, Point
 from shapely.ops import unary_union, polygonize
 from shapely.affinity import translate
 
@@ -268,6 +271,10 @@ def _extract(payload):
         except Exception:
             continue
 
+    region, dropped = _seeded(region, payload.get("seeds"), u)
+    if dropped:
+        result["warnings"].append("%d patch(es) beyond the junction you clicked were left out" % dropped)
+
     # Local origin at the region's bottom-left; everything shifts accordingly.
     umin, vmin, umax, vmax = region.bounds
     region = translate(region, -umin, -vmin)
@@ -293,15 +300,34 @@ def _extract(payload):
     return result
 
 
-def _notches(polygons, limit=300.0):
-    """Openings that break the outline, returned as (u0, u1, v0, v1).
+def _seeded(region, seeds, u, tol=100.0):
+    """(region, dropped), keeping only the patches the clicks landed on. A slab cut
+    through a face leaves it in pieces and the piece beyond that junction is another
+    wall, so each pick's own point picks its patch: a magic wand, not everything
+    coplanar. A point just off a patch takes the nearest; with none, nothing drops."""
+    pts = [Point(_dot(s, u), float(s[2])) for s in (seeds or []) if s and len(s) >= 3]
+    parts = list(iter_polygons(region))
+    if not pts or len(parts) < 2:
+        return region, 0
+    keep = []
+    for q in pts:
+        hit = next((pg for pg in parts if pg.intersects(q)), None)
+        if hit is None:
+            hit = min(parts, key=lambda pg: pg.distance(q))
+            if hit.distance(q) > tol:
+                continue
+        if not any(hit.equals(k) for k in keep):
+            keep.append(hit)
+    return (unary_union(keep), len(parts) - len(keep)) if keep else (region, 0)
 
-    A door runs to the foot of the wall and a window can reach its end, so the void
-    is a bite out of the exterior ring rather than an interior hole — and everything
-    that keys off holes (cavity closers, reveal linings, panel set-out) misses it.
-    Each bite is the difference between a patch and its own bounding box; the ones
-    that count are rectangular and open on exactly one side, which is what tells a
-    door from a gable (triangular) or a stepped wall (open on two)."""
+
+def _notches(polygons, limit=300.0):
+    """Openings that break the outline, as (u0, u1, v0, v1). A door runs to the foot of
+    the wall, so the void is a bite out of the exterior ring rather than an interior hole,
+    and everything keyed off holes (closers, reveal linings, panel set-out) misses it.
+    Each bite is a patch subtracted from its own bounding box; the ones that count are
+    rectangular and open on one side, which tells a door from a gable (triangular) or a
+    stepped wall (open on two)."""
     out = []
     for pg in polygons:
         try:
@@ -314,13 +340,11 @@ def _notches(polygons, limit=300.0):
             umin, vmin, umax, vmax = shell.bounds
             for piece in iter_polygons(rest):
                 u0, v0, u1, v1 = piece.bounds
-                if piece.area < MIN_HOLE_AREA or u1 - u0 < limit or v1 - v0 < limit:
-                    continue
-                if piece.area < 0.9 * (u1 - u0) * (v1 - v0):    # not a rectangular bite
-                    continue
+                if piece.area < max(MIN_HOLE_AREA, 0.9 * (u1 - u0) * (v1 - v0)):
+                    continue                      # too small, or not a rectangular bite
                 open_sides = [abs(u0 - umin) < 1.0, abs(u1 - umax) < 1.0,
                               abs(v0 - vmin) < 1.0, abs(v1 - vmax) < 1.0]
-                if sum(open_sides) != 1:
+                if u1 - u0 < limit or v1 - v0 < limit or sum(open_sides) != 1:
                     continue
                 out.append([round(u0, 2), round(u1, 2), round(v0, 2), round(v1, 2)])
         except Exception:   # noqa: BLE001 — a malformed ring just yields no notches

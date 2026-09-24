@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pytest  # noqa: E402
 
-from synthetic import payload, wall_face_with_door, N, U, ORIGIN  # noqa: E402
+from synthetic import payload, wall_face_with_door, box_tris, world, N, U, ORIGIN  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
 from cladding_constants import _parse, frame_to_world  # noqa: E402
 from cladding_primitives import buildup_depth, openings  # noqa: E402
@@ -195,3 +195,28 @@ def test_a_gable_is_not_mistaken_for_an_opening():
     stepped wall loses a corner. Neither is an opening."""
     assert extract_elevation(payload(pitched=True))["notches"] == []
     assert extract_elevation(payload())["notches"] == []
+
+
+def test_the_click_position_limits_the_region_to_its_own_patch():
+    """A slab cut clean through a face leaves it in two pieces. Only the piece the
+    click landed on is clad: the other side of the junction is a different wall."""
+    pay = payload()
+    # A slab band right across the face, so the region splits above and below it.
+    pay["context"] = [{"type": "IfcSlab", "name": "Floor",
+                       "tris": [[list(q) for q in t]
+                                for t in box_tris(-500.0, 8500.0, 1400.0, 1700.0, -300.0, 300.0)]}]
+    both = extract_elevation(dict(pay))
+    assert both["ok"] and len(both["polygons"]) == 2, both["warnings"]
+
+    low = extract_elevation(dict(pay, seeds=[list(world(4000.0, 600.0))]))
+    assert len(low["polygons"]) == 1, low["warnings"]
+    assert low["height"] < 1450.0, low["height"]          # only the band below the slab
+    assert any("left out" in w for w in low["warnings"])
+
+    high = extract_elevation(dict(pay, seeds=[list(world(4000.0, 2500.0))]))
+    assert len(high["polygons"]) == 1
+    assert high["height"] < 1400.0 and high["frame"]["origin"][2] > 1600.0
+
+    # Two clicks, one in each piece: both are kept, as before seeding.
+    pair = extract_elevation(dict(pay, seeds=[list(world(4000.0, 600.0)), list(world(4000.0, 2500.0))]))
+    assert len(pair["polygons"]) == 2 and not any("left out" in w for w in pair["warnings"])

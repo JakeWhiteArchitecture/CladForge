@@ -1,6 +1,7 @@
 /* CladForge app — elevation state, Pyodide engine, live preview, downloads. */
 
-const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDragging: false, model: null, seq: 0 };
+const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDragging: false,
+               model: null, seq: 0, editing: null };
 let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null;
 
 // ─── ELEVATIONS AND CHAINS ───
@@ -28,6 +29,7 @@ function newElevation(chain) {
 
 function deleteElevation() {
     if (state.active < 0) return;
+    closeEditWidget();
     const e = state.elevations.splice(state.active, 1)[0];
     e.highlights.forEach(h => highlightGroup.remove(h));
     e.chain.members = e.chain.members.filter(m => m !== e);
@@ -263,6 +265,34 @@ async function relinkChain(chain) {
     updatePreview();
 }
 
+// ─── EDIT MODE ───
+// A built chain is edited, not re-picked. Clicking one of its faces brings its
+// setting-out over the view: the offset shifts every batten and board along the run.
+function openEditWidget(e) {
+    state.editing = e;
+    document.getElementById('edit-widget').style.display = '';
+    document.getElementById('edit-title').textContent = chainLabel(e);
+    updateSliderRange();
+    setStatus('Editing ' + chainLabel(e) + ' — shift the setting-out along the run', 'ready');
+}
+
+function closeEditWidget() {
+    if (!state.editing) return;
+    state.editing = null;
+    document.getElementById('edit-widget').style.display = 'none';
+}
+
+function onEditSlide(value) {
+    document.getElementById('offset').value = value;
+    onSlider(value);
+    document.getElementById('edit-offset-val').textContent = Math.round(value) + ' mm';
+}
+
+function nudgeOffset(step) {
+    const s = document.getElementById('edit-offset');
+    onEditSlide(s.value = Math.max(+s.min, Math.min(+s.max, parseFloat(s.value) + step)));
+}
+
 // ─── PICKING → EXTRACTION ───
 function setPickMode(on) {
     state.pickMode = on;
@@ -276,17 +306,19 @@ function onViewportClick(event) {
     if (!hit) return;
     const faces = coplanarFaces(hit.mesh, hit.faceIndex);
     if (!faces) { setStatus('That face is not vertical — pick a wall face', 'busy'); return; }
+    // A face already clad is not a selection any more. Clicking it edits its chain's
+    // setting-out instead of piling another elevation onto the same plane.
+    const owner = state.elevations.find(m => m.result && m.result.ok && samePlane(hit, m));
+    if (owner && owner.chain.built) { setActive(state.elevations.indexOf(owner)); openEditWidget(owner); return; }
+    closeEditWidget();
     if (state.active < 0) newElevation();
     let e = state.elevations[state.active];
-    // Coplanar with the active elevation: merge. Otherwise start a new elevation in the
-    // same chain; after extraction it either links at a corner or moves to its own chain.
-    if (!samePlane(hit, e)) {
-        const match = e.chain.members.find(m => samePlane(hit, m));
-        e = match || newElevation(e.chain);
-    }
+    // Coplanar with an elevation anywhere: merge into it. Otherwise start a new elevation
+    // in the active chain; after extraction it links at a corner or moves to its own chain.
+    if (!samePlane(hit, e)) e = owner || newElevation(e.chain);
     const existing = e.picks.findIndex(p => p.mesh === hit.mesh && p.faces.includes(hit.faceIndex));
     if (existing >= 0) e.picks.splice(existing, 1);
-    else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal) });
+    else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal), point: toIfc(hit.point) });
     e.highlights.forEach(h => { highlightGroup.remove(h); h.geometry.dispose(); });
     e.highlights = e.picks.map(p => highlightFaces(p.mesh, p.faces));
     if (!e.storey) { const meta = meshMeta[hit.mesh.userData.index]; e.storey = meta && meta.storey ? meta.storey : null; }
@@ -305,6 +337,7 @@ async function runExtraction(e) {
     renderElevationList();
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
     const payload = { name: e.name, faces: tris, outward: e.picks[0].normal, context,
+                      seeds: e.picks.map(p => p.point).filter(Boolean),
                       options: { penetrations: document.getElementById('penetrations').checked } };
     try {
         const t0 = performance.now();
@@ -403,6 +436,9 @@ function updateSliderRange() {
     const e = state.elevations[state.active];
     if (e) { e.chain.offset = Math.max(-half, Math.min(half, e.chain.offset)); s.value = e.chain.offset; }
     document.getElementById('offset-val').textContent = (e ? e.chain.offset : 0) + ' mm';
+    const w = document.getElementById('edit-offset');   // the widget mirrors the panel slider
+    w.min = s.min; w.max = s.max; w.step = s.step; w.value = s.value;
+    document.getElementById('edit-offset-val').textContent = (e ? Math.round(e.chain.offset) : 0) + ' mm';
 }
 
 function onSlider(value) {
@@ -410,6 +446,8 @@ function onSlider(value) {
     if (!e) return;
     e.chain.offset = parseFloat(value);
     document.getElementById('offset-val').textContent = e.chain.offset + ' mm';
+    document.getElementById('edit-offset').value = e.chain.offset;
+    document.getElementById('edit-offset-val').textContent = Math.round(e.chain.offset) + ' mm';
     updatePreview();
 }
 
@@ -503,6 +541,7 @@ function retryOnServer() {
 async function loadModel(file, force) {
     const info = document.getElementById('model-info');
     state.file = file;
+    closeEditWidget();
     try {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
         state.elevations = []; state.chains = []; state.active = -1; state.seq = 0; renderElevationList();
@@ -656,10 +695,15 @@ function initApp() {
     drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files.length) loadModel(e.dataTransfer.files[0]); });
-    const slider = document.getElementById('offset');
-    slider.addEventListener('pointerdown', () => { state.sliderDragging = true; });
     const release = () => { if (state.sliderDragging) { state.sliderDragging = false; updatePreview(); } };
-    slider.addEventListener('pointerup', release);
-    slider.addEventListener('change', release);
+    for (const id of ['offset', 'edit-offset']) {
+        const slider = document.getElementById(id);
+        slider.addEventListener('pointerdown', () => { state.sliderDragging = true; });
+        slider.addEventListener('pointerup', release);
+        slider.addEventListener('change', release);
+    }
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && !document.getElementById('chain-wizard').classList.contains('open')) closeEditWidget();
+    });
     document.getElementById('download-reminder').addEventListener('click', e => { if (e.target.id === 'download-reminder') e.currentTarget.classList.remove('open'); });
 }

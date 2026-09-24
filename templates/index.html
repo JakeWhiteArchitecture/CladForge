@@ -177,6 +177,17 @@
         </div>
         <div class="status-chip busy" id="status-chip">Loading…</div>
         <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
+        <div class="edit-widget" id="edit-widget" style="display:none">
+            <div class="edit-head"><span id="edit-title">Chain 1</span>
+                <button class="mini" onclick="closeEditWidget()" title="Close (Esc)">✕</button></div>
+            <div class="slider-row">
+                <button class="mini" onclick="nudgeOffset(-5)" title="Shift left 5 mm">◀</button>
+                <input type="range" id="edit-offset" min="-300" max="300" step="5" value="0" oninput="onEditSlide(this.value)">
+                <button class="mini" onclick="nudgeOffset(5)" title="Shift right 5 mm">▶</button>
+                <span id="edit-offset-val">0 mm</span>
+            </div>
+            <p class="hint" style="margin:2px 0 0">Shifts the battens and boards along the run, ± half a bay. Click another clad face to edit its chain.</p>
+        </div>
     </div>
 
     <div id="chain-wizard" role="dialog" aria-modal="true" aria-label="Make chain">
