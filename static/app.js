@@ -347,9 +347,26 @@ async function runExtraction(e) {
         renderElevationList();
         return;
     }
-    if (e._running) return;                 // already in flight, do not double up
+    // One attempt per elevation at a time. A call that arrives mid-flight is never
+    // dropped: it is remembered and run once the current one ends, with the picks as
+    // they are then — so a pick added while extracting is not lost, and nothing stalls
+    // silently behind a flag that was never cleared.
+    if (e._running) {
+        e._again = true;
+        log(`${e.name}: still extracting — will run again with the latest picks`);
+        return;
+    }
     e._running = true;
     e.pending = false;
+    try {
+        await extractOnce(e);
+    } finally {
+        e._running = false;
+    }
+    if (e._again) { e._again = false; return runExtraction(e); }
+}
+
+async function extractOnce(e) {
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
     const { elements: context, dropped, triangles: nTris } = contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300, e.picks[0].normal);
@@ -399,16 +416,14 @@ _json.dumps(_ex(_pl))`);
         // only way back is a fresh one. Rebuild it once and retry before giving up.
         if (/fatally failed|Aborted/i.test(err.message || '') && !e._restarted) {
             e._restarted = true;
-            e._running = false;
             e.pending = true;
-            await restartEngine();   // resumes every elevation still without a result
+            restartEngine();         // resumes every elevation still without a result
             return;
         }
         e.result = null; e.error = 'Extraction error: ' + err.message;
         log(`${e.name}: threw — ${err.message}`);
         setStatus(e.name + ': ' + e.error, 'busy');
     }
-    e._running = false;
     renderElevationList();
     updateSliderRange();
     updatePreview();

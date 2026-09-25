@@ -201,6 +201,17 @@ async function main() {
     });
     console.log('engine rebuild:', JSON.stringify(recovered));
     await page.waitForTimeout(3000);
+    // A second extraction arriving while one is in flight must not be dropped or lock the
+    // elevation: it is remembered and run when the first ends.
+    console.log('re-entrant extraction:', await page.evaluate(async () => {
+        const e = state.elevations[0];
+        e.result = null;
+        const first = runExtraction(e);
+        const second = runExtraction(e);          // arrives mid-flight
+        await first; await second;
+        for (let i = 0; i < 40 && (e._running || !e.result); i++) await new Promise(r => setTimeout(r, 250));
+        return JSON.stringify({ extracted: !!(e.result && e.result.ok), running: !!e._running, queued: !!e._again });
+    }));
     console.log('nothing left stuck:', await page.evaluate(() =>
         state.elevations.filter(e => e.picks.length && !e.result && !e.error).map(e => e.name).join(',') || 'none'));
     console.log('diagnostics:', await page.evaluate(() => {
