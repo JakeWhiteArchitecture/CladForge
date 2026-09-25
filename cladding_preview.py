@@ -5,7 +5,7 @@ check_rules is re-exported here so callers have one import."""
 from cladding_constants import _parse
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
-from cladding_primitives import buildup_depth, chain_layout, corner_detail
+from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
 from cladding_checks import check_rules  # noqa: F401 — public API lives here
 
 
@@ -14,6 +14,16 @@ def _build_all(p):
     live = [clip_elevation(e) for e in p["elevations"] if e.get("ok", True) and e.get("polygons")]
     p["elevations"] = live      # the outline, splash bands and trimming all follow the clip
     layout = chain_layout(live, buildup_depth(p), corner_detail(p))
+    # One course datum per chain: the lowest level any member starts cladding at.
+    datums = {}
+    for elev in live:
+        if elev.get("chain"):
+            lo, _hi = clip_bounds_v(elev)
+            z = float(elev["frame"]["origin"][2]) + max(base_level(elev, p["splash"]), lo)
+            datums[elev["chain"]] = min(z, datums.get(elev["chain"], z))
+    for elev in live:
+        if elev.get("chain") in datums:
+            elev["course_datum_z"] = datums[elev["chain"]]
     for elev in live:
         m, d, i = build_elevation(p, elev, layout.get(elev.get("name")))
         meshes, dims = meshes + m, dims + d

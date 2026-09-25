@@ -189,6 +189,20 @@ def _section(tris, n, d, u):
 ZONE_PLANES = (0.5, 1.0)   # fractions of the cladding depth, beyond the face, to section at
 
 
+def _meets_foot(zone, top, vmin, umin, umax, depth):
+    """Does a slab or roof meet the face along its foot, as a roof does under a dormer?
+
+    The wall section alone cannot tell that from the ground slab a wall stands on: both
+    top out at the foot. What differs is in front. The roof carries on out under the
+    cladding and catches the water off it, so it needs the splash zone; a slab whose edge
+    stops at the wall has nothing in the cladding zone and the wizard's answer about the
+    foot stands. The roof falls away from the face, so the tolerance grows with the depth."""
+    if zone is None or abs(top - vmin) > EDGE_MARGIN:
+        return False
+    line = _top_line(zone, umin, umax)
+    return bool(line) and max(v for _u, v in line) >= vmin - EDGE_MARGIN - depth
+
+
 def _zone_section(tris, n, d, u, depth):
     """What stands in the cladding zone in front of the face.
 
@@ -330,7 +344,8 @@ def _extract(payload):
                 line = _top_line(shape, umin0, umax0)
                 if line:
                     top = max(v for _u, v in line)
-                    if vmin0 + EDGE_MARGIN < top < vmax0 - EDGE_MARGIN:
+                    if vmin0 + EDGE_MARGIN < top < vmax0 - EDGE_MARGIN or \
+                            _meets_foot(zone, top, vmin0, umin0, umax0, clad_depth):
                         abutments.append({"line": line, "source": elem.get("type") or etype,
                                           "name": elem.get("name", "")})
                 if straddles:

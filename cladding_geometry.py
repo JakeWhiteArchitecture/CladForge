@@ -127,6 +127,19 @@ def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None):
     return d
 
 
+def _courses(elev, v0, H, pitch):
+    """Course starts up the face. Within a chain every face is set out from one level —
+    the lowest clad start in the chain — so horizontal joints line up round the corners
+    even where the faces' bottoms differ, as on a dormer sitting on a sloping roof. The
+    first course may start below this face's own base and is cut there."""
+    datum = elev.get("course_datum_z")
+    if datum is None:
+        return stacked_positions(v0, H, pitch)
+    local = float(datum) - float(elev["frame"]["origin"][2])
+    start = local + math.floor((v0 - local) / pitch + 1e-9) * pitch
+    return stacked_positions(start, H, pitch)
+
+
 def _batten_dims(name, battens, pitch, along_u, H_or_W):
     """The c/c dimension between two regular battens, and the end distance to the edge
     batten when it differs. Measuring c/c from the edge batten reported the end
@@ -173,25 +186,29 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
-    courses = stacked_positions(v0, H, cover)
+    courses = _courses(elev, v0, H, cover)
     for j, v in enumerate(courses):
         # Set each course out along the part of the face it actually crosses, so a run
         # broken by a gable or an opening gets no seam it does not need.
-        runs = strip_intervals(region, v, v + face) if region is not None else [(0.0, W)]
+        lo = max(v, v0)          # a course set out from the chain datum is cut at the base
+        if v + face - lo < 1.0:
+            continue
+        runs = strip_intervals(region, lo, v + face) if region is not None else [(0.0, W)]
         piece = 0
         for a, b in runs:
             segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap)
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1
-                meshes.append(_prism(_rect(s, v, e, v + face), depth, p["plank_t"], frame, "plank",
+                meshes.append(_prism(_rect(s, lo, e, v + face), depth, p["plank_t"], frame, "plank",
                                      "%s Plank C%d-%d" % (name, j + 1, piece), name))
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
     dims += _batten_dims(name, battens, p["batten_centres"], True, W)
-    if courses:
-        dims.append(_dim(name, [W, courses[0]], [W, courses[0] + cover], "Course %.0f" % cover, 300, [1, 0],
+    full = [v for v in courses if v >= v0 - 0.5]
+    if full:
+        dims.append(_dim(name, [W, full[0]], [W, full[0] + cover], "Course %.0f" % cover, 300, [1, 0],
                          "course", cover))
         dims.append(_dim(name, [W, courses[-1]], [W, H], "Cut %.0f" % (H - courses[-1]), 600, [1, 0]))
     return depth + p["plank_t"]
@@ -272,7 +289,7 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     battens = [u for u in supports if all(abs(u - j) > bw / 2 for j in jambs)]
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cavity_t = depth - cavity_start
-    courses = stacked_positions(v0, H, p["panel_h"] + gap)
+    courses = _courses(elev, v0, H, p["panel_h"] + gap)
     # A noggin between vertical battens sits on the drainage plane and dams it, so the
     # horizontal seams are left unsupported unless a counter-batten layer holds the
     # battens off the wall and the water can run down behind them.
@@ -284,8 +301,11 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
                                      p["batten_d"], frame, "cross_batten", "%s Cross Batten C%d-%d" % (name, j + 1, k + 1), name))
     info["seam_noggins"] = bool(p["has_cb"]) and len(courses) > 1
     for j, v in enumerate(courses):
+        lo = max(v, v0)          # a course set out from the chain datum is cut at the base
+        if v + p["panel_h"] - lo < 1.0:
+            continue
         for k, (s, e, _full) in enumerate(panels):
-            meshes.append(_prism(_rect(s, v, e, v + p["panel_h"]), depth, p["panel_t"], frame, "panel",
+            meshes.append(_prism(_rect(s, lo, e, v + p["panel_h"]), depth, p["panel_t"], frame, "panel",
                                  "%s Panel C%d-%d" % (name, j + 1, k + 1), name))
     face = depth + p["panel_t"]
     fulls = [pn for pn in panels if pn[2]]
@@ -302,8 +322,9 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
         dims.append(_dim(name, [fulls[0][0], H], [fulls[0][1], H], "Panel %.0f" % (fulls[0][1] - fulls[0][0]), 300, [0, 1]))
     for o in holes:
         dims.append(_dim(name, [o[0], o[3]], [o[1], o[3]], "Opening %.0f" % (o[1] - o[0]), 250, [0, 1]))
-    if courses:
-        dims.append(_dim(name, [W, courses[0]], [W, courses[0] + p["panel_h"]], "Course %.0f" % p["panel_h"],
+    full = [v for v in courses if v >= v0 - 0.5]
+    if full:
+        dims.append(_dim(name, [W, full[0]], [W, full[0] + p["panel_h"]], "Course %.0f" % p["panel_h"],
                          300, [1, 0], "course", p["panel_h"]))
     return face
 
