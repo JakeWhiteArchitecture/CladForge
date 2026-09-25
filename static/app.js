@@ -378,7 +378,9 @@ _pl = _json.loads(_payload_json)
 _pl.setdefault("options", {})["clad_depth"] = _buildup_depth(_parse_params(_json.loads(_params_json)))
 _json.dumps(_ex(_pl))`);
         e.result = JSON.parse(out);
+        const slow = e.result.timings_ms || {};
         log(`${e.name}: ${e.result.ok ? 'ok' : 'FAILED'} in ${Math.round(performance.now() - t0)} ms`
+            + (Object.keys(slow).length ? ` · slowest: ${Object.entries(slow).map(([k, v]) => k + ' ' + v + 'ms').join(', ')}` : '')
             + (e.result.warnings || []).map(w => ' · ' + w).join(''));
         if (e.result.ok) {
             if (dropped) e.result.warnings.push(`${dropped} nearby element(s) left out to keep the engine within memory`);

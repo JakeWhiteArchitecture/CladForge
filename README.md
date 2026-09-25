@@ -216,7 +216,7 @@ the title area.
 
 | File | Lines | Budget |
 |---|---|---|
-| fabric_extract.py | 467 | 400 |
+| fabric_extract.py | 499 | 400 |
 | cladding_constants.py | 82 | 80 |
 | cladding_geometry.py | 314 | 400 |
 | cladding_primitives.py | 327 | 300 |
@@ -227,7 +227,7 @@ the title area.
 | app.py | 78 | 150 |
 | templates/index.html | 248 | 500 |
 
-`fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 67 and
+`fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 99 and
 6 lines); splitting the region clean-up — notches, seeded patches — into its own
 module would bring both back inside.
 
@@ -254,6 +254,13 @@ two PyPI deps that are not in the Pyodide distribution from local copies
 
 ## Limitations
 
+- Pyodide runs on the page's main thread, so while an extraction is running nothing
+  repaints — a slow one looks exactly like a hang. The engine prints each stage to the
+  console as it starts (`[extract] ...`), so the last line names the stage that did not
+  finish, and the result carries `timings_ms` for the slowest context elements.
+- Sampling the upper edge of an abutment costs one ray cast per probe, so probing every
+  vertex is quadratic in the section's complexity: a faceted roof with 6,000 vertices took
+  22 seconds. Probes are capped at `MAX_TOP_SAMPLES` (240), which brings that to 0.85 s.
 - The engine runs in a fixed WASM heap, and overrunning it kills the runtime outright
   rather than raising something Python can catch. Context is therefore capped at
   `CONTEXT_TRI_BUDGET` triangles (60,000), sending the elements that come closest to the
