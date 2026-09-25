@@ -67,6 +67,7 @@ async function main() {
     // Aim at a named element's face and click the middle of the canvas. Named rather
     // than positioned, because the viewer recentres the model on import.
     const box = await page.locator('#viewport canvas').boundingBox();
+    const cameraMoves = [];
     async function lookAt(name, dir) {
         const ok = await page.evaluate(([name, dir]) => {
             const meta = meshMeta.find(m => m.name === name);
@@ -81,8 +82,13 @@ async function main() {
         }, [name, dir]);
         if (!ok) throw new Error('element not found: ' + name);
         await page.waitForTimeout(350);
+        const eye = () => page.evaluate(() => camera.position.toArray().map(Math.round).join(','));
+        const before = await eye();
         await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
         await page.waitForTimeout(1200);
+        // Picking a face must leave the view where the user put it.
+        const after = await eye();
+        if (before !== after) cameraMoves.push(`${name}: ${before} -> ${after}`);
     }
     // Picking generates nothing: the chain has to be built through the wizard first.
     async function buildChain(type, orient, useButton, levels) {
@@ -181,10 +187,26 @@ async function main() {
     }));
     const recovered = await page.evaluate(async () => {
         const before = pyReady;
-        const ok = await restartEngine();   // what the app does when the runtime dies
-        return { before, rebuilt: ok, ready: pyReady };
+        // A pick made while the engine is down must be queued, not silently dropped.
+        const e = state.elevations[0];
+        const kept = e.result;
+        e.result = null;
+        pyReady = false;
+        await runExtraction(e);
+        const whileDown = { pending: !!e.pending, state: e.result ? 'extracted' : (e.error ? 'error' : 'waiting') };
+        pyReady = true;
+        e.result = kept;
+        const ok = await restartEngine();   // rebuilds, then resumes anything queued
+        return { before, whileDown, rebuilt: ok, ready: pyReady };
     });
     console.log('engine rebuild:', JSON.stringify(recovered));
+    await page.waitForTimeout(3000);
+    console.log('nothing left stuck:', await page.evaluate(() =>
+        state.elevations.filter(e => e.picks.length && !e.result && !e.error).map(e => e.name).join(',') || 'none'));
+    console.log('diagnostics:', await page.evaluate(() => {
+        const d = cladforge();
+        return `${d.elevations.length} elevations, states ${d.elevations.map(x => x.state).join('/')}, ${d.log.length} log lines`;
+    }));
     await page.waitForTimeout(500);
     console.log('preview still works after rebuild:', await page.evaluate(async () => {
         await updatePreview();
@@ -403,6 +425,7 @@ async function main() {
     // The server importer, the fallback for models web-ifc cannot build.
     await page.evaluate(() => loadModel(state.file, 'server'));
     await page.waitForFunction(() => state.model && state.model.reader.indexOf('server') >= 0, null, { timeout: 180000 });
+    console.log('camera moved on a pick:', cameraMoves.length ? cameraMoves : 'never');
     console.log('server import:', await page.evaluate(() => `${state.model.meshes} elements, ${state.model.storeys} storeys, reader ${state.model.reader}`));
 
     console.log('SMOKE OK');

@@ -33,6 +33,7 @@
                     <button class="turn-btn" data-value="orbit" onclick="setPickMode(false)">Orbit only</button>
                 </div>
                 <p class="hint">Click a wall face to add its coplanar patch to the active elevation; click again to remove it. Click a face round a corner and it becomes the next elevation in the chain, with the coursing carried round. Faces that don't meet the chain start a new one. Openings punched by the importer become holes.</p>
+                <p class="hint">Stuck or misbehaving? Run <b>cladforge()</b> in the browser console for the engine state and a log of every extraction.</p>
                 <p class="hint">Picking generates nothing on its own. When the chain is complete, press <b>Enter</b> or use <b>Make chain</b> at the top right of the view to choose the cladding and build it. After that the whole panel edits live.</p>
                 <label class="chk"><input type="checkbox" id="penetrations" checked onchange="state.elevations.forEach(runExtraction)"> Subtract penetrations crossing the face</label>
                 <div id="elevation-list"></div>

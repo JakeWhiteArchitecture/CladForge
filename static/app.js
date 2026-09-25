@@ -98,7 +98,7 @@ function elevationCard(e, i) {
         : `<label onclick="event.stopPropagation()"><input type="checkbox" ${ab.enabled ? 'checked' : ''} onchange="toggleAbutment(${i}, '${abutKey(ab)}', this.checked)"> ${ab.name || ab.source} (${ab.source}) ${ab.pitched ? `pitched ${Math.round(ab.v_min)}–${Math.round(ab.v)}, splash follows the roof` : '@ ' + Math.round(ab.v)}</label>`).join('');
     let warn = r && r.warnings && r.warnings.length ? `<div class="elev-warn">${r.warnings.join(' · ')}</div>` : '';
     if (e.error) warn = `<div class="elev-warn elev-error">✖ ${e.error} <button class="mini" onclick="event.stopPropagation(); runExtraction(state.elevations[${i}])">Retry</button></div>`;
-    else if (!ok && e.picks.length) warn = `<div class="elev-warn">Extracting…</div>`;
+    else if (!ok && e.picks.length) warn = `<div class="elev-warn">${e.pending ? 'Queued — waiting for the engine' : 'Extracting…'}</div>`;
     const clipped = ok && (e.clipLo > 0.5 || (e.clipHi !== null && e.clipHi < r.width - 0.5));
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
@@ -341,7 +341,15 @@ function onViewportClick(event) {
 
 async function runExtraction(e) {
     if (!e.picks.length) { e.result = null; renderElevationList(); updatePreview(); return; }
-    if (!pyReady) { setStatus('Engine still loading…', 'busy'); return; }
+    if (!pyReady) {   // engine loading or rebuilding: queue it, initPyodide picks it up
+        e.pending = true;
+        setStatus('Waiting for the engine — ' + e.name + ' is queued', 'busy');
+        renderElevationList();
+        return;
+    }
+    if (e._running) return;                 // already in flight, do not double up
+    e._running = true;
+    e.pending = false;
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
     const { elements: context, dropped, triangles: nTris } = contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300, e.picks[0].normal);
@@ -353,9 +361,12 @@ async function runExtraction(e) {
     const payload = { name: e.name, faces: tris, outward: e.picks[0].normal, context,
                       seeds: e.picks.map(p => p.point).filter(Boolean),
                       options: { penetrations: document.getElementById('penetrations').checked } };
+    const json = JSON.stringify(payload);
+    log(`${e.name}: extracting — ${tris.length} faces, ${context.length} context elements, `
+        + `${nTris} triangles, ${dropped} dropped, payload ${Math.round(json.length / 1024)} kB`);
     try {
         const t0 = performance.now();
-        pyodide.globals.set('_payload_json', JSON.stringify(payload));
+        pyodide.globals.set('_payload_json', json);
         pyodide.globals.set('_params_json', JSON.stringify(getParams()));
         // The engine works out the cladding zone's depth, so the rule lives in one place.
         const out = await pyodide.runPythonAsync(`
@@ -367,13 +378,14 @@ _pl = _json.loads(_payload_json)
 _pl.setdefault("options", {})["clad_depth"] = _buildup_depth(_parse_params(_json.loads(_params_json)))
 _json.dumps(_ex(_pl))`);
         e.result = JSON.parse(out);
-        console.log(`extract ${e.name}: ${Math.round(performance.now() - t0)} ms, ok=${e.result.ok}`, e.result.warnings);
+        log(`${e.name}: ${e.result.ok ? 'ok' : 'FAILED'} in ${Math.round(performance.now() - t0)} ms`
+            + (e.result.warnings || []).map(w => ' · ' + w).join(''));
         if (e.result.ok) {
             if (dropped) e.result.warnings.push(`${dropped} nearby element(s) left out to keep the engine within memory`);
             const linked = await linkIntoChain(e);
             const corner = linked ? `${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)` : e.name + ' extracted';
             setStatus(e.chain.built ? corner : corner + ' — press Enter to build', 'ready');
-            frameElevation(e.result);
+            // The view stays where it was put: picking a face must not move the camera.
         } else {
             e.error = e.result.warnings.join('; ') || 'Extraction failed';
             e.result = null;
@@ -385,11 +397,16 @@ _json.dumps(_ex(_pl))`);
         // only way back is a fresh one. Rebuild it once and retry before giving up.
         if (/fatally failed|Aborted/i.test(err.message || '') && !e._restarted) {
             e._restarted = true;
-            if (await restartEngine()) return runExtraction(e);
+            e._running = false;
+            e.pending = true;
+            await restartEngine();   // resumes every elevation still without a result
+            return;
         }
         e.result = null; e.error = 'Extraction error: ' + err.message;
+        log(`${e.name}: threw — ${err.message}`);
         setStatus(e.name + ': ' + e.error, 'busy');
     }
+    e._running = false;
     renderElevationList();
     updateSliderRange();
     updatePreview();
@@ -687,14 +704,44 @@ _to_dxf(_o["geometry"], _p, _o["info"])`);
     finally { busy(btn, false); }
 }
 
+// ─── DIAGNOSTICS ───
+// Extraction runs in a WASM runtime that can die outright, so the log is the only
+// record of what a stuck elevation was doing. cladforge() dumps it with the state.
+const LOG = [];
+function log(line) {
+    LOG.push(new Date().toISOString().slice(11, 23) + '  ' + line);
+    if (LOG.length > 300) LOG.shift();
+    console.log('[cladforge]', line);
+}
+
+function cladforge() {
+    const dump = {
+        engine: { pyReady, ifcReady, restarting: _restarting, alive: !!pyodide },
+        model: state.model && { file: state.file && state.file.name, meshes: state.model.meshes,
+                                storeys: state.model.storeys, reader: state.model.reader },
+        elevations: state.elevations.map(e => ({
+            name: e.name, chain: e.chain.name, built: e.chain.built, picks: e.picks.length,
+            state: e.result ? 'extracted' : (e.error ? 'error' : (e.pending ? 'queued' : (e._running ? 'running' : 'idle'))),
+            error: e.error || null,
+            size: e.result ? `${Math.round(e.result.width)} x ${Math.round(e.result.height)}` : null,
+            warnings: (e.result && e.result.warnings) || [],
+        })),
+        log: LOG,
+    };
+    console.log(JSON.stringify(dump, null, 2));
+    return dump;
+}
+window.cladforge = cladforge;
+
 // ─── PYODIDE ───
 async function restartEngine() {
     if (_restarting) return false;          // one rebuild at a time
     _restarting = true;
+    log('engine died — rebuilding');
     setStatus('Engine stopped — rebuilding it…', 'busy');
     pyReady = false; ifcReady = false; pyodide = null; window.pyodide = null;
     try {
-        await initPyodide(false);           // the caller retries; do not re-run everything
+        await initPyodide();     // resumes anything queued while it was down
     } catch (err) {
         console.error('engine restart failed', err);
     }
@@ -702,7 +749,7 @@ async function restartEngine() {
     return pyReady;
 }
 
-async function initPyodide(resume = true) {
+async function initPyodide() {
     try {
         setStatus('Loading Python runtime…', 'busy');
         pyodide = await loadPyodide();
@@ -722,8 +769,11 @@ import sys
 sys.path.insert(0, '/home/pyodide')
 import cladding_preview, fabric_extract, dxf_generator`);
         pyReady = true;
+        log('engine ready');
         setStatus(allMeshes.length ? 'Ready — click a wall face' : 'Ready — load an IFC', 'ready');
-        if (resume) for (const e of state.elevations) if (e.picks.length && !e.result) runExtraction(e);
+        const queued = state.elevations.filter(e => e.picks.length && !e.result);
+        if (queued.length) log(`engine ready — resuming ${queued.map(e => e.name).join(', ')}`);
+        for (const e of queued) runExtraction(e);
         updatePreview();
     } catch (err) { console.error(err); setStatus('Engine failed to load: ' + err.message, 'busy'); }
 }

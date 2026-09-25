@@ -576,6 +576,8 @@ function setLayerVisible(key, on) {
     for (const g of cladGroup.children) if (g.name === key) g.visible = on;
 }
 
+// Nothing in the app calls this: picking a face leaves the camera alone. It stays as a
+// viewer utility, used by the browser test to put a known elevation on screen.
 function frameElevation(e) {
     // Three-quarter view of one elevation, looking at the face from outside.
     const M = frameMatrix(e.frame, 0);
