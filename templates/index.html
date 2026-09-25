@@ -75,6 +75,7 @@
                     </div>
                     <div class="field"><label>C/B width</label><input type="number" id="cb_w" value="50" min="25" max="100" oninput="onNumeric()"></div>
                     <div class="field"><label>C/B depth</label><input type="number" id="cb_d" value="38" min="19" max="100" oninput="onNumeric()"></div>
+                    <div class="field"><label>C/B centres</label><input type="number" id="cb_centres" value="600" min="300" max="900" step="10" oninput="onNumeric()"></div>
                 </div>
                 <div class="field"><label>Splash zone above abutments <span class="unit">0–300 mm, 150 recommended</span></label>
                     <input type="number" id="splash" value="150" min="0" max="300" step="10" oninput="onNumeric()"></div>
@@ -108,7 +109,7 @@
                     <div class="field"><label>Max height <span class="unit">1200–3000</span></label><input type="number" id="panel_h" value="2400" min="1200" max="3000" step="10" oninput="onNumeric()"></div>
                     <div class="field"><label>Joint gap <span class="unit">0–15</span></label><input type="number" id="panel_gap" value="10" min="0" max="15" oninput="onNumeric()"></div>
                 </div>
-                <p class="hint">Panel width drives batten centres: joints land on a batten, intermediate battens keep spans under 600 mm. Horizontal joints are open joints at the gap with noggins behind.</p>
+                <p class="hint">Panel width drives batten centres: joints land on a batten, intermediate battens keep spans under 600 mm. Horizontal joints are open joints at the gap. Noggins behind them are only generated where counter-battens are on: between vertical battens a noggin sits on the drainage plane and dams it.</p>
             </div>
 
             <div class="section" id="plank-section">
@@ -164,6 +165,8 @@
             <label><input type="checkbox" checked onchange="setLayerVisible('cladding', this.checked)"><i style="background:#6b8fa3"></i> Cladding &amp; reveals</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('closer', this.checked)"><i style="background:#a0522d"></i> Cavity closers</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('dims', this.checked)"><i style="background:#00ccff"></i> Dimensions</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('faces', this.checked)"><i style="background:#2a9d8f"></i> Picked wall faces</label>
+            <label><input type="checkbox" checked onchange="setLayerVisible('outline', this.checked)"><i style="background:#8ea3b8"></i> Outline &amp; splash</label>
         </div>
         <div class="dim-overlay" id="dim-overlay">
             <div><span class="dim-label">Elevation:</span> <span class="dim-value" id="dim-size">--</span></div>
@@ -174,6 +177,25 @@
         </div>
         <div class="status-chip busy" id="status-chip">Loading…</div>
         <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
+        <div class="edit-widget" id="level-picker" style="display:none">
+            <div class="edit-head"><span id="level-title">Click a point for the TOP of the cladding</span>
+                <span class="wiz-step" id="level-step">Level 1 of 2</span></div>
+            <p class="hint" id="level-note" style="margin:2px 0 8px"></p>
+            <div class="wiz-actions" style="justify-content:flex-end">
+                <button class="btn btn-secondary btn-sm" onclick="dismissLevels()">Dismiss</button>
+            </div>
+        </div>
+        <div class="edit-widget" id="edit-widget" style="display:none">
+            <div class="edit-head"><span id="edit-title">Chain 1</span>
+                <button class="mini" onclick="closeEditWidget()" title="Close (Esc)">✕</button></div>
+            <div class="slider-row">
+                <button class="mini" onclick="nudgeOffset(-5)" title="Shift left 5 mm">◀</button>
+                <input type="range" id="edit-offset" min="-300" max="300" step="5" value="0" oninput="onEditSlide(this.value)">
+                <button class="mini" onclick="nudgeOffset(5)" title="Shift right 5 mm">▶</button>
+                <span id="edit-offset-val">0 mm</span>
+            </div>
+            <p class="hint" style="margin:2px 0 0">Shifts the battens and boards along the run, ± half a bay. Click another clad face to edit its chain.</p>
+        </div>
     </div>
 
     <div id="chain-wizard" role="dialog" aria-modal="true" aria-label="Make chain">
@@ -197,8 +219,8 @@
         </div>
     </div>
 
-    <!-- Runtimes: Pyodide (engine), Three.js r128 (viewer), web-ifc (IFC import) -->
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.27.4/full/pyodide.js" crossorigin="anonymous"></script>
+    <!-- Runtimes: Pyodide 0.29 (engine, CPython 3.13), Three.js r128 (viewer), web-ifc (IFC import) -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/web-ifc@0.0.77/web-ifc-api-iife.js" crossorigin="anonymous"></script>

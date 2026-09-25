@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pytest  # noqa: E402
 
-from synthetic import payload, N, U, ORIGIN  # noqa: E402
+from synthetic import payload, wall_face_with_door, box_tris, world, N, U, ORIGIN  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
 from cladding_constants import _parse, frame_to_world  # noqa: E402
 from cladding_primitives import buildup_depth, openings  # noqa: E402
@@ -169,3 +169,82 @@ def test_planks_only_seam_when_a_run_needs_two_boards(elevation):
         if m["ifc_type"] == "plank":
             by_course.setdefault(round(min(q[1] for q in m["profile"]), 1), []).append(m)
     assert by_course and all(len(v) == 1 for v in by_course.values()), "a 1500mm run was seamed"
+
+
+def test_a_door_that_breaks_the_outline_is_still_an_opening():
+    """A door reaches the foot of the wall, so the void is a bite out of the outline
+    rather than an interior hole. It still has to be closed and lined."""
+    pay = payload()
+    pay["faces"] = wall_face_with_door()
+    pay["context"] = []
+    elev = extract_elevation(pay)
+    assert elev["ok"], elev["warnings"]
+    assert elev["notches"] == [[5000.0, 5900.0, 0.0, 2100.0]]
+    assert (5000.0, 5900.0, 0.0, 2100.0) in openings(elev)
+    assert elev["n_holes"] == 2
+    out = generate_preview({"elevations": [dict(elev, offset=0)], "cladding_type": "plank",
+                            "trim": True, "reveals": True})
+    jambs = sorted(round(min(q[0] for q in m["profile"]), 1)
+                   for m in out["geometry"] if m["ifc_type"] == "closer")
+    assert len(jambs) == 4, jambs                      # both jambs of the window and the door
+    assert 4950.0 in jambs and 5900.0 in jambs, jambs  # the door's, either side of the reveal
+
+
+def test_a_gable_is_not_mistaken_for_an_opening():
+    """The wall under a pitched roof loses two triangles from its bounding box, and a
+    stepped wall loses a corner. Neither is an opening."""
+    assert extract_elevation(payload(pitched=True))["notches"] == []
+    assert extract_elevation(payload())["notches"] == []
+
+
+def test_the_click_position_limits_the_region_to_its_own_patch():
+    """A slab cut clean through a face leaves it in two pieces. Only the piece the
+    click landed on is clad: the other side of the junction is a different wall."""
+    pay = payload()
+    # A slab band right across the face, so the region splits above and below it.
+    pay["context"] = [{"type": "IfcSlab", "name": "Floor",
+                       "tris": [[list(q) for q in t]
+                                for t in box_tris(-500.0, 8500.0, 1400.0, 1700.0, -300.0, 300.0)]}]
+    both = extract_elevation(dict(pay))
+    assert both["ok"] and len(both["polygons"]) == 2, both["warnings"]
+
+    low = extract_elevation(dict(pay, seeds=[list(world(4000.0, 600.0))]))
+    assert len(low["polygons"]) == 1, low["warnings"]
+    assert low["height"] < 1450.0, low["height"]          # only the band below the slab
+    assert any("left out" in w for w in low["warnings"])
+
+    high = extract_elevation(dict(pay, seeds=[list(world(4000.0, 2500.0))]))
+    assert len(high["polygons"]) == 1
+    assert high["height"] < 1400.0 and high["frame"]["origin"][2] > 1600.0
+
+    # Two clicks, one in each piece: both are kept, as before seeding.
+    pair = extract_elevation(dict(pay, seeds=[list(world(4000.0, 600.0)), list(world(4000.0, 2500.0))]))
+    assert len(pair["polygons"]) == 2 and not any("left out" in w for w in pair["warnings"])
+
+
+def test_top_and_bottom_levels_cut_the_cladding(elevation):
+    """Two picked heights bound the cladding. Nothing is generated outside them, and
+    the layers that follow the outline are cut to the band too."""
+    full = generate_preview({"elevations": [dict(elevation, offset=0)], "cladding_type": "plank",
+                             "sheathing": True, "trim": True})
+    band = generate_preview({"elevations": [dict(elevation, offset=0, clip_v_lo=800.0, clip_v_hi=2200.0)],
+                             "cladding_type": "plank", "sheathing": True, "trim": True})
+    assert band["geometry"] and len(band["geometry"]) < len(full["geometry"])
+    for m in band["geometry"]:
+        vs = [q[1] for q in m["profile"]]
+        assert min(vs) >= 800.0 - 1.0 and max(vs) <= 2200.0 + 1.0, (m["ifc_type"], min(vs), max(vs))
+    assert band["info"][0]["base_level"] >= 800.0
+
+
+def test_the_base_splash_can_be_switched_off(elevation):
+    """The elevation base is an assumption, not a detected abutment, so the wizard can
+    turn its splash zone off — while a detected slab keeps its own."""
+    def lowest(splash_on):
+        abuts = [dict(a, enabled=(a["source"] != "base") or splash_on)
+                 for a in elevation["abutments"]]
+        out = generate_preview({"elevations": [dict(elevation, abutments=abuts, offset=0)],
+                                "cladding_type": "plank", "trim": True})
+        return min(min(q[1] for q in m["profile"]) for m in out["geometry"] if m["ifc_type"] == "plank")
+
+    assert lowest(True) >= 150.0            # lifted clear of the ground
+    assert lowest(False) < 150.0            # boards run to the foot of the face

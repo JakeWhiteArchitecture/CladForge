@@ -84,7 +84,9 @@ MIN_OPENING = 300.0   # mm – smaller holes are penetrations, not windows
 
 def openings(elev, limit=MIN_OPENING):
     """Structural openings as (u0, u1, v0, v1), from the interior holes big enough to
-    be a window or door rather than a pipe penetration."""
+    be a window or door rather than a pipe penetration, plus the notches the extractor
+    found: a door reaching the foot of the wall breaks the outline instead of leaving
+    a hole, and it still needs closing and lining."""
     out = []
     for poly in elev.get("polygons", []):
         for hole in poly.get("holes", []):
@@ -92,6 +94,10 @@ def openings(elev, limit=MIN_OPENING):
             vs = [q[1] for q in hole]
             if max(us) - min(us) >= limit and max(vs) - min(vs) >= limit:
                 out.append((min(us), max(us), min(vs), max(vs)))
+    lo, hi = clip_bounds(elev)
+    for u0, u1, v0, v1 in elev.get("notches") or []:
+        if min(u1, hi) - max(u0, lo) >= limit and v1 - v0 >= limit:
+            out.append((max(u0, lo), min(u1, hi), v0, v1))
     return sorted(out)
 
 
@@ -259,6 +265,17 @@ def clip_bounds(elev):
     hi = elev.get("clip_hi")
     hi = min(width, float(hi)) if hi is not None else width
     return (lo, hi) if hi - lo > 1.0 else (0.0, width)
+
+
+def clip_bounds_v(elev):
+    """(v_lo, v_hi) in this elevation's v: where the cladding starts and stops up the
+    face. Set by picking a point for the top and one for the bottom; unset means the
+    whole face."""
+    height = float(elev["height"])
+    lo = max(0.0, float(elev.get("clip_v_lo") or 0.0))
+    hi = elev.get("clip_v_hi")
+    hi = min(height, float(hi)) if hi is not None else height
+    return (lo, hi) if hi - lo > 1.0 else (0.0, height)
 
 
 def chain_layout(elevations, face_depth, detail):

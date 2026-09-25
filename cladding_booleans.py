@@ -18,7 +18,7 @@ from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
-from cladding_primitives import clip_bounds, splash_rings
+from cladding_primitives import clip_bounds, clip_bounds_v, splash_rings
 
 TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel"})
 _MIN_AREA = 25.0   # mm² – slivers smaller than this are discarded
@@ -65,13 +65,15 @@ def region_polygon(elev):
 
 
 def clip_elevation(elev):
-    """The elevation with its polygons cut back to the clad part of the face. Where a
-    wall runs past a corner the rest of it belongs to the other face, and cladding it
-    would project through the corner."""
+    """The elevation with its polygons cut back to the clad part of the face: sideways
+    where a wall runs past a corner, because the rest of it belongs to the other face,
+    and vertically to the top and bottom levels picked for the chain."""
     lo, hi = clip_bounds(elev)
-    if lo <= 0.001 and hi >= float(elev["width"]) - 0.001:
+    v_lo, v_hi = clip_bounds_v(elev)
+    if (lo <= 0.001 and hi >= float(elev["width"]) - 0.001
+            and v_lo <= 0.001 and v_hi >= float(elev["height"]) - 0.001):
         return elev
-    band = box(lo, -1e7, hi, 1e7)
+    band = box(lo, v_lo, hi, v_hi)
     polygons = []
     for poly in elev.get("polygons", []):
         try:

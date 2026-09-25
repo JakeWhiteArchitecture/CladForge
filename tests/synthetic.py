@@ -69,6 +69,21 @@ def wall_face(width=8000.0, height=3000.0, window=(2000.0, 900.0, 3200.0, 2100.0
     return [[list(p) for p in t] for t in tris]
 
 
+def wall_face_with_door(width=8000.0, height=3000.0, window=(2000.0, 900.0, 3200.0, 2100.0),
+                        door=(5000.0, 5900.0, 2100.0)):
+    """The same face with a door added. A door runs to the foot of the wall, so it is a
+    notch in the outline rather than an interior hole."""
+    wu0, wv0, wu1, wv1 = window
+    du0, du1, dv1 = door
+    tris = []
+    tris += rect_tris(0, wv1, width, height)      # over both openings
+    tris += rect_tris(0, 0, wu0, wv1)             # left of the window, full height
+    tris += rect_tris(wu0, 0, wu1, wv0)           # under the window
+    tris += rect_tris(wu1, 0, du0, wv1)           # between the two
+    tris += rect_tris(du1, 0, width, wv1)         # right of the door
+    return [[list(p) for p in t] for t in tris]
+
+
 def payload(name="Elevation A", pitched=False):
     slab = box_tris(4500.0, 8000.0, 2000.0, 2200.0, -300.0, 1500.0)     # balcony slab through face
     roof = box_tris(-500.0, 1500.0, 1400.0, 1600.0, -100.0, 2500.0)     # lower flat roof abutting left

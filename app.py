@@ -1,24 +1,18 @@
 """
 CladForge — Flask server.
 
-Serves the UI and the Python engine sources (so Pyodide can import them in the
-browser), and mirrors every engine entry point as a JSON API for server-side
-use. The browser runs extraction, coursing and DXF in Pyodide; IFC export is
-requested from /api/download first and falls back to the IfcOpenShell WASM
-wheel when the page is served statically.
+Serves the UI and the Python engine sources, so Pyodide can import them in the
+browser. Everything else runs client-side: extraction, coursing, checks and both
+exports. The one route that does real work is /api/import, the IfcOpenShell
+fallback for models web-ifc cannot build.
 """
 
-import datetime
 import os
 import tempfile
 
-from flask import Flask, jsonify, make_response, render_template, request, send_file, send_from_directory
+from flask import Flask, jsonify, make_response, render_template, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 
-from cladding_preview import check_rules, generate_preview
-from dxf_generator import meshes_to_dxf
-from fabric_extract import extract_elevation
-from ifc_generator import meshes_to_ifc
 from ifc_import import import_ifc
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -35,10 +29,6 @@ def _no_store(resp):
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp
-
-
-def _stamp():
-    return datetime.datetime.now().strftime("%d-%m-%y")
 
 
 @app.route("/")
@@ -67,51 +57,6 @@ def api_import():
         return jsonify(dict(import_ifc(tmp.name), success=True))
     finally:
         _unlink(tmp.name)
-
-
-@app.route("/api/extract", methods=["POST"])
-def api_extract():
-    payload = request.get_json(force=True) or {}
-    return jsonify({"success": True, "elevation": extract_elevation(payload)})
-
-
-@app.route("/api/preview", methods=["POST"])
-def api_preview():
-    params = request.get_json(force=True) or {}
-    out = generate_preview(params)
-    return jsonify({"success": True, "geometry": out["geometry"], "dimensions": out["dimensions"],
-                    "info": out["info"]})
-
-
-@app.route("/api/check", methods=["POST"])
-def api_check():
-    params = request.get_json(force=True) or {}
-    return jsonify({"success": True, "checks": check_rules(params)})
-
-
-@app.route("/api/download", methods=["POST"])
-def api_download():
-    """IFC4X3 export. Trimming is always applied before export."""
-    params = dict(request.get_json(force=True) or {})
-    params["trim"] = True
-    out = generate_preview(params)
-    path = meshes_to_ifc(out["geometry"], params, out["info"])
-    resp = send_file(path, as_attachment=True, download_name="CladForge_%s.ifc" % _stamp(),
-                     mimetype="application/x-step")
-    resp.call_on_close(lambda: _unlink(path))
-    return resp
-
-
-@app.route("/api/download_dxf", methods=["POST"])
-def api_download_dxf():
-    params = dict(request.get_json(force=True) or {})
-    params["trim"] = True
-    out = generate_preview(params)
-    path = meshes_to_dxf(out["geometry"], params)
-    resp = send_file(path, as_attachment=True, download_name="CladForge_%s.dxf" % _stamp(),
-                     mimetype="application/dxf")
-    resp.call_on_close(lambda: _unlink(path))
-    return resp
 
 
 def _unlink(path):

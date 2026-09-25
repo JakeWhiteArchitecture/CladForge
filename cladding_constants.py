@@ -13,7 +13,6 @@ QUANTITY_NOTE = ("Any panel or plank schedule produced is setting-out informatio
 DISCLAIMER = "CladForge — Preliminary design aid only. User must verify all outputs before use."
 
 MAX_BATTEN_SPAN = 600.0          # mm – ceiling on batten centres in panel mode
-COUNTER_BATTEN_CENTRES = 600.0   # mm – vertical counter-battens behind horizontal battens
 MIN_CAVITY = 25.0                # mm – drained cavity behind cladding
 FIXING_EMBEDMENT = 25.0          # mm – batten depth beyond insulation thickness
 PLANK_SPAN_TABLE = [(12.0, 400.0), (16.0, 500.0), (20.0, 600.0)]  # (min thickness, max centres)
@@ -25,7 +24,8 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
     "batten_w": (50, 25, 100), "batten_d": (38, 19, 100), "batten_centres": (400, 300, 600),
-    "cb_w": (50, 25, 100), "cb_d": (38, 19, 100), "splash": (150, 0, 300),
+    "cb_w": (50, 25, 100), "cb_d": (38, 19, 100), "cb_centres": (600, 300, 900),
+    "splash": (150, 0, 300),
     "panel_t": (9, 6, 20), "panel_w": (1200, 600, 1500), "panel_h": (2400, 1200, 3000),
     "panel_gap": (10, 0, 15), "plank_w": (150, 75, 250), "plank_t": (20, 12, 32),
     "plank_lap": (0, 0, 50), "plank_gap": (8, 0, 15), "plank_len": (3600, 1800, 6000),

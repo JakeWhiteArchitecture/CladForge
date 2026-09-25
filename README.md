@@ -25,12 +25,13 @@ genuinely new code in the stack.
 | 1 | Import IFC, render in viewer | browser (web-ifc + Three.js, from SunForm) |
 | 2 | Click wall faces | browser (`static/viewer.js`) |
 | 3 | Grow picks into coplanar regions, name Elevation A, B, C | Pyodide (`fabric_extract.py`) |
-| 4 | Subtract openings and penetrations as interior holes | Pyodide (`fabric_extract.py`) |
+| 4 | Subtract openings and penetrations: interior holes, plus the notches openings cut in the outline | Pyodide (`fabric_extract.py`) |
 | 5 | Detect slab and roof abutments, set out the splash zone | Pyodide (`fabric_extract.py`) |
-| 6 | Build the chain: plank or panel, orientation, dimensions | UI wizard (`static/wizard.js`) |
-| 7 | Refine buildup, corners, openings, setting-out | UI |
-| 8 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
-| 9 | Export IFC4X3 and DXF | Flask or Pyodide (IFC), Pyodide (DXF) |
+| 6 | Build the chain: plank or panel, orientation, board, batten and counter-batten sizes, base of the cladding | UI wizard (`static/wizard.js`) |
+| 7 | Pick the top and bottom of the cladding | UI, two clicks in the model |
+| 8 | Refine buildup, corners, openings, setting-out | UI |
+| 9 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
+| 10 | Export IFC4X3 and DXF | Pyodide (both) |
 
 Extraction runs once per selection and is cached on the elevation. Coursing
 and buildup run in Pyodide on every parameter change, so the offset slider is
@@ -40,8 +41,18 @@ coursing path touches the server.
 Picking and generating are separate. Clicking faces grows elevations and chains
 and nothing else: no cladding exists until the chain is built. Once a face is
 extracted, **Make chain** appears at the top right of the view and **Enter**
-opens the wizard — plank or panel, horizontal or vertical (planks only), then
-the board dimensions — and **Build** generates that chain. Every pending chain
+opens the wizard — plank or panel, horizontal or vertical (planks only), the
+board dimensions, the battens, the counter-battens where the buildup has them,
+and where the cladding starts at the foot of the wall — and **Build** generates
+that chain. Build hands straight over to two clicks in the model: one sets the
+height of the **top of the cladding**, one the height of the **baserail**. Only
+the height of each point is used, the pair applies to the whole chain, and each
+face is clamped to its own extent, so a lower wing in the same run never gets
+cladding above it. **Dismiss** (or Escape) closes the picker and keeps whatever
+has not been set, so a top clicked before dismissing still applies. A step that does not apply is not
+asked: panels never course, so they skip the orientation, and a buildup with
+no counter-battens skips their step. In panel mode the batten centres are
+shown but not editable, because the panel bay sets them. Every pending chain
 is built together. After a chain is built the whole panel edits it live, and a
 face picked round a corner joins the built chain and is clad straight away.
 
@@ -52,11 +63,26 @@ pip install -r requirements.txt
 python app.py            # http://localhost:8080
 ```
 
-Flask serves the page, the Python sources for Pyodide, and a JSON mirror of
-the engine (`/api/extract`, `/api/preview`, `/api/check`, `/api/download`,
-`/api/download_dxf`). The page also works on static hosting: copy
-`templates/index.html` to the root next to `static/` and the `.py` files. In
-that mode IFC export falls back to the IfcOpenShell WASM wheel in the browser.
+Flask serves two things: the page, and the Python sources for Pyodide to
+import. The only route that does work is `/api/import`, the IfcOpenShell
+fallback for models web-ifc cannot build. Everything else — extraction,
+coursing, checks, and both exports — runs in the browser, so the page also
+works on static hosting: copy `templates/index.html` to the root next to
+`static/` and the `.py` files, and the only thing lost is that import fallback.
+
+**Runtimes and schema.** IFC export runs through the IfcOpenShell WASM wheel
+in the browser, so the runtime pins matter: **Pyodide 0.29.0** (CPython 3.13,
+`pyodide_2025_0`) with **IfcOpenShell 0.8.5**, which carries IFC2X3, IFC4 and
+IFC4X3_ADD2. The export writes IFC4X3, with no server involved.
+
+The pins are a matched set, not three independent choices. The wheel's ABI tag
+has to match the Pyodide build, and Shapely — which the whole engine rests on —
+has to exist for that build. Pyodide 0.29 ships Shapely 2.0.7 and numpy 2.2.5,
+which is what makes this combination work. An earlier pairing (Pyodide 0.27.4
+with IfcOpenShell 0.8.2) had no IFC4X3 at all, and asking that build for one
+killed the runtime rather than raising something Python could catch — so
+`_create_file` asks `schema_names()` which schemas the build has and takes the
+newest, instead of trying them and hoping to catch the failure.
 
 A demo model is in `tests/sample_house.ifc` (regenerate with
 `python tests/make_sample.py`).
@@ -67,14 +93,26 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
 2. With **Pick faces** on, click a wall face. The coplanar patch joins the active
    elevation; click again to remove it. Click more patches on the same plane to
    merge them. Click a face round the corner and it becomes the next elevation
-   in the chain. **New elevation** starts a separate chain.
+   in the chain. **New elevation** starts a separate chain. Where a slab or roof
+   cuts clean through the face, only the patch you clicked is taken: the click
+   position is the seed, so the piece beyond the junction is left alone.
 3. Check the detected abutments on the elevation card. Pitched ones say so and
    the splash band follows the roof line. Untick a false one, or type a level and
    **Add level** where detection fails.
-4. Set the buildup: sheathing, insulation, plank or panel, batten section and
-   centres, counter-battens, splash zone.
-5. Drag the **horizontal offset** slider to control where the closing cuts land.
-6. Read the checks, then download IFC4X3 or DXF.
+4. Press **Enter** (or **Make chain**, top right) to build the chain: the wizard
+   asks for plank or panel, the orientation, the board sizes, the battens, the
+   counter-battens if the buildup has them, and whether the cladding starts at
+   the foot of the wall or above a splash zone. Nothing is generated before this.
+   Build then asks for two points in the model: the height of the cladding top,
+   then the height of the baserail. Dismiss to keep either as it is.
+5. Refine anything in the panel — sheathing, insulation, splash zone, corners,
+   openings, batten section and centres. It all previews live from here on.
+6. Drag the **horizontal offset** slider to control where the closing cuts land,
+   or click the cladding itself: a face that is already clad is not re-picked,
+   it opens its chain's setting-out over the view.
+7. Read the checks, then download IFC4X3 or DXF. The legend toggles every layer,
+   including the picked wall faces and the outline, so the buildup can be read on
+   its own.
 
 ## Decisions on open items
 
@@ -84,8 +122,9 @@ default. Each is one place in the code, so any of them can be flipped.
 | Item | Decision | Where |
 |---|---|---|
 | Region definition [ASSUMED] | Yes. A region is coplanar; openings are interior holes and never split a region. Separate patches on one plane merge into one elevation (one frame, one coursing, boards clipped to the union). | `fabric_extract._union_faces` |
-| Selection mode [OPEN] | Both. One click grows the connected coplanar patch (SunForm's flood fill), and further clicks merge more patches into the same elevation. | `viewer.coplanarFaces`, `app.onViewportClick` |
+| Selection mode [OPEN] | Both. One click grows the connected coplanar patch (SunForm's flood fill), and further clicks merge more patches into the same elevation. Each click's position is kept as a seed: if the cuts leave the region in pieces, only the pieces a seed falls in are clad, so a slab or roof crossing a face does not carry the cladding past it. A face that is already clad is not a selection any more — clicking it opens that chain's setting-out over the view instead. | `viewer.coplanarFaces`, `app.onViewportClick` |
 | Openings source [OPEN] | Mesh voids. web-ifc punches `IfcRelVoidsElement` openings into the wall mesh, so they arrive free as holes. Penetrations (anything else crossing the face plane: pipes, beams, windows if the void was not punched) are sectioned and subtracted as convex-hull holes. Switch off with the *Subtract penetrations* checkbox. | `fabric_extract.extract_elevation` |
+| Splash zone at the base [ASSUMED] | The synthetic "Elevation base" line is an assumption, not a detected intersection, so the wizard asks: **at the foot of the wall** (the default — the boards run all the way down) or **above a splash zone**. Every detected slab or roof keeps its own splash zone either way, and the base line stays on the elevation card to tick back on. | `cladding_primitives.base_level`, `wizard.wizBuild` |
 | Abutments | Any `IfcSlab`/`IfcRoof` that reaches the face plane inside the region is sectioned on the plane and its upper edge becomes the abutment *line*: level for a flat roof or slab, pitched where a roof meets a gable (two slopes meeting at the ridge, say). The splash zone is a band of constant vertical height above that line, so it follows the roof. A slab that passes through the face is also cut out of the region. Manual levels can be added per elevation. | `fabric_extract._section`, `_top_line`, `cladding_primitives.splash_rings` |
 | Corner detail | Three details, set for the whole job and reported per corner in the panel. **Mitred** (default) cuts the whole buildup on the corner's bisector plane, so every layer wraps. **Master-lap, open joint** is a panel detail: at an external corner the master board wraps past and runs out to the far face of the other side's cladding while the board behind stops a joint gap short of the master's back; at a re-entrant corner nothing wraps, so the master runs into the corner and the other board stops a joint gap clear of the master's whole buildup. The layers behind a lap stay square at the corner. **Square** stops everything at the wall corner. Away from a right angle both lap ends slope with depth. Each corner gets a row under its chain naming the two faces, the angle, whether it is external or re-entrant, and which face masters, with a Swap button; clicking the row highlights that corner in the model. A corner bead or profile is not modelled yet. | `cladding_primitives.corner_ends`, `app.cornerRows` |
 | Chains (corners) | A click that is coplanar with the active elevation merges into it. A click on a face that turns a corner from any elevation in the active chain becomes the next elevation in that chain: Elevation A becomes "Chain 1 · A → B → C". A face that meets nothing starts a new chain. Coursing is centred on the whole run and the offset slider is per chain, so panel joints and batten centres carry round the corner (the run reverses through re-entrant corners). Corner allowances and trims are not modelled: the run length is the sum of the face widths. | `fabric_extract.chain_link`, `app.linkIntoChain`, `cladding_geometry.build_elevation` |
@@ -103,8 +142,8 @@ default. Each is one place in the code, so any of them can be flipped.
 | Plank vertical setting-out [OPEN] | Starts at the top of the ground splash zone and works up; the closing cut lands at the top. The slider only shifts along the wall. | `cladding_geometry._horizontal_planks` |
 | End joints [OPEN] | Must land on a batten, staggered course to course (odd courses start with a half-length board). Joints that cannot reach a batten are cut at max length and counted as a warning. | `cladding_primitives.split_run` |
 | Coursing at openings [OPEN] | Straight through and cut. Coursing never resets at a reveal. | `cladding_booleans.apply_boolean_ops` |
-| Horizontal panel joints [ASSUMED] | Open joints at the gap, noggins behind every horizontal joint whenever an elevation runs to more than one course. | `cladding_geometry._panels` |
-| Batten orientation | Derived, never a free choice. Horizontal planks → vertical battens. Vertical planks → horizontal battens on vertical counter-battens. Panels → vertical battens with noggins. The only override is *Counter-battens: force on/off*, and the checks flag the buildups that then fail to drain. | `cladding_constants._parse`, `cladding_preview.check_rules` |
+| Horizontal panel joints [ASSUMED] | Open joints at the gap. Noggins behind them only where counter-battens are on: a noggin between vertical battens sits on the drainage plane and dams it, so by default the seams are left to a proprietary horizontal profile and the checks say so. | `cladding_geometry._panels` |
+| Batten orientation | Derived, never a free choice. Horizontal planks → vertical battens. Vertical planks → horizontal battens on vertical counter-battens. Panels → vertical battens, with seam noggins only when counter-battens are on. The only override is *Counter-battens: force on/off*, and the checks flag the buildups that then fail to drain. | `cladding_constants._parse`, `cladding_preview.check_rules` |
 | IFC container [OPEN] | `IfcElementAssembly` per elevation (`PredefinedType=USERDEFINED`, `ObjectType="Cladding system"`), placed in the host wall's storey. | `ifc_generator.meshes_to_ifc` |
 
 Two additions beyond the table: a closing cut narrower than 100 mm raises a
@@ -174,16 +213,20 @@ the title area.
 
 | File | Lines | Budget |
 |---|---|---|
-| fabric_extract.py | 335 | 400 |
-| cladding_constants.py | 79 | 80 |
-| cladding_geometry.py | 175 | 400 |
-| cladding_primitives.py | 150 | 300 |
-| cladding_booleans.py | 150 | 200 |
-| cladding_preview.py | 100 | 100 |
-| ifc_generator.py | 317 | 400 |
-| dxf_generator.py | 229 | 500 |
-| app.py | 115 | 150 |
-| templates/index.html | 210 | 500 |
+| fabric_extract.py | 421 | 400 |
+| cladding_constants.py | 82 | 80 |
+| cladding_geometry.py | 302 | 400 |
+| cladding_primitives.py | 308 | 300 |
+| cladding_booleans.py | 208 | 200 |
+| cladding_preview.py | 45 | 100 |
+| ifc_generator.py | 396 | 400 |
+| dxf_generator.py | 248 | 500 |
+| app.py | 78 | 150 |
+| templates/index.html | 233 | 500 |
+
+`fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 21 and
+6 lines); splitting the region clean-up — notches, seeded patches — into its own
+module would bring both back inside.
 
 The frontend logic lives beside the template in `static/viewer.js` (Three.js,
 web-ifc, picking, rendering), `static/app.js` (state, Pyodide, downloads) and
@@ -202,7 +245,9 @@ The smoke test drives Chromium through Playwright: loads the sample house,
 picks the south and east walls, builds each chain through the wizard (by Enter
 and by the button), moves the slider, switches to panels, and downloads both
 exports. It also checks that picking alone generates nothing. `VENDOR_DIR` is only needed where the CDNs are
-unreachable; it serves Pyodide, Three.js and web-ifc from local copies.
+unreachable; it serves Pyodide, Three.js, web-ifc, the IfcOpenShell wheel and the
+two PyPI deps that are not in the Pyodide distribution from local copies
+(`<dir>/{pyodide,three,web-ifc,wasm-wheels,pypi}`).
 
 ## Limitations
 
@@ -216,6 +261,11 @@ unreachable; it serves Pyodide, Three.js and web-ifc from local copies.
   that overhang a corner: a corner batten or angle is the designer's to add.
 - Opening heads and sills get a cavity closer only at the jambs; head and sill
   linings, cills and flashings are not modelled.
+- An opening that breaks the face outline rather than leaving a hole — a door to
+  the ground, a window at a wall end — is recovered as a notch: a rectangular
+  bite out of the patch's bounding box, open on exactly one side. A gable is
+  triangular and a stepped wall is open on two sides, so neither is mistaken for
+  one, but a genuine rectangular step in the top of a wall would be.
 - Opening-driven setting-out is a panel rule. Plank coursing still runs
   straight through an opening and is cut.
 - Mitred elements are written to IFC as an explicit brep rather than a swept

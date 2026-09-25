@@ -1,6 +1,7 @@
 /* CladForge app — elevation state, Pyodide engine, live preview, downloads. */
 
-const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDragging: false, model: null, seq: 0 };
+const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDragging: false,
+               model: null, seq: 0, editing: null, levels: null };
 let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null;
 
 // ─── ELEVATIONS AND CHAINS ───
@@ -9,7 +10,8 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // A chain generates nothing until it is built: picking is a selection, the wizard
 // turns it into cladding. See static/wizard.js.
 function newChain() {
-    const chain = { name: 'Chain ' + (++state.seq), offset: 0, members: [], length: 0, built: false };
+    const chain = { name: 'Chain ' + (++state.seq), offset: 0, members: [], length: 0, built: false,
+                    topZ: null, bottomZ: null };
     state.chains.push(chain);
     return chain;
 }
@@ -17,7 +19,7 @@ function newChain() {
 function newElevation(chain) {
     const n = state.elevations.length;
     const name = 'Elevation ' + String.fromCharCode(65 + (n % 26)) + (n >= 26 ? Math.floor(n / 26) : '');
-    const e = { name, color: ELEV_COLORS[n % ELEV_COLORS.length], picks: [], result: null, manual: [], disabled: {},
+    const e = { name, picks: [], result: null, manual: [], disabled: {},
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
                 cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, clipLo: 0, clipHi: null };
     e.chain.members.push(e);
@@ -28,6 +30,7 @@ function newElevation(chain) {
 
 function deleteElevation() {
     if (state.active < 0) return;
+    closeEditWidget();
     const e = state.elevations.splice(state.active, 1)[0];
     e.highlights.forEach(h => highlightGroup.remove(h));
     e.chain.members = e.chain.members.filter(m => m !== e);
@@ -99,10 +102,11 @@ function elevationCard(e, i) {
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
-        + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '');
+        + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
+        + (ok && (e.chain.topZ !== null || e.chain.bottomZ !== null)
+            ? ` · levels ${Math.round(Math.max(0, vLocal(e, e.chain.bottomZ) || 0))}–${Math.round(Math.min(r.height, vLocal(e, e.chain.topZ) === null ? r.height : vLocal(e, e.chain.topZ)))}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
-        <div class="elev-head"><span class="elev-swatch" style="background:#${e.color.toString(16).padStart(6, '0')}"></span>
-            <input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
+        <div class="elev-head"><input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
             <span class="elev-meta">${meta}${e.storey ? ' · ' + e.storey.name : ''}${place}</span></div>
         ${ok ? `<div class="elev-abut">Abutments (splash zone above each):${abuts}
             <div class="row" style="margin-top:4px"><input type="number" id="manual-level-${i}" placeholder="Level mm above base" onclick="event.stopPropagation()">
@@ -264,6 +268,34 @@ async function relinkChain(chain) {
     updatePreview();
 }
 
+// ─── EDIT MODE ───
+// A built chain is edited, not re-picked. Clicking one of its faces brings its
+// setting-out over the view: the offset shifts every batten and board along the run.
+function openEditWidget(e) {
+    state.editing = e;
+    document.getElementById('edit-widget').style.display = '';
+    document.getElementById('edit-title').textContent = chainLabel(e);
+    updateSliderRange();
+    setStatus('Editing ' + chainLabel(e) + ' — shift the setting-out along the run', 'ready');
+}
+
+function closeEditWidget() {
+    if (!state.editing) return;
+    state.editing = null;
+    document.getElementById('edit-widget').style.display = 'none';
+}
+
+function onEditSlide(value) {
+    document.getElementById('offset').value = value;
+    onSlider(value);
+    document.getElementById('edit-offset-val').textContent = Math.round(value) + ' mm';
+}
+
+function nudgeOffset(step) {
+    const s = document.getElementById('edit-offset');
+    onEditSlide(s.value = Math.max(+s.min, Math.min(+s.max, parseFloat(s.value) + step)));
+}
+
 // ─── PICKING → EXTRACTION ───
 function setPickMode(on) {
     state.pickMode = on;
@@ -271,25 +303,33 @@ function setPickMode(on) {
 }
 
 function onViewportClick(event) {
-    if (event.target !== renderer.domElement || !state.pickMode || !allMeshes.length) return;
-    if (state._dragged) return;
+    if (event.target !== renderer.domElement || !allMeshes.length || state._dragged) return;
+    // While the level picker is open every click is a height, wherever it lands.
+    if (state.levels) {
+        const p = pickAt(event);
+        if (p) levelPicked(toIfc(p.point)[2]);
+        return;
+    }
+    if (!state.pickMode) return;
     const hit = pickAt(event);
     if (!hit) return;
     const faces = coplanarFaces(hit.mesh, hit.faceIndex);
     if (!faces) { setStatus('That face is not vertical — pick a wall face', 'busy'); return; }
+    // A face already clad is not a selection any more. Clicking it edits its chain's
+    // setting-out instead of piling another elevation onto the same plane.
+    const owner = state.elevations.find(m => m.result && m.result.ok && samePlane(hit, m));
+    if (owner && owner.chain.built) { setActive(state.elevations.indexOf(owner)); openEditWidget(owner); return; }
+    closeEditWidget();
     if (state.active < 0) newElevation();
     let e = state.elevations[state.active];
-    // Coplanar with the active elevation: merge. Otherwise start a new elevation in the
-    // same chain; after extraction it either links at a corner or moves to its own chain.
-    if (!samePlane(hit, e)) {
-        const match = e.chain.members.find(m => samePlane(hit, m));
-        e = match || newElevation(e.chain);
-    }
+    // Coplanar with an elevation anywhere: merge into it. Otherwise start a new elevation
+    // in the active chain; after extraction it links at a corner or moves to its own chain.
+    if (!samePlane(hit, e)) e = owner || newElevation(e.chain);
     const existing = e.picks.findIndex(p => p.mesh === hit.mesh && p.faces.includes(hit.faceIndex));
     if (existing >= 0) e.picks.splice(existing, 1);
-    else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal) });
+    else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal), point: toIfc(hit.point) });
     e.highlights.forEach(h => { highlightGroup.remove(h); h.geometry.dispose(); });
-    e.highlights = e.picks.map(p => highlightFaces(p.mesh, p.faces, e.color));
+    e.highlights = e.picks.map(p => highlightFaces(p.mesh, p.faces));
     if (!e.storey) { const meta = meshMeta[hit.mesh.userData.index]; e.storey = meta && meta.storey ? meta.storey : null; }
     runExtraction(e);
 }
@@ -306,6 +346,7 @@ async function runExtraction(e) {
     renderElevationList();
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
     const payload = { name: e.name, faces: tris, outward: e.picks[0].normal, context,
+                      seeds: e.picks.map(p => p.point).filter(Boolean),
                       options: { penetrations: document.getElementById('penetrations').checked } };
     try {
         const t0 = performance.now();
@@ -336,7 +377,8 @@ _json.dumps(_ex(_json.loads(_payload_json)))`);
 }
 
 // ─── PARAMETERS ───
-const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d', 'splash',
+const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
+             'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
              'plank_len', 'closer_w'];
 function val(id) { return document.getElementById(id).value; }
@@ -356,10 +398,17 @@ function elevationRecords() {
                                                    chain_reversed: e.rev, corner_lo: e.cornerLo || 0,
                                                    corner_hi: e.cornerHi || 0, master_lo: !!e.masterLo,
                                                    master_hi: !!e.masterHi, clip_lo: e.clipLo || 0,
-                                                   clip_hi: e.clipHi }));
+                                                   clip_hi: e.clipHi,
+                                                   clip_v_lo: vLocal(e, chain.bottomZ) || 0,
+                                                   clip_v_hi: vLocal(e, chain.topZ) }));
         }
     }
     return out;
+}
+
+// A picked level is a world height; each elevation reads it in its own v.
+function vLocal(e, z) {
+    return (z === null || z === undefined) ? null : z - e.result.frame.origin[2];
 }
 
 function getParams() {
@@ -403,6 +452,9 @@ function updateSliderRange() {
     const e = state.elevations[state.active];
     if (e) { e.chain.offset = Math.max(-half, Math.min(half, e.chain.offset)); s.value = e.chain.offset; }
     document.getElementById('offset-val').textContent = (e ? e.chain.offset : 0) + ' mm';
+    const w = document.getElementById('edit-offset');   // the widget mirrors the panel slider
+    w.min = s.min; w.max = s.max; w.step = s.step; w.value = s.value;
+    document.getElementById('edit-offset-val').textContent = (e ? Math.round(e.chain.offset) : 0) + ' mm';
 }
 
 function onSlider(value) {
@@ -410,6 +462,8 @@ function onSlider(value) {
     if (!e) return;
     e.chain.offset = parseFloat(value);
     document.getElementById('offset-val').textContent = e.chain.offset + ' mm';
+    document.getElementById('edit-offset').value = e.chain.offset;
+    document.getElementById('edit-offset-val').textContent = Math.round(e.chain.offset) + ' mm';
     updatePreview();
 }
 
@@ -503,6 +557,7 @@ function retryOnServer() {
 async function loadModel(file, force) {
     const info = document.getElementById('model-info');
     state.file = file;
+    closeEditWidget();
     try {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
         state.elevations = []; state.chains = []; state.active = -1; state.seq = 0; renderElevationList();
@@ -553,15 +608,9 @@ async function downloadIFC() {
     const btn = document.getElementById('ifc-btn');
     busy(btn, true, 'Generating IFC4X3…');
     try {
-        let blob = null;
-        try {   // served by Flask: fast server-side export
-            const r = await fetch('api/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
-            if (r.ok && (r.headers.get('content-type') || '').indexOf('json') < 0) blob = await r.blob();
-        } catch (e) { /* static hosting — fall back to the WASM wheel */ }
-        if (!blob) {
-            await ensureIfcOpenShell(btn);
-            pyodide.globals.set('_params_json', JSON.stringify(params));
-            const proxy = await pyodide.runPythonAsync(`
+        await ensureIfcOpenShell(btn);
+        pyodide.globals.set('_params_json', JSON.stringify(params));
+        const proxy = await pyodide.runPythonAsync(`
 import json as _json, os as _os
 from cladding_preview import generate_preview as _gp
 from ifc_generator import meshes_to_ifc as _to_ifc
@@ -572,9 +621,8 @@ with open(_path, 'rb') as _f:
     _data = _f.read()
 _os.unlink(_path)
 _data`);
-            blob = new Blob([proxy.toJs()], { type: 'application/x-step' });
-            if (proxy.destroy) proxy.destroy();
-        }
+        const blob = new Blob([proxy.toJs()], { type: 'application/x-step' });
+        if (proxy.destroy) proxy.destroy();
         showReminder(blob, 'ifc');
     } catch (err) { alert('IFC export failed: ' + err.message); }
     finally { busy(btn, false); }
@@ -587,7 +635,7 @@ async function ensureIfcOpenShell(btn) {
     await pyodide.runPythonAsync(`
 import micropip
 await micropip.install(["lark", "isodate", "python-dateutil", "typing_extensions"])
-await micropip.install("https://ifcopenshell.github.io/wasm-wheels/ifcopenshell-0.8.2+d50e806-cp312-cp312-emscripten_3_1_58_wasm32.whl")
+await micropip.install("https://ifcopenshell.github.io/wasm-wheels/ifcopenshell-0.8.5-cp313-cp313-pyodide_2025_0_wasm32.whl")
 import ifc_generator`);
     ifcReady = true;
 }
@@ -656,10 +704,17 @@ function initApp() {
     drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files.length) loadModel(e.dataTransfer.files[0]); });
-    const slider = document.getElementById('offset');
-    slider.addEventListener('pointerdown', () => { state.sliderDragging = true; });
     const release = () => { if (state.sliderDragging) { state.sliderDragging = false; updatePreview(); } };
-    slider.addEventListener('pointerup', release);
-    slider.addEventListener('change', release);
+    for (const id of ['offset', 'edit-offset']) {
+        const slider = document.getElementById(id);
+        slider.addEventListener('pointerdown', () => { state.sliderDragging = true; });
+        slider.addEventListener('pointerup', release);
+        slider.addEventListener('change', release);
+    }
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
+        if (state.levels) { dismissLevels(); return; }
+        closeEditWidget();
+    });
     document.getElementById('download-reminder').addEventListener('click', e => { if (e.target.id === 'download-reminder') e.currentTarget.classList.remove('open'); });
 }

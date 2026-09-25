@@ -15,17 +15,31 @@ async function main() {
     page = await browser.newPage({ viewport: { width: 1500, height: 900 }, acceptDownloads: true });
     logs = [];
     // VENDOR_DIR: serve the CDN runtimes from local copies (sandboxes that block CDNs).
-    // Expected layout: <dir>/pyodide/*, <dir>/three/{build,examples}, <dir>/web-ifc/*.
+    // Expected layout: <dir>/pyodide/*, <dir>/three/{build,examples}, <dir>/web-ifc/*,
+    // <dir>/wasm-wheels/* (the IfcOpenShell wheel the browser installs for IFC export).
     const vendor = process.env.VENDOR_DIR;
     if (vendor) {
         const mime = { js: 'application/javascript', wasm: 'application/wasm', json: 'application/json', zip: 'application/zip', whl: 'application/octet-stream' };
         const map = [
-            [/^https:\/\/cdn\.jsdelivr\.net\/pyodide\/v0\.27\.4\/full\/(.+)$/, m => path.join(vendor, 'pyodide', m[1])],
+            [/^https:\/\/cdn\.jsdelivr\.net\/pyodide\/v0\.29\.0\/full\/(.+)$/, m => path.join(vendor, 'pyodide', m[1])],
             [/^https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/three\.js\/r128\/three\.min\.js$/, () => path.join(vendor, 'three', 'build', 'three.min.js')],
             [/^https:\/\/cdn\.jsdelivr\.net\/npm\/three@0\.128\.0\/(.+)$/, m => path.join(vendor, 'three', m[1])],
             [/^https:\/\/cdn\.jsdelivr\.net\/npm\/web-ifc@[\d.]+\/(.+)$/, m => path.join(vendor, 'web-ifc', m[1])],
+            [/^https:\/\/ifcopenshell\.github\.io\/wasm-wheels\/(.+)$/, m => path.join(vendor, 'wasm-wheels', m[1])],
+            [/^https:\/\/files\.pythonhosted\.org\/vendored\/(.+)$/, m => path.join(vendor, 'pypi', m[1])],
         ];
-        await page.route(/^https:\/\/(cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com)\//, route => {
+        // micropip resolves the IFC export's pure-Python deps through the PyPI simple
+        // index; answer it from <dir>/pypi so the install needs no network either.
+        await page.route(/^https:\/\/pypi\.org\/simple\/([^/]+)\//, route => {
+            const name = route.request().url().match(/simple\/([^/]+)\//)[1];
+            const files = fs.existsSync(path.join(vendor, 'pypi'))
+                ? fs.readdirSync(path.join(vendor, 'pypi')).filter(f => f.toLowerCase().startsWith(name.replace(/-/g, '_').toLowerCase() + '-')) : [];
+            if (!files.length) { logs.push('vendor miss: pypi ' + name); return route.fulfill({ status: 404, body: '' }); }
+            return route.fulfill({ contentType: 'application/vnd.pypi.simple.v1+json', body: JSON.stringify({
+                meta: { 'api-version': '1.0' }, name,
+                files: files.map(f => ({ filename: f, url: 'https://files.pythonhosted.org/vendored/' + f, hashes: {} })) }) });
+        });
+        await page.route(/^https:\/\/(cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com|ifcopenshell\.github\.io|files\.pythonhosted\.org)\//, route => {
             const url = route.request().url().split('?')[0];
             for (const [re, fn] of map) {
                 const m = url.match(re);
@@ -71,10 +85,14 @@ async function main() {
         await page.waitForTimeout(1200);
     }
     // Picking generates nothing: the chain has to be built through the wizard first.
-    async function buildChain(type, orient, useButton) {
-        await page.waitForSelector('#make-chain', { state: 'visible', timeout: 60000 });
-        console.log('make chain button:', await page.evaluate(() => document.getElementById('make-chain').textContent.trim()));
-        if (useButton) await page.click('#make-chain');
+    async function buildChain(type, orient, useButton, levels) {
+        // The button only shows while a chain is unbuilt; Enter reopens the wizard either way.
+        const pending = await page.evaluate(() => pendingChains().length > 0);
+        if (pending) {
+            await page.waitForSelector('#make-chain', { state: 'visible', timeout: 60000 });
+            console.log('make chain button:', await page.evaluate(() => document.getElementById('make-chain').textContent.trim()));
+        }
+        if (useButton && pending) await page.click('#make-chain');
         else { await page.evaluate(() => document.activeElement && document.activeElement.blur()); await page.keyboard.press('Enter'); }
         await page.waitForSelector('#chain-wizard.open', { timeout: 10000 });
         console.log('wizard:', await page.evaluate(() => [document.getElementById('wiz-title').textContent,
@@ -82,10 +100,31 @@ async function main() {
                                                           document.getElementById('wiz-chain').textContent].join(' | ')));
         await page.click(`#wiz-body .wiz-option >> nth=${type === 'panel' ? 1 : 0}`);
         if (type !== 'panel') await page.click(`#wiz-body .wiz-option >> nth=${orient === 'vertical' ? 1 : 0}`);
-        console.log('wizard dims step:', await page.evaluate(() => [document.getElementById('wiz-step').textContent,
-            Array.from(document.querySelectorAll('#wiz-body input')).map(i => i.id.replace('wiz-', '') + '=' + i.value).join(' ')].join(' | ')));
-        await page.click('#wiz-next');
+        // The remaining steps are all number fields; walk them to Build.
+        for (let i = 0; i < 6; i++) {
+            const step = await page.evaluate(() => [document.getElementById('wiz-title').textContent,
+                document.getElementById('wiz-step').textContent,
+                Array.from(document.querySelectorAll('#wiz-body input')).map(n => n.id.replace('wiz-', '') + '=' + n.value + (n.disabled ? '(derived)' : '')).join(' '),
+                document.getElementById('wiz-next').textContent]);
+            console.log('  wizard step:', step.slice(0, 3).join(' | '));
+            await page.click('#wiz-next');
+            if (step[3] === 'Build') break;
+            await page.waitForTimeout(150);
+        }
         await page.waitForFunction(() => !document.getElementById('chain-wizard').classList.contains('open'), null, { timeout: 10000 });
+        await page.waitForTimeout(400);
+        // Build hands over to the level picker: two clicks for top and bottom, or skip.
+        if (await page.isVisible('#level-picker')) {
+            console.log('  level picker:', await page.evaluate(() => document.getElementById('level-title').textContent));
+            if (levels) {
+                await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * (1 - levels[0]));
+                await page.waitForTimeout(300);
+                await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * (1 - levels[1]));
+            } else {
+                await page.click('#level-picker .wiz-actions button');   // Dismiss
+            }
+            await page.waitForFunction(() => !state.levels, null, { timeout: 10000 });
+        }
         await page.waitForTimeout(1200);
     }
 
@@ -99,11 +138,41 @@ async function main() {
     await page.waitForFunction(() => cladGroup.children.length > 0, null, { timeout: 60000 });
     const counts = await page.evaluate(() => { const c = {}; cladGroup.children.forEach(g => c[g.name] = g.children.length); return c; });
     console.log('preview groups:', JSON.stringify(counts));
+    // The south wall has a window (an interior hole) and a door (a notch in the outline):
+    // both are openings, so both get a closer at each jamb.
+    console.log('openings and closers:', await page.evaluate(() =>
+        window._lastPreview.info.map(i => `${i.elevation}: ${i.openings} opening(s), `
+            + window._lastPreview.geometry.filter(m => m.ifc_type === 'closer' && m.elevation === i.elevation).length + ' closers').join(' | ')));
+    console.log('notches:', await page.evaluate(() => JSON.stringify(state.elevations[0].result.notches)));
     console.log('checks:', await page.evaluate(() => Array.from(document.querySelectorAll('.check-item span')).map(s => s.textContent)));
     console.log('overlay:', await page.evaluate(() => document.getElementById('dim-overlay').innerText.replace(/\n/g, ' | ')));
     await page.evaluate(() => frameElevation(state.elevations[0].result));
     await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(__dirname, 'smoke_plank.png') });
+
+    // Clicking a face that is already clad edits its chain instead of picking it again.
+    await page.evaluate(() => { window.battenEdges = () => window._lastPreview.geometry
+        .filter(m => m.ifc_type === 'batten' && m.elevation === 'Elevation A')
+        .map(m => Math.round(Math.min(...m.profile.map(q => q[0])))).sort((a, b) => a - b).slice(0, 4); });
+    const before = await page.evaluate(() => ({ n: state.elevations.length,
+        battens: window.battenEdges() }));
+    await lookAt('South wall', [0, 0.35, 1]);
+    console.log('re-click on built cladding:', await page.evaluate(() => JSON.stringify({
+        elevations: state.elevations.length, editing: state.editing && state.editing.name,
+        widget: document.getElementById('edit-widget').style.display !== 'none' })), '| was', before.n, 'elevation(s)');
+    const shifted = await page.evaluate(async () => {
+        document.getElementById('edit-offset').value = 60;
+        onEditSlide(60);
+        await new Promise(r => setTimeout(r, 1500));
+        return { offset: state.elevations[0].chain.offset, label: document.getElementById('edit-offset-val').textContent,
+                 battens: window.battenEdges() };
+    });
+    console.log('edit widget shift:', JSON.stringify(shifted), '| battens were at', JSON.stringify(before.battens));
+    await page.keyboard.press('Escape');
+    await page.evaluate(async () => { document.getElementById('edit-offset').value = 0; onEditSlide(0); await new Promise(r => setTimeout(r, 1200)); });
+    console.log('widget closed:', await page.evaluate(() => document.getElementById('edit-widget').style.display === 'none'));
+    console.log('pick seeds recorded:', await page.evaluate(() =>
+        state.elevations[0].picks.map(p => p.point && p.point.map(c => Math.round(c)).join(',')).join(' | ')));
 
     // Live slider: time one full preview round trip (Pyodide coursing + trimming + render).
     const ms = await page.evaluate(async () => {
@@ -207,6 +276,25 @@ async function main() {
     console.log('after swap:', await page.evaluate(() => (document.querySelector('.corner-row') || {}).textContent));
     console.log('lap check:', await page.evaluate(() => (Array.from(document.querySelectorAll('.check-item span'))
         .map(s => s.textContent).find(t => t.indexOf('corner end') >= 0) || 'none')));
+    // Vertical planks need counter-battens, so the wizard grows a step for them.
+    await buildChain('plank', 'vertical');
+    console.log('counter-battens built:', await page.evaluate(() =>
+        window._lastPreview.geometry.filter(m => m.ifc_type === 'counter_batten').length + ' at '
+        + document.getElementById('cb_centres').value + ' c/c'));
+
+    // Top and bottom of the cladding, set by two clicks in the model after Build.
+    await page.evaluate(() => frameElevation(state.elevations[0].result));
+    await page.waitForTimeout(600);
+    await buildChain('plank', 'horizontal', false, [0.72, 0.30]);
+    console.log('picked levels:', await page.evaluate(() => state.chains.filter(c => c.built)
+        .map(c => `${c.name} top ${c.topZ === null ? '-' : Math.round(c.topZ)} bottom ${c.bottomZ === null ? '-' : Math.round(c.bottomZ)}`).join(' | ')));
+    console.log('clad band vs face:', await page.evaluate(() => {
+        const vs = window._lastPreview.geometry.filter(m => m.ifc_type === 'plank')
+            .flatMap(m => m.profile.map(q => q[1]));
+        const info = window._lastPreview.info[0];
+        return vs.length ? `boards ${Math.round(Math.min(...vs))}–${Math.round(Math.max(...vs))} of face 0–${Math.round(info.height)} (clad top ${Math.round(info.clad_top)})` : 'none';
+    }));
+
     // Planks cannot lap, so the option disables itself and falls back to a mitre.
     await page.click('#cladding-type .turn-btn[data-value="plank"]');
     await page.waitForTimeout(1200);

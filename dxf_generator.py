@@ -1,8 +1,7 @@
 """
 CladForge — DXF export: one flattened elevation per detected region.
 
-    meshes_to_dxf_string(meshes, params, infos=None) -> str   (Pyodide, client-side)
-    meshes_to_dxf(meshes, params)                    -> path  (Flask fallback)
+    meshes_to_dxf_string(meshes, params, infos=None) -> str
 
 Each elevation is drawn in its own (u, v) frame, moved to origin and laid out
 left to right. Layers: WALL, OPENING, SPLASH_ZONE, SHEATHING, INSULATION,
@@ -11,7 +10,6 @@ COUNTER_BATTEN, BATTEN, CLADDING, CLOSER, DIMS, NOTES. Output is DXF R12
 """
 
 import math
-import tempfile
 
 from cladding_constants import (_parse, TOOL_NAME, IFC_SCHEMA_LABEL, SCOPE_NOTE, QUANTITY_NOTE,
                                 DISCLAIMER)
@@ -157,7 +155,7 @@ def _schedule(p, info, meshes):
         "sheathing %.0fmm, " % p["sheathing_t"] if p["sheathing"] else "",
         "insulation %.0fmm, " % p["insulation_t"] if p["insulation"] else "",
         info.get("battens", ""), p["batten_w"], p["batten_d"], info.get("batten_centres", 0),
-        ", counter-battens %.0fx%.0f" % (p["cb_w"], p["cb_d"]) if p["has_cb"] else ""))
+        ", counter-battens %.0fx%.0f @ %.0f c/c" % (p["cb_w"], p["cb_d"], p["cb_centres"]) if p["has_cb"] else ""))
     lines.append("Battens: %d no.  Counter-battens: %d no.  Noggins: %d no.  Cavity closers: %d no." % (
         counts.get("batten", 0), counts.get("counter_batten", 0), counts.get("cross_batten", 0),
         counts.get("closer", 0)))
@@ -248,9 +246,3 @@ def meshes_to_dxf_string(meshes, params, infos=None):
     _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), sheet_min_y - 600.0, 60.0)
     return dxf.to_string()
 
-
-def meshes_to_dxf(meshes, params):
-    tmp = tempfile.NamedTemporaryFile(suffix=".dxf", delete=False, mode="w", newline="")
-    tmp.write(meshes_to_dxf_string(meshes, params))
-    tmp.close()
-    return tmp.name

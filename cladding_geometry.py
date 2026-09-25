@@ -6,12 +6,13 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 (full rectangles); cladding_booleans.py cuts them at openings and splash zones.
 """
 
-from cladding_constants import _prism, _rect, COUNTER_BATTEN_CENTRES, MAX_BATTEN_SPAN
+from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN
 from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
-                                 base_level, corner_ends, openings, buildup_depth, clip_bounds)
+                                 base_level, corner_ends, openings, buildup_depth, clip_bounds,
+                                 clip_bounds_v)
 
 
 def build_elevation(p, elev, layout=None):
@@ -24,6 +25,7 @@ def build_elevation(p, elev, layout=None):
     # so modules carry on around corners. Each elevation occupies [start, start + W]
     # of the run, reversed where the corner flips the u direction.
     lo, hi = clip_bounds(elev)            # the clad part of the face, cut back at corners
+    v_lo, v_hi = clip_bounds_v(elev)      # and cut to the top and bottom picked for the chain
     start, run = layout or (0.0, hi - lo)
     along = run / 2.0 + float(elev.get("offset", 0.0)) - start
     centre = (hi - along) if elev.get("chain_reversed") else (lo + along)   # in this elevation's u
@@ -45,8 +47,13 @@ def build_elevation(p, elev, layout=None):
                                  holes=poly.get("holes")))
         depth += t
 
-    v0 = base_level(elev, p["splash"])
+    # Coursing runs between the picked levels: a picked bottom is where the boards
+    # start, so it takes over from the splash zone above the elevation base.
+    splash_v0 = base_level(elev, p["splash"])
+    v0 = max(splash_v0, v_lo)
+    H = min(H, v_hi)                      # coursing stops at the picked top
     info["base_level"] = v0
+    info["clad_top"] = H                  # "height" stays the face, as "width" does
     bw, bd = p["batten_w"], p["batten_d"]
 
     region = clip_region(elev, p["splash"])
@@ -67,9 +74,10 @@ def build_elevation(p, elev, layout=None):
     left, right, detail = corner_ends(elev, p)
     _apply_corner(meshes, {lo: left, hi: right}, detail, skip=("reveal", "closer"))
     info["corner"] = {"detail": detail, "left": list(left), "right": list(right)}
-    # Splash zone dimension at the left edge of the ground band.
+    # The band at the foot: a splash zone above an abutment, or the level that was picked.
     if v0 > 0:
-        dims.append(_dim(name, [0, 0], [0, v0], "Splash %.0f" % v0, 300, [-1, 0]))
+        dims.append(_dim(name, [0, 0], [0, v0],
+                         ("Splash %.0f" if v0 <= splash_v0 + 0.5 else "Base %.0f") % v0, 300, [-1, 0]))
     info["total_depth"] = depth
     info["n_boards"] = sum(1 for m in meshes if m["ifc_type"] in ("plank", "panel"))
     return meshes, dims, info
@@ -130,7 +138,7 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     """Horizontal boards on vertical battens (optionally on horizontal counter-battens)."""
     name, frame = elev["name"], elev["frame"]
     if p["has_cb"]:  # forced by override — flagged by check_rules, drainage is compromised
-        vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, COUNTER_BATTEN_CENTRES) + [H - p["cb_w"] / 2], p["cb_w"])
+        vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, p["cb_centres"]) + [H - p["cb_w"] / 2], p["cb_w"])
         depth = _horizontal_battens(p, vs, meshes, name, frame, depth, W, "counter_batten", p["cb_w"], p["cb_d"])
     battens = batten_positions(W, p["batten_w"], p["batten_centres"], offset)
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
@@ -164,7 +172,7 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
     """Vertical boards on horizontal battens on vertical counter-battens."""
     name, frame = elev["name"], elev["frame"]
     if p["has_cb"]:
-        cbs = batten_positions(W, p["cb_w"], COUNTER_BATTEN_CENTRES, 0.0)
+        cbs = batten_positions(W, p["cb_w"], p["cb_centres"], 0.0)
         depth = _vertical_battens(p, cbs, meshes, name, frame, depth, H, "counter_batten", p["cb_w"], p["cb_d"])
     bw = p["batten_w"]
     battens = dedupe(stacked_positions(v0 + bw / 2, H - bw / 2, p["batten_centres"]) + [H - bw / 2], bw)
@@ -195,7 +203,8 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
 
 
 def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
-    """Panels on vertical battens, joints on battens, noggins at horizontal joints.
+    """Panels on vertical battens, joints on battens, noggins at horizontal joints only
+    where a counter-batten layer is there to keep the drainage plane clear.
     Where the elevation has openings the setting-out starts from them: panel edges land
     on the structural jambs and each span between jambs is split into equal bays no
     wider than the maximum panel."""
@@ -203,7 +212,7 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     bw, gap = p["batten_w"], p["panel_gap"]
     cavity_start = depth
     if p["has_cb"]:  # forced by override
-        vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, COUNTER_BATTEN_CENTRES) + [H - p["cb_w"] / 2], p["cb_w"])
+        vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, p["cb_centres"]) + [H - p["cb_w"] / 2], p["cb_w"])
         depth = _horizontal_battens(p, vs, meshes, name, frame, depth, W, "counter_batten", p["cb_w"], p["cb_d"])
     holes = openings(elev)
     jambs = sorted({u for o in holes for u in (o[0], o[1]) if bw < u < W - bw}) if p["set_out_from_openings"] else []
@@ -221,12 +230,16 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cavity_t = depth - cavity_start
     courses = stacked_positions(v0, H, p["panel_h"] + gap)
-    for j, v in enumerate(courses[:-1]):   # noggins behind every horizontal joint
+    # A noggin between vertical battens sits on the drainage plane and dams it, so the
+    # horizontal seams are left unsupported unless a counter-batten layer holds the
+    # battens off the wall and the water can run down behind them.
+    for j, v in enumerate(courses[:-1] if p["has_cb"] else []):
         vj = v + p["panel_h"] + gap / 2
         for k, (a, b) in enumerate(zip(battens, battens[1:])):
             if b - a > bw + 1:
                 meshes.append(_prism(_rect(a + bw / 2, vj - bw / 2, b - bw / 2, vj + bw / 2), depth - p["batten_d"],
                                      p["batten_d"], frame, "cross_batten", "%s Cross Batten C%d-%d" % (name, j + 1, k + 1), name))
+    info["seam_noggins"] = bool(p["has_cb"]) and len(courses) > 1
     for j, v in enumerate(courses):
         for k, (s, e, _full) in enumerate(panels):
             meshes.append(_prism(_rect(s, v, e, v + p["panel_h"]), depth, p["panel_t"], frame, "panel",

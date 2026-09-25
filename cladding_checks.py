@@ -22,6 +22,11 @@ def check_rules(params, infos=None):
         add("Panel joints", "pass", "Panel joints land on battens at %.0fmm centres (locked, max %.0f)"
             % (p["batten_centres"], MAX_BATTEN_SPAN), p["batten_centres"])
         add("Panel size", "pass", "Panels %.0f x %.0fmm within max sheet size" % (p["panel_w"], p["panel_h"]))
+        add("Panel seams", "pass" if p["has_cb"] else "warn",
+            "Noggins fitted behind the horizontal seams: the counter-batten layer keeps the drainage plane clear"
+            if p["has_cb"] else
+            "Horizontal seams left unsupported — a noggin between vertical battens would dam the cavity. "
+            "Add counter-battens to support them, or use a proprietary horizontal joint profile")
 
     s = p["splash"]
     status = "pass" if s >= 150 else ("warn" if s >= 100 else "fail")
