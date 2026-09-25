@@ -216,7 +216,7 @@ the title area.
 
 | File | Lines | Budget |
 |---|---|---|
-| fabric_extract.py | 499 | 400 |
+| fabric_extract.py | 514 | 400 |
 | cladding_constants.py | 82 | 80 |
 | cladding_geometry.py | 314 | 400 |
 | cladding_primitives.py | 327 | 300 |
@@ -227,7 +227,7 @@ the title area.
 | app.py | 78 | 150 |
 | templates/index.html | 248 | 500 |
 
-`fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 99 and
+`fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 114 and
 6 lines); splitting the region clean-up — notches, seeded patches — into its own
 module would bring both back inside.
 
@@ -255,7 +255,12 @@ two PyPI deps that are not in the Pyodide distribution from local copies
 ## Limitations
 
 - Pyodide runs on the page's main thread, so while an extraction is running nothing
-  repaints — a slow one looks exactly like a hang. The engine prints each stage to the
+  repaints and nothing can be cancelled — a slow one looks exactly like a hang and there
+  is no way out but a reload. Extraction therefore runs to a deadline
+  (`DEFAULT_BUDGET_S`, 20 s): past it the context loop stops and the elevation comes back
+  from what was read, warning which elements were skipped. The proper fix is to move the
+  engine into a Web Worker, where a hang neither freezes the page nor survives a
+  terminate; the deadline is the bound until that happens. The engine prints each stage to the
   console as it starts (`[extract] ...`), so the last line names the stage that did not
   finish, and the result carries `timings_ms` for the slowest context elements.
 - Sampling the upper edge of an abutment costs one ray cast per probe, so probing every
