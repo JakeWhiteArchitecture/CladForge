@@ -121,7 +121,7 @@ async function main() {
                 await page.waitForTimeout(300);
                 await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * (1 - levels[1]));
             } else {
-                await page.click('#level-picker .wiz-actions button:last-child');
+                await page.click('#level-picker .wiz-actions button');   // Dismiss
             }
             await page.waitForFunction(() => !state.levels, null, { timeout: 10000 });
         }

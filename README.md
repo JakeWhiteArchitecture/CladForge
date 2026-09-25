@@ -44,11 +44,12 @@ extracted, **Make chain** appears at the top right of the view and **Enter**
 opens the wizard — plank or panel, horizontal or vertical (planks only), the
 board dimensions, the battens, the counter-battens where the buildup has them,
 and where the cladding starts at the foot of the wall — and **Build** generates
-that chain. Build hands straight over to two clicks in the model: one for the
-**top** of the cladding and one for the **bottom**. Only the height of each
-point is used, the pair applies to the whole chain, and each face is clamped to
-its own extent, so a lower wing in the same run never gets cladding above it.
-Either click can be skipped to run to the face. A step that does not apply is not
+that chain. Build hands straight over to two clicks in the model: one sets the
+height of the **top of the cladding**, one the height of the **baserail**. Only
+the height of each point is used, the pair applies to the whole chain, and each
+face is clamped to its own extent, so a lower wing in the same run never gets
+cladding above it. **Dismiss** (or Escape) closes the picker and keeps whatever
+has not been set, so a top clicked before dismissing still applies. A step that does not apply is not
 asked: panels never course, so they skip the orientation, and a buildup with
 no counter-battens skips their step. In panel mode the batten centres are
 shown but not editable, because the panel bay sets them. Every pending chain
@@ -102,8 +103,8 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
    asks for plank or panel, the orientation, the board sizes, the battens, the
    counter-battens if the buildup has them, and whether the cladding starts at
    the foot of the wall or above a splash zone. Nothing is generated before this.
-   Build then asks for two points in the model: the top of the cladding and the
-   bottom. Skip either to run to the face.
+   Build then asks for two points in the model: the height of the cladding top,
+   then the height of the baserail. Dismiss to keep either as it is.
 5. Refine anything in the panel — sheathing, insulation, splash zone, corners,
    openings, batten section and centres. It all previews live from here on.
 6. Drag the **horizontal offset** slider to control where the closing cuts land,

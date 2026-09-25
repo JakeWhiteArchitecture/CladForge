@@ -713,7 +713,7 @@ function initApp() {
     }
     document.addEventListener('keydown', e => {
         if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
-        if (state.levels) { skipLevel(); skipLevel(); return; }
+        if (state.levels) { dismissLevels(); return; }
         closeEditWidget();
     });
     document.getElementById('download-reminder').addEventListener('click', e => { if (e.target.id === 'download-reminder') e.currentTarget.classList.remove('open'); });

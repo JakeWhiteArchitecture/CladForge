@@ -179,13 +179,14 @@ function renderLevelPick() {
     const L = state.levels, box = document.getElementById('level-picker');
     if (!L) { box.style.display = 'none'; return; }
     box.style.display = '';
-    document.getElementById('level-title').textContent =
-        L.step === 0 ? 'Click a point for the TOP of the cladding' : 'Click a point for the BOTTOM of the cladding';
-    document.getElementById('level-note').textContent = L.step === 0
-        ? 'Anywhere in the model — only the height of the point is used. Skip to run to the top of the face.'
-        : (L.top === null ? 'Top left at the face. ' : `Top set at ${Math.round(L.top)}. `)
-          + 'Skip to run to the foot of the face.';
-    document.getElementById('level-step').textContent = `Level ${L.step + 1} of 2`;
+    document.getElementById('level-title').textContent = L.step === 0
+        ? 'Set the height of the top of the cladding' : 'Set the height of the cladding baserail';
+    document.getElementById('level-note').textContent =
+        'Click any point in the model — only its height is used. '
+        + (L.step === 0 ? 'Dismiss to keep the top as it is.'
+                        : (L.top === null ? 'Dismiss to keep the cladding as it is.'
+                                          : `Top set at ${Math.round(L.top)}. Dismiss to keep the base as it is.`));
+    document.getElementById('level-step').textContent = `${L.step + 1} of 2`;
 }
 
 function levelPicked(z) {
@@ -196,11 +197,10 @@ function levelPicked(z) {
     finishLevelPick();
 }
 
-function skipLevel() {
-    const L = state.levels;
-    if (!L) return;
-    if (L.step === 0) { L.step = 1; renderLevelPick(); return; }
-    finishLevelPick();
+// Dismiss closes the picker wherever it is, keeping whatever has not been set. A top
+// clicked before dismissing still applies; nothing clicked leaves the chain untouched.
+function dismissLevels() {
+    if (state.levels) finishLevelPick();
 }
 
 function finishLevelPick() {
