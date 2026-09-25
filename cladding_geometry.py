@@ -6,6 +6,8 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 (full rectangles); cladding_booleans.py cuts them at openings and splash zones.
 """
 
+import math
+
 from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN
 from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
@@ -125,6 +127,24 @@ def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None):
     return d
 
 
+def _batten_dims(name, battens, pitch, along_u, H_or_W):
+    """The c/c dimension between two regular battens, and the end distance to the edge
+    batten when it differs. Measuring c/c from the edge batten reported the end
+    distance under the name of the centres, so it seemed to change with the slider."""
+    out = []
+    pairs = list(zip(battens, battens[1:]))
+    regular = next(((a, b) for a, b in pairs if abs((b - a) - pitch) < 1.0), None)
+    def dim(a, b, label, off):
+        if along_u:
+            return _dim(name, [a, 0], [b, 0], label, off, [0, -1])
+        return _dim(name, [0, a], [0, b], label, off, [-1, 0])
+    if regular:
+        out.append(dim(regular[0], regular[1], "%.0f c/c" % pitch, 300 if along_u else 600))
+    if pairs and abs((pairs[0][1] - pairs[0][0]) - pitch) >= 1.0:
+        out.append(dim(pairs[0][0], pairs[0][1], "End %.0f" % (pairs[0][1] - pairs[0][0]), 300 if along_u else 600))
+    return out
+
+
 def _vertical_battens(p, us, meshes, name, frame, depth, H, ifc_type="batten", w=None, d=None):
     w = w or p["batten_w"]
     d = d or p["batten_d"]
@@ -169,8 +189,7 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
-    if len(battens) > 1:
-        dims.append(_dim(name, [battens[0], 0], [battens[1], 0], "%.0f c/c" % (battens[1] - battens[0]), 300, [0, -1]))
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W)
     if courses:
         dims.append(_dim(name, [W, courses[0]], [W, courses[0] + cover], "Course %.0f" % cover, 300, [1, 0],
                          "course", cover))
@@ -204,8 +223,7 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
     right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0
     info.update(n_courses=len(starts), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=0.0, closing_cut_left=left_cut, closing_cut_right=right_cut)
-    if len(battens) > 1:
-        dims.append(_dim(name, [0, battens[0]], [0, battens[1]], "%.0f c/c" % (battens[1] - battens[0]), 600, [-1, 0]))
+    dims += _batten_dims(name, battens, p["batten_centres"], False, H)
     if starts:
         dims.append(_dim(name, [max(0, starts[0]), H], [max(0, starts[0]) + (cover if starts[0] >= 0 else left_cut), H],
                          ("Course %.0f" % cover) if starts[0] >= 0 else ("Cut %.0f" % left_cut), 300, [0, 1],
@@ -231,12 +249,26 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
         panels, joints = bays_between([0.0] + jambs + [W], p["panel_w"], gap)
     else:
         panels, joints = panel_bays(W, p["panel_w"], gap, offset)
-    # A cavity closer backs every jamb, so it counts as support alongside the battens.
-    supports = dedupe_priority([joints + jambs, [bw / 2, W - bw / 2]], bw)
-    extra = []
-    for a, b in zip(supports, supports[1:]):
-        extra += subdivide(a, b, MAX_BATTEN_SPAN)
-    supports = dedupe_priority([supports, extra], bw)
+    edges = [bw / 2, W - bw / 2]
+    if jambs:
+        # Set out from the openings: each span between jambs is its own bay, so the
+        # spacing follows the openings. A cavity closer backs every jamb, so it counts
+        # as support alongside the battens.
+        supports = dedupe_priority([joints + jambs, edges], bw)
+        extra = []
+        for a, b in zip(supports, supports[1:]):
+            extra += subdivide(a, b, MAX_BATTEN_SPAN)
+        supports = dedupe_priority([supports, extra], bw)
+    else:
+        # One regular pitch, locked to the panel joints and carried through the end
+        # spans, so sliding the set-out moves the whole grid: only the distance to the
+        # edge battens changes, never the centres between.
+        pitch = p["batten_centres"]
+        anchor = joints[0] if joints else W / 2.0 + offset
+        k0 = int(math.floor((bw / 2 - anchor) / pitch))
+        grid = [anchor + k * pitch for k in range(k0, k0 + int(W / pitch) + 3)]
+        grid = [u for u in grid if bw / 2 < u < W - bw / 2]
+        supports = dedupe_priority([joints, grid, edges], bw)
     battens = [u for u in supports if all(abs(u - j) > bw / 2 for j in jambs)]
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cavity_t = depth - cavity_start
@@ -263,8 +295,7 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
                 closing_cut_top=(H - courses[-1]) if courses else 0.0, n_full=len(fulls) * len(courses),
                 set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
-    if len(battens) > 1:
-        dims.append(_dim(name, [battens[0], 0], [battens[1], 0], "%.0f c/c" % (battens[1] - battens[0]), 300, [0, -1]))
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W)
     if fulls and fulls[0][0] > 1:
         dims.append(_dim(name, [0, H], [fulls[0][0], H], "Cut %.0f" % fulls[0][0], 300, [0, 1]))
     if fulls:
