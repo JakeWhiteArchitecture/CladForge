@@ -186,45 +186,36 @@ def _section(tris, n, d, u):
     return straddles, True, poly, pts
 
 
-def _clip_half(poly, lo):
-    """Keep the part of a 3D polygon [(point, signed distance)] with distance >= lo."""
-    out = []
-    for i, (pa, sa) in enumerate(poly):
-        pb, sb = poly[(i + 1) % len(poly)]
-        if sa >= lo:
-            out.append((pa, sa))
-        if (sa >= lo) != (sb >= lo):
-            t = (lo - sa) / (sb - sa)
-            out.append((tuple(pa[k] + (pb[k] - pa[k]) * t for k in range(3)), lo))
-    return out
+ZONE_PLANES = (0.5, 1.0)   # fractions of the cladding depth, beyond the face, to section at
 
 
-def _clad_zone(tris, n, d, u, depth):
-    """What the element occupies in the cladding zone, projected onto the wall plane.
+def _zone_section(tris, n, d, u, depth):
+    """What stands in the cladding zone in front of the face.
 
-    A plane section only sees what reaches the wall. A roof finish can stop short of it
-    and still sit where the cladding goes, because the cladding stands off the face by
-    the whole buildup — so the zone from the face out to *depth* is what has to be
-    clear, not the face alone. Returns the footprint, or None."""
-    polys = []
-    for tri in tris:
-        ring = _clip_half([(v, _dot(v, n) - d) for v in tri], -PLANE_TOL)
-        ring = _clip_half([(q, -sd) for q, sd in ring], -depth)
-        if len(ring) < 3:
-            continue
+    A plane section at the face only sees what reaches the wall, but the cladding stands
+    off it by the whole buildup, so a roof finish that stops short still sits where the
+    boards go. Sections are cut at planes across that zone with the same plane cut used
+    at the face — the operation that has been reliable on real models all along.
+
+    This replaced a projection of every triangle in the zone onto the wall. That unioned
+    one sliver per triangle, and it arrived in the same change as extractions that never
+    came back on a real model; a plane cut gives a handful of well-formed polygons."""
+    parts = []
+    for f in ZONE_PLANES:
         try:
-            pg = Polygon([_to_local(q, n, u) for q, _sd in ring])
-            if pg.is_valid and pg.area > 1.0:
-                polys.append(pg)
+            _straddles, touches, poly, _pts = _section(tris, n, d + f * depth, u)
         except Exception:   # noqa: BLE001
             continue
-    if not polys:
+        if touches and poly is not None and not poly.is_empty:
+            parts.append(poly)
+    if not parts:
         return None
+    if len(parts) == 1:
+        return parts[0]
     try:
-        zone = unary_union(polys).buffer(0.5, join_style=2).buffer(-0.5, join_style=2)
-        return None if zone.is_empty or zone.area <= MIN_HOLE_AREA else zone
+        return unary_union(parts)
     except Exception:   # noqa: BLE001
-        return None
+        return max(parts, key=lambda pg: pg.bounds[3])
 
 
 MAX_TOP_SAMPLES = 240   # probes across one abutment: each is a ray cast, so this is the cost
@@ -331,7 +322,7 @@ def _extract(payload):
             straddles, touches, poly, pts = _section(tris, n, d, u)
             # An abutment counts if it reaches the wall or merely stands in the cladding
             # zone in front of it; a penetration still has to cross the face to be a hole.
-            zone = _clad_zone(tris, n, d, u, clad_depth) if etype in ABUTMENT_TYPES and clad_depth > 0 else None
+            zone = _zone_section(tris, n, d, u, clad_depth) if etype in ABUTMENT_TYPES and clad_depth > 0 else None
             if (not touches or poly is None) and zone is None:
                 continue
             if etype in ABUTMENT_TYPES:
