@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from synthetic import payload, corner_payload  # noqa: E402
+from synthetic import payload, corner_payload, box_tris  # noqa: E402
 from fabric_extract import extract_elevation, chain_link  # noqa: E402
 from cladding_primitives import splash_rings  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
@@ -24,10 +24,14 @@ def test_pitched_abutment_follows_the_roof():
     assert abs(north[0][0] - 6500) < 5 and abs(north[0][1] - 2600) < 5
     assert abs(north[-1][0] - 8000) < 5 and abs(north[-1][1] - 1850) < 5   # 2600 - 1500 * 900/1800
     assert any("Pitched" in w for w in e["warnings"])
-    # the splash band is a sloped polygon 150 tall, and boards are trimmed above it
+    # the band follows the slope and clears it by 150 measured perpendicular to the
+    # roof, so it stands taller than 150 vertically: 150 / cos(31 deg) = 175
     rings = splash_rings(e, 150)
     band = [r for r in rings if len(r) >= 4 and abs(r[0][0] - 5000) < 5][0]
-    assert abs(band[-1][1] - band[0][1] - 150) < 1e-6
+    import math as _math
+    pitch = _math.atan2(south[-1][1] - south[0][1], south[-1][0] - south[0][0])
+    assert abs(band[-1][1] - band[0][1] - 150 / _math.cos(pitch)) < 1e-6
+    assert abs((band[-1][1] - band[0][1]) * _math.cos(pitch) - 150) < 1e-6
     out = generate_preview({"elevations": [e], "trim": True})
     for m in out["geometry"]:
         if m["ifc_type"] in ("plank", "batten"):
@@ -196,3 +200,50 @@ def test_master_lap_at_a_reentrant_corner():
     cut = [m for m in out["geometry"] if m.get("corner") and m["elevation"] == "Elevation B"
            and m["ifc_type"] == "panel" and "ext_r" in m["corner"]]
     assert cut and all(m["corner"]["ext_r"] < 0 for m in cut), "the board behind is cut back"
+
+
+def test_splash_clearance_is_measured_off_the_roof_surface():
+    """150 mm of splash zone means 150 mm from the roof, not 150 mm of vertical band.
+    On a pitch the two differ by cos(pitch), which is what leaves boards short."""
+    import math
+    e = extract_elevation(payload(pitched=True))
+    ab = next(a for a in e["abutments"] if a.get("pitched"))
+    (u0, v0), (u1, v1) = ab["line"][0], ab["line"][-1]
+    nx, ny = -(v1 - v0), (u1 - u0)
+    L = math.hypot(nx, ny)
+    nx, ny = nx / L, ny / L
+
+    out = generate_preview({"elevations": [dict(e, offset=0)], "cladding_type": "plank",
+                            "splash": 150.0, "trim": True})
+    gaps = [(u - u0) * nx + (v - v0) * ny
+            for m in out["geometry"] if m["ifc_type"] == "plank"
+            for u, v in m["profile"] if u0 + 1 < u < u1 - 1]
+    above = [g for g in gaps if g > 0]
+    assert above, "no boards above the pitched abutment"
+    assert min(above) > 149.0, "boards sit %.1fmm off a %.0f degree roof, not 150" % (
+        min(above), math.degrees(math.atan2(v1 - v0, u1 - u0)))
+
+
+def test_a_roof_layer_that_stops_short_of_the_wall_still_counts():
+    """The cladding stands off the face by its whole buildup, so a roof finish that
+    never touches the wall can still sit where the boards go. A plane section cannot
+    see it; the cladding zone can."""
+    deck = box_tris(-500.0, 8500.0, 1400.0, 1600.0, -100.0, 2500.0)
+    cover = box_tris(-500.0, 8500.0, 1600.0, 1660.0, 60.0, 2500.0)   # 60mm clear of the face
+    pay = payload()
+    pay["context"] = [{"type": "IfcRoof", "name": "Deck", "tris": [[list(q) for q in t] for t in deck]},
+                      {"type": "IfcRoof", "name": "Covering", "tris": [[list(q) for q in t] for t in cover]}]
+
+    def tops(depth):
+        e = extract_elevation(dict(pay, options={"penetrations": True, "clad_depth": depth}))
+        return {a.get("name"): a["v"] for a in e["abutments"] if a["source"] != "base"}
+
+    assert tops(0.0) == {"Deck": 1600.0}                        # the plane section misses it
+    assert tops(150.0) == {"Deck": 1600.0, "Covering": 1660.0}  # the zone does not
+
+    e = extract_elevation(dict(pay, options={"penetrations": True, "clad_depth": 150.0}))
+    out = generate_preview({"elevations": [dict(e, offset=0)], "cladding_type": "plank",
+                            "splash": 150.0, "trim": True})
+    over = [min(q[1] for q in m["profile"]) for m in out["geometry"]
+            if m["ifc_type"] == "plank" and min(q[1] for q in m["profile"]) > 1660.0]
+    assert over and min(over) >= 1810.0 - 1.0, "boards clear the covering, not the deck"

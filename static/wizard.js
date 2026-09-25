@@ -236,3 +236,58 @@ function initWizard() {
     document.getElementById('chain-wizard').addEventListener('click', e => { if (e.target.id === 'chain-wizard') closeWizard(); });
     updateMakeChain();
 }
+
+// ─── COURSE HEIGHT ───
+// Clicking a course dimension types a new one over it. The scope is asked before it
+// applies, because a chain is set out as one run: changing one member's coursing
+// breaks the joints that carry round its corners.
+const COURSE = { dim: null };
+
+function openCourseDialog(dim) {
+    if (!dim) return;
+    const e = state.elevations.find(m => m.result && m.result.name === dim.elevation);
+    if (!e) return;
+    COURSE.dim = dim;
+    COURSE.elev = e;
+    const panel = toggleValue('cladding-type') === 'panel';
+    document.getElementById('course-title').textContent = panel ? 'Panel course height' : 'Course height';
+    document.getElementById('course-where').textContent =
+        `${chainLabel(e)} — currently ${Math.round(dim.value)} mm`;
+    const input = document.getElementById('course-value');
+    input.value = Math.round(dim.value);
+    input.min = panel ? 200 : 50;
+    input.max = panel ? 3000 : 1000;
+    const single = e.chain.members.length < 2;
+    document.getElementById('course-chain').style.display = single ? 'none' : '';
+    document.getElementById('course-one').textContent = single ? 'Apply' : 'This elevation only';
+    document.getElementById('course-reset').style.display = (e.cover || e.panelH) ? '' : 'none';
+    document.getElementById('course-dialog').classList.add('open');
+    input.focus();
+    input.select();
+}
+
+function closeCourseDialog() {
+    document.getElementById('course-dialog').classList.remove('open');
+    COURSE.dim = null;
+}
+
+function applyCourse(scope) {
+    const v = parseFloat(document.getElementById('course-value').value);
+    const e = COURSE.elev, panel = toggleValue('cladding-type') === 'panel';
+    if (!e || !isFinite(v) || v <= 0) return closeCourseDialog();
+    const targets = scope === 'chain' ? e.chain.members : [e];
+    targets.forEach(m => { if (panel) m.panelH = v; else m.cover = v; });
+    closeCourseDialog();
+    setStatus(`Course height ${Math.round(v)} mm on ${scope === 'chain' ? e.chain.name : e.name}`, 'ready');
+    renderElevationList();
+    updatePreview();
+}
+
+function resetCourse() {
+    const e = COURSE.elev;
+    if (e) e.chain.members.forEach(m => { m.cover = null; m.panelH = null; });
+    closeCourseDialog();
+    setStatus('Course height back to the panel setting', 'ready');
+    renderElevationList();
+    updatePreview();
+}

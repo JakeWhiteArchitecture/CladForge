@@ -248,3 +248,25 @@ def test_the_base_splash_can_be_switched_off(elevation):
 
     assert lowest(True) >= 150.0            # lifted clear of the ground
     assert lowest(False) < 150.0            # boards run to the foot of the face
+
+
+def test_a_course_height_can_be_set_per_elevation(elevation):
+    """A course height typed on a dimension overrides the parameter for the elevations
+    it was applied to, and the dimension carries the value so the UI can prefill it."""
+    base = generate_preview({"elevations": [dict(elevation, offset=0)], "cladding_type": "plank",
+                             "plank_w": 150, "plank_gap": 8, "trim": False})
+    assert base["info"][0]["cover"] == 158.0
+    course = next(d for d in base["dimensions"] if d.get("kind") == "course")
+    assert course["value"] == 158.0 and course["elevation"] == elevation["name"]
+
+    wide = generate_preview({"elevations": [dict(elevation, offset=0, cover=300.0)],
+                             "cladding_type": "plank", "plank_w": 150, "plank_gap": 8, "trim": False})
+    assert wide["info"][0]["cover"] == 300.0
+    assert wide["info"][0]["n_courses"] < base["info"][0]["n_courses"]
+
+    # panels take the override on their own field
+    panels = generate_preview({"elevations": [dict(elevation, offset=0, panel_h=1500.0)],
+                               "cladding_type": "panel", "trim": False})
+    heights = {round(max(q[1] for q in m["profile"]) - min(q[1] for q in m["profile"]))
+               for m in panels["geometry"] if m["ifc_type"] == "panel"}
+    assert heights == {1500}

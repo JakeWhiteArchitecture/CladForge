@@ -198,6 +198,22 @@
         </div>
     </div>
 
+    <div id="course-dialog" role="dialog" aria-modal="true" aria-label="Course height">
+        <div class="reminder-dialog">
+            <div class="wiz-head"><span class="reminder-heading" id="course-title">Course height</span></div>
+            <p class="hint" id="course-where"></p>
+            <div class="field"><label>Course height <span class="unit">mm, centre to centre</span></label>
+                <input type="number" id="course-value" step="1" onkeydown="if (event.key === 'Enter') applyCourse(document.getElementById('course-chain').style.display === 'none' ? 'one' : 'chain')"></div>
+            <p class="hint">A chain is set out as one run, so its joints carry round the corners. Applying to a single elevation breaks that on this one.</p>
+            <div class="wiz-actions">
+                <button class="btn btn-secondary btn-sm" onclick="closeCourseDialog()">Cancel</button>
+                <button class="btn btn-secondary btn-sm" id="course-reset" onclick="resetCourse()">Reset</button>
+                <button class="btn btn-secondary btn-sm" id="course-one" onclick="applyCourse('one')">This elevation only</button>
+                <button class="btn btn-primary btn-sm" id="course-chain" onclick="applyCourse('chain')">Whole chain</button>
+            </div>
+        </div>
+    </div>
+
     <div id="chain-wizard" role="dialog" aria-modal="true" aria-label="Make chain">
         <div class="reminder-dialog">
             <div class="wiz-head"><span class="reminder-heading" id="wiz-title">Plank or panel?</span>

@@ -14,7 +14,7 @@ Payload (all coordinates IFC mm, Z-up):
    "outward": [nx,ny,nz],                              # hit normal facing the viewer
    "seeds":   [[x,y,z], ...],                          # where each pick was clicked
    "context": [{"type": "IfcSlab", "name": "...", "tris": [...]}, ...],
-   "options": {"penetrations": true}}
+   "options": {"penetrations": true, "clad_depth": 150.0}}   # depth of the cladding zone
 
 Result: {"ok", "name", "warnings", "frame", "polygons", "notches", "width",
          "height", "area", "n_holes", "n_faces",
@@ -184,6 +184,47 @@ def _section(tris, n, d, u):
     return straddles, True, poly, pts
 
 
+def _clip_half(poly, lo):
+    """Keep the part of a 3D polygon [(point, signed distance)] with distance >= lo."""
+    out = []
+    for i, (pa, sa) in enumerate(poly):
+        pb, sb = poly[(i + 1) % len(poly)]
+        if sa >= lo:
+            out.append((pa, sa))
+        if (sa >= lo) != (sb >= lo):
+            t = (lo - sa) / (sb - sa)
+            out.append((tuple(pa[k] + (pb[k] - pa[k]) * t for k in range(3)), lo))
+    return out
+
+
+def _clad_zone(tris, n, d, u, depth):
+    """What the element occupies in the cladding zone, projected onto the wall plane.
+
+    A plane section only sees what reaches the wall. A roof finish can stop short of it
+    and still sit where the cladding goes, because the cladding stands off the face by
+    the whole buildup — so the zone from the face out to *depth* is what has to be
+    clear, not the face alone. Returns the footprint, or None."""
+    polys = []
+    for tri in tris:
+        ring = _clip_half([(v, _dot(v, n) - d) for v in tri], -PLANE_TOL)
+        ring = _clip_half([(q, -sd) for q, sd in ring], -depth)
+        if len(ring) < 3:
+            continue
+        try:
+            pg = Polygon([_to_local(q, n, u) for q, _sd in ring])
+            if pg.is_valid and pg.area > 1.0:
+                polys.append(pg)
+        except Exception:   # noqa: BLE001
+            continue
+    if not polys:
+        return None
+    try:
+        zone = unary_union(polys).buffer(0.5, join_style=2).buffer(-0.5, join_style=2)
+        return None if zone.is_empty or zone.area <= MIN_HOLE_AREA else zone
+    except Exception:   # noqa: BLE001
+        return None
+
+
 def _top_line(poly, u0, u1):
     """Upper envelope of a section polygon between u0 and u1, as a simplified polyline.
     Level for a flat roof or slab, sloped where a pitched roof meets a gable."""
@@ -235,6 +276,7 @@ def _extract(payload):
 
     # Context: abutments from slabs/roofs, penetrations from everything else.
     options = payload.get("options") or {}
+    clad_depth = float(options.get("clad_depth") or 0.0)
     abutments, cuts = [], []
     umin0, vmin0, umax0, vmax0 = region.bounds
     skipped = 0
@@ -245,10 +287,14 @@ def _extract(payload):
         try:   # one awkward element must not sink the whole extraction
             tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
             straddles, touches, poly, pts = _section(tris, n, d, u)
-            if not touches or poly is None:
+            # An abutment counts if it reaches the wall or merely stands in the cladding
+            # zone in front of it; a penetration still has to cross the face to be a hole.
+            zone = _clad_zone(tris, n, d, u, clad_depth) if etype in ABUTMENT_TYPES and clad_depth > 0 else None
+            if (not touches or poly is None) and zone is None:
                 continue
             if etype in ABUTMENT_TYPES:
-                line = _top_line(poly, umin0, umax0)
+                shape = poly if zone is None else (zone if poly is None else unary_union([poly, zone]))
+                line = _top_line(shape, umin0, umax0)
                 if line:
                     top = max(v for _u, v in line)
                     if vmin0 + EDGE_MARGIN < top < vmax0 - EDGE_MARGIN:

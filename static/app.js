@@ -103,6 +103,7 @@ function elevationCard(e, i) {
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
+        + (e.cover || e.panelH ? ` · course ${Math.round(e.cover || e.panelH)}` : '')
         + (ok && (e.chain.topZ !== null || e.chain.bottomZ !== null)
             ? ` · levels ${Math.round(Math.max(0, vLocal(e, e.chain.bottomZ) || 0))}–${Math.round(Math.min(r.height, vLocal(e, e.chain.topZ) === null ? r.height : vLocal(e, e.chain.topZ)))}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
@@ -304,6 +305,8 @@ function setPickMode(on) {
 
 function onViewportClick(event) {
     if (event.target !== renderer.domElement || !allMeshes.length || state._dragged) return;
+    const dim = pickDim(event);
+    if (dim && !state.levels) { openCourseDialog(dim); return; }
     // While the level picker is open every click is a height, wherever it lands.
     if (state.levels) {
         const p = pickAt(event);
@@ -351,10 +354,16 @@ async function runExtraction(e) {
     try {
         const t0 = performance.now();
         pyodide.globals.set('_payload_json', JSON.stringify(payload));
+        pyodide.globals.set('_params_json', JSON.stringify(getParams()));
+        // The engine works out the cladding zone's depth, so the rule lives in one place.
         const out = await pyodide.runPythonAsync(`
 import json as _json
 from fabric_extract import extract_elevation as _ex
-_json.dumps(_ex(_json.loads(_payload_json)))`);
+from cladding_constants import _parse as _parse_params
+from cladding_primitives import buildup_depth as _buildup_depth
+_pl = _json.loads(_payload_json)
+_pl.setdefault("options", {})["clad_depth"] = _buildup_depth(_parse_params(_json.loads(_params_json)))
+_json.dumps(_ex(_pl))`);
         e.result = JSON.parse(out);
         console.log(`extract ${e.name}: ${Math.round(performance.now() - t0)} ms, ok=${e.result.ok}`, e.result.warnings);
         if (e.result.ok) {
@@ -400,7 +409,8 @@ function elevationRecords() {
                                                    master_hi: !!e.masterHi, clip_lo: e.clipLo || 0,
                                                    clip_hi: e.clipHi,
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
-                                                   clip_v_hi: vLocal(e, chain.topZ) }));
+                                                   clip_v_hi: vLocal(e, chain.topZ),
+                                                   cover: e.cover || null, panel_h: e.panelH || null }));
         }
     }
     return out;
@@ -497,7 +507,8 @@ _json.dumps(_o)`);
         params.elevations.forEach(e => byName[e.name] = e);
         renderGeometry(result.geometry);
         renderOutlines(params.elevations, params.splash);
-        renderDimensions(result.dimensions, byName);
+        const act = state.elevations[state.active];
+        renderDimensions(result.dimensions, byName, act && act.result ? act.result.name : null);
         renderChecks(result.checks);
         renderInfo(result.info);
     } catch (err) { console.error('preview failed', err); setStatus('Preview error: ' + err.message, 'busy'); }
@@ -713,6 +724,7 @@ function initApp() {
     }
     document.addEventListener('keydown', e => {
         if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
+        if (document.getElementById('course-dialog').classList.contains('open')) { closeCourseDialog(); return; }
         if (state.levels) { dismissLevels(); return; }
         closeEditWidget();
     });
