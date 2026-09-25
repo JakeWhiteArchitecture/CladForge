@@ -135,7 +135,7 @@
             <div class="section">
                 <h2>5 · Setting-out</h2>
                 <div class="field"><label>Active elevation</label><select id="active-elev" onchange="setActive(parseInt(this.value))"></select></div>
-                <div class="field"><label>Horizontal offset <span class="unit">± half a bay, per chain, live</span></label>
+                <div class="field"><label>Horizontal offset <span class="unit">± half a bay, this elevation, live</span></label>
                     <div class="slider-row"><input type="range" id="offset" min="-300" max="300" step="5" value="0" oninput="onSlider(this.value)"><span id="offset-val">0 mm</span></div></div>
                 <label class="chk"><input type="checkbox" id="live-trim" checked onchange="updatePreview()"> Trim at openings in the preview (always trimmed on export)</label>
             </div>
@@ -194,7 +194,7 @@
                 <button class="mini" onclick="nudgeOffset(5)" title="Shift right 5 mm">▶</button>
                 <span id="edit-offset-val">0 mm</span>
             </div>
-            <p class="hint" style="margin:2px 0 0">Shifts the battens and boards along the run, ± half a bay. Click another clad face to edit its chain.</p>
+            <p class="hint" style="margin:2px 0 0">Shifts this elevation's battens and boards, ± half a bay. Joints stop carrying round a corner once its two faces are offset differently. Click another clad face to edit that one.</p>
         </div>
     </div>
 

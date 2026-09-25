@@ -176,7 +176,6 @@ async function main() {
 
     // Live slider: time one full preview round trip (Pyodide coursing + trimming + render).
     const ms = await page.evaluate(async () => {
-        const e = state.elevations[state.active]; e.offset = 120;
         const t = performance.now(); await updatePreview(); return Math.round(performance.now() - t);
     });
     const msDrag = await page.evaluate(async () => {
@@ -339,6 +338,27 @@ async function main() {
         resetCourse();
         await new Promise(r => setTimeout(r, 1200));
     });
+
+    // The offset belongs to one elevation: shifting B must leave C where it is.
+    const offsetScope = await page.evaluate(async () => {
+        const b = state.elevations.find(e => e.chain.members.length > 1);
+        const c = b.chain.members.find(m => m !== b);
+        const battens = name => window._lastPreview.geometry
+            .filter(m => m.ifc_type === 'batten' && m.elevation === name)
+            .map(m => Math.round(Math.min(...m.profile.map(q => q[0])))).sort((x, y) => x - y).slice(1, 4);
+        setActive(state.elevations.indexOf(b));
+        await updatePreview();
+        const before = { B: battens(b.result.name), C: battens(c.result.name) };
+        onSlider(90);                 // the panel slider, on the active elevation
+        await updatePreview();
+        const after = { B: battens(b.result.name), C: battens(c.result.name) };
+        const offsets = b.chain.members.map(m => `${m.name}=${m.offset}`).join(' ');
+        onSlider(0);
+        await updatePreview();
+        return { chain: b.chain.name, moved: b.name, offsets, before, after,
+                 restored: battens(b.result.name).join(',') === before.B.join(',') };
+    });
+    console.log('offset scope:', JSON.stringify(offsetScope));
 
     // Top and bottom of the cladding, set by two clicks in the model after Build.
     await page.evaluate(() => frameElevation(state.elevations[0].result));
