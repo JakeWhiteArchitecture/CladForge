@@ -22,6 +22,7 @@ Result: {"ok", "name", "warnings", "frame", "polygons", "notches", "width",
 """
 
 import math
+import time
 
 from shapely.geometry import Polygon, MultiPoint, LineString, Point
 from shapely.ops import unary_union, polygonize
@@ -225,14 +226,26 @@ def _clad_zone(tris, n, d, u, depth):
         return None
 
 
+MAX_TOP_SAMPLES = 240   # probes across one abutment: each is a ray cast, so this is the cost
+
+
 def _top_line(poly, u0, u1):
     """Upper envelope of a section polygon between u0 and u1, as a simplified polyline.
-    Level for a flat roof or slab, sloped where a pitched roof meets a gable."""
+    Level for a flat roof or slab, sloped where a pitched roof meets a gable.
+
+    Every sample is a ray cast against the whole polygon, so sampling one per vertex is
+    quadratic in the section's complexity — a faceted roof with a few thousand vertices
+    takes tens of seconds and reads as a hang. The probes are capped: vertex positions
+    are kept where there are few enough to matter, and thinned evenly beyond that."""
     bu0, bv0, bu1, bv1 = poly.bounds
     lo, hi = max(u0, bu0), min(u1, bu1)
     if hi - lo < EDGE_MARGIN:
         return None
-    us = sorted({lo, hi} | {round(x, 3) for pg in iter_polygons(poly) for x, _y in pg.exterior.coords if lo < x < hi})
+    xs = sorted({round(x, 3) for pg in iter_polygons(poly) for x, _y in pg.exterior.coords if lo < x < hi})
+    if len(xs) > MAX_TOP_SAMPLES:
+        step = len(xs) / float(MAX_TOP_SAMPLES)
+        xs = [xs[min(len(xs) - 1, int(i * step))] for i in range(MAX_TOP_SAMPLES)]
+    us = sorted({lo, hi} | set(xs))
     line = []
     for x in us:
         try:
@@ -257,6 +270,14 @@ def extract_elevation(payload):
                 "warnings": ["Extraction failed: %s: %s" % (type(exc).__name__, exc)]}
 
 
+def _say(on, msg):
+    """Print a stage as it starts. Pyodide blocks the page while it runs, so a slow or
+    hung extraction paints nothing — the console trail is the only way to see where it
+    stopped. The last line printed names the stage that did not finish."""
+    if on:
+        print("[extract] %s" % msg, flush=True)
+
+
 def _extract(payload):
     name = payload.get("name") or "Elevation"
     faces = _dedupe([[tuple(float(c) for c in v) for v in tri] for tri in payload.get("faces", [])])
@@ -276,6 +297,10 @@ def _extract(payload):
 
     # Context: abutments from slabs/roofs, penetrations from everything else.
     options = payload.get("options") or {}
+    dbg = bool(options.get("debug", True))
+    clock = {}
+    _say(dbg, "%s: %d faces, region %.0f x %.0f" % (name, len(faces), region.bounds[2] - region.bounds[0],
+                                                    region.bounds[3] - region.bounds[1]))
     clad_depth = float(options.get("clad_depth") or 0.0)
     abutments, cuts = [], []
     umin0, vmin0, umax0, vmax0 = region.bounds
@@ -284,6 +309,8 @@ def _extract(payload):
         etype = (elem.get("type") or "").upper()
         if etype in IGNORE_TYPES or not elem.get("tris"):
             continue
+        _say(dbg, "  %s (%s, %d tris)" % (elem.get("name") or "?", etype, len(elem["tris"])))
+        _t0 = time.perf_counter()
         try:   # one awkward element must not sink the whole extraction
             tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
             straddles, touches, poly, pts = _section(tris, n, d, u)
@@ -306,6 +333,8 @@ def _extract(payload):
                 cuts.append(poly)
         except Exception:   # noqa: BLE001
             skipped += 1
+        clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
+    _say(dbg, "  context done, cutting %d penetration(s)" % len(cuts))
     if skipped:
         result["warnings"].append("%d context element(s) could not be sectioned and were ignored" % skipped)
     for cut_poly in cuts:
@@ -335,12 +364,15 @@ def _extract(payload):
     if len(polygons) > 1:
         result["warnings"].append("%d separate patches merged into one elevation" % len(polygons))
 
+    _say(dbg, "  seeding and notches")
     notches = _notches(polygons)
     result.update({"ok": True, "frame": make_frame(n, d, umin, vmin), "polygons": polygons,
                    "width": round(width, 2), "height": round(height, 2),
                    "area": round(region.area, 1), "notches": notches,
                    "abutments": _merge_abutments(abutments, umin, vmin, width),
                    "n_holes": sum(len(pg["holes"]) for pg in polygons) + len(notches)})
+    result["timings_ms"] = {k: v for k, v in sorted(clock.items(), key=lambda kv: -kv[1])[:8] if v >= 20}
+    _say(dbg, "%s: done — %s" % (name, result["timings_ms"] or "nothing slow"))
     if any(a.get("pitched") for a in result["abutments"]):
         result["warnings"].append("Pitched abutment detected — the splash zone follows the roof line; check it")
     return result
