@@ -36,6 +36,7 @@ MIN_HOLE_AREA = 2500.0    # mm² – ignore holes smaller than 50 x 50
 EDGE_MARGIN = 50.0        # mm – abutments this close to the top/bottom are not abutments
 CORNER_TOL = 400.0        # mm – a corner may sit this far past an elevation's end (wall thickness)
 PITCH_TOL = 20.0          # mm – rise along an abutment line before it counts as pitched
+DEFAULT_BUDGET_S = 20.0   # s – extraction gives up on context past this rather than hang
 # Type names are compared upper-cased: web-ifc reports IFCSLAB, IfcOpenShell IfcSlab.
 ABUTMENT_TYPES = frozenset({"IFCSLAB", "IFCSLABSTANDARDCASE", "IFCSLABELEMENTEDCASE", "IFCROOF"})
 IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE", "IFCSPACE",
@@ -298,6 +299,12 @@ def _extract(payload):
     # Context: abutments from slabs/roofs, penetrations from everything else.
     options = payload.get("options") or {}
     dbg = bool(options.get("debug", True))
+    # Extraction runs on the page's main thread, so anything slow freezes the browser with
+    # no way out. Every stage is checked against a deadline: past it the context loop stops
+    # and the elevation comes back with what it has and a warning naming where it ran out,
+    # which is recoverable and diagnosable in a way that grinding for twenty minutes is not.
+    budget = options.get("budget_s")    # 0 is a real value, so do not fall back on falsiness
+    deadline = time.perf_counter() + (DEFAULT_BUDGET_S if budget is None else float(budget))
     clock = {}
     _say(dbg, "%s: %d faces, region %.0f x %.0f" % (name, len(faces), region.bounds[2] - region.bounds[0],
                                                     region.bounds[3] - region.bounds[1]))
@@ -309,6 +316,14 @@ def _extract(payload):
         etype = (elem.get("type") or "").upper()
         if etype in IGNORE_TYPES or not elem.get("tris"):
             continue
+        if time.perf_counter() > deadline:
+            timed_out = len(payload.get("context", [])) - len(clock)
+            result["warnings"].append(
+                "Ran out of time after %d of %d nearby elements — %d skipped. The elevation is "
+                "built from what was read; pick a smaller patch or switch off penetrations."
+                % (len(clock), len(payload.get("context", [])), timed_out))
+            _say(dbg, "  DEADLINE reached — skipping %d remaining element(s)" % timed_out)
+            break
         _say(dbg, "  %s (%s, %d tris)" % (elem.get("name") or "?", etype, len(elem["tris"])))
         _t0 = time.perf_counter()
         try:   # one awkward element must not sink the whole extraction

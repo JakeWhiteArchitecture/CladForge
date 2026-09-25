@@ -247,3 +247,20 @@ def test_a_roof_layer_that_stops_short_of_the_wall_still_counts():
     over = [min(q[1] for q in m["profile"]) for m in out["geometry"]
             if m["ifc_type"] == "plank" and min(q[1] for q in m["profile"]) > 1660.0]
     assert over and min(over) >= 1810.0 - 1.0, "boards clear the covering, not the deck"
+
+
+def test_extraction_gives_up_rather_than_grinding():
+    """The engine runs on the page's main thread, so a slow extraction freezes the
+    browser with no way out. Past its budget it stops reading context and returns what
+    it has, saying so, instead of running on."""
+    pay = payload(pitched=True)
+    out_of_time = extract_elevation(dict(pay, options={"penetrations": True, "budget_s": 0.0}))
+    assert out_of_time["ok"], "a timed-out extraction is still a usable elevation"
+    assert out_of_time["width"] > 0 and out_of_time["polygons"]
+    assert any("Ran out of time" in w for w in out_of_time["warnings"])
+    assert len(out_of_time["abutments"]) == 1          # just the base line, no context read
+
+    full = extract_elevation(dict(pay, options={"penetrations": True}))
+    assert not any("Ran out of time" in w for w in full["warnings"])
+    assert len(full["abutments"]) > 1
+    assert full["width"] == out_of_time["width"]       # the face itself is read either way
