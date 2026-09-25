@@ -280,6 +280,17 @@ function fitCameraTo(obj) {
 function setModelVisible(on) { layerVisible.model = on; modelGroup.visible = on; }
 
 // ─── PICKING ───
+function pickDim(event) {
+    if (!dimLabels.length || !dimGroup.visible) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    const mouse = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1,
+                                    -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(mouse, camera);
+    const hits = rc.intersectObjects(dimLabels, false);
+    return hits.length ? hits[0].object.userData.dim : null;
+}
+
 function pickAt(event) {
     const rect = renderer.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1,
@@ -500,12 +511,14 @@ function renderOutlines(elevations, splash) {
     });
 }
 
-function makeLabel(text) {
+function makeLabel(text, editable) {
     const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d');
+    if (editable) text += '  \u270e';
     ctx.font = 'bold 40px sans-serif';
     canvas.width = Math.ceil(ctx.measureText(text).width) + 24; canvas.height = 56;
-    ctx.font = 'bold 40px sans-serif'; ctx.fillStyle = 'rgba(10,10,26,0.7)';
+    ctx.font = 'bold 40px sans-serif'; ctx.fillStyle = editable ? 'rgba(0,80,110,0.85)' : 'rgba(10,10,26,0.7)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (editable) { ctx.strokeStyle = '#00ccff'; ctx.lineWidth = 3; ctx.strokeRect(1.5, 1.5, canvas.width - 3, canvas.height - 3); }
     ctx.fillStyle = '#00ccff'; ctx.textBaseline = 'middle'; ctx.fillText(text, 12, 28);
     const tex = new THREE.CanvasTexture(canvas);
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
@@ -513,11 +526,16 @@ function makeLabel(text) {
     return sprite;
 }
 
-function renderDimensions(dims, elevByName) {
+let dimLabels = [];
+
+// Dimensions belong to one elevation at a time: the whole model's worth at once is
+// unreadable, so only the active elevation's are drawn.
+function renderDimensions(dims, elevByName, only) {
     clearGroup(dimGroup);
+    dimLabels = [];
     for (const d of dims) {
         const e = elevByName[d.elevation];
-        if (!e) continue;
+        if (!e || (only && d.elevation !== only)) continue;
         const M = frameMatrix(e.frame, 60);
         const [nx, ny] = d.norm, off = d.offset;
         const p1 = new THREE.Vector3(d.p1[0], d.p1[1], 0), p2 = new THREE.Vector3(d.p2[0], d.p2[1], 0);
@@ -527,9 +545,10 @@ function renderDimensions(dims, elevByName) {
         const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),
                                             new THREE.LineBasicMaterial({ color: 0x00ccff, depthTest: false }));
         dimGroup.add(line);
-        const label = makeLabel(d.label);
+        const label = makeLabel(d.label, !!d.kind);
         label.position.copy(new THREE.Vector3((d.p1[0] + d.p2[0]) / 2 + nx * (off + 120), (d.p1[1] + d.p2[1]) / 2 + ny * (off + 120), 0).applyMatrix4(M));
         dimGroup.add(label);
+        if (d.kind) { label.userData.dim = d; dimLabels.push(label); }
     }
     dimGroup.visible = layerVisible.dims;
 }

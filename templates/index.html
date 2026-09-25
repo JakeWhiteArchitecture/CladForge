@@ -135,7 +135,7 @@
             <div class="section">
                 <h2>5 · Setting-out</h2>
                 <div class="field"><label>Active elevation</label><select id="active-elev" onchange="setActive(parseInt(this.value))"></select></div>
-                <div class="field"><label>Horizontal offset <span class="unit">± half a bay, per chain, live</span></label>
+                <div class="field"><label>Horizontal offset <span class="unit">± half a bay, this elevation, live</span></label>
                     <div class="slider-row"><input type="range" id="offset" min="-300" max="300" step="5" value="0" oninput="onSlider(this.value)"><span id="offset-val">0 mm</span></div></div>
                 <label class="chk"><input type="checkbox" id="live-trim" checked onchange="updatePreview()"> Trim at openings in the preview (always trimmed on export)</label>
             </div>
@@ -194,7 +194,23 @@
                 <button class="mini" onclick="nudgeOffset(5)" title="Shift right 5 mm">▶</button>
                 <span id="edit-offset-val">0 mm</span>
             </div>
-            <p class="hint" style="margin:2px 0 0">Shifts the battens and boards along the run, ± half a bay. Click another clad face to edit its chain.</p>
+            <p class="hint" style="margin:2px 0 0">Shifts this elevation's battens and boards, ± half a bay. Joints stop carrying round a corner once its two faces are offset differently. Click another clad face to edit that one.</p>
+        </div>
+    </div>
+
+    <div id="course-dialog" role="dialog" aria-modal="true" aria-label="Course height">
+        <div class="reminder-dialog">
+            <div class="wiz-head"><span class="reminder-heading" id="course-title">Course height</span></div>
+            <p class="hint" id="course-where"></p>
+            <div class="field"><label>Course height <span class="unit">mm, centre to centre</span></label>
+                <input type="number" id="course-value" step="1" onkeydown="if (event.key === 'Enter') applyCourse(document.getElementById('course-chain').style.display === 'none' ? 'one' : 'chain')"></div>
+            <p class="hint">A chain is set out as one run, so its joints carry round the corners. Applying to a single elevation breaks that on this one.</p>
+            <div class="wiz-actions">
+                <button class="btn btn-secondary btn-sm" onclick="closeCourseDialog()">Cancel</button>
+                <button class="btn btn-secondary btn-sm" id="course-reset" onclick="resetCourse()">Reset</button>
+                <button class="btn btn-secondary btn-sm" id="course-one" onclick="applyCourse('one')">This elevation only</button>
+                <button class="btn btn-primary btn-sm" id="course-chain" onclick="applyCourse('chain')">Whole chain</button>
+            </div>
         </div>
     </div>
 

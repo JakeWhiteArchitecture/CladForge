@@ -176,7 +176,6 @@ async function main() {
 
     // Live slider: time one full preview round trip (Pyodide coursing + trimming + render).
     const ms = await page.evaluate(async () => {
-        const e = state.elevations[state.active]; e.offset = 120;
         const t = performance.now(); await updatePreview(); return Math.round(performance.now() - t);
     });
     const msDrag = await page.evaluate(async () => {
@@ -281,6 +280,85 @@ async function main() {
     console.log('counter-battens built:', await page.evaluate(() =>
         window._lastPreview.geometry.filter(m => m.ifc_type === 'counter_batten').length + ' at '
         + document.getElementById('cb_centres').value + ' c/c'));
+
+    // Dimensions belong to the active elevation, and a course one can be typed over.
+    // Vertical planks label their first course "Cut" when it starts off the face edge,
+    // so put the job back on horizontal planks where a Course dimension exists.
+    await page.click('#plank-orient .turn-btn[data-value="horizontal"]');
+    await page.waitForTimeout(1500);
+    console.log('dims on screen:', await page.evaluate(() => ({
+        active: state.elevations[state.active] && state.elevations[state.active].name,
+        labels: dimLabels.length, drawn: dimGroup.children.length,
+        elevations: Array.from(new Set(window._lastPreview.dimensions.map(d => d.elevation))).length })));
+    console.log('all dims:', await page.evaluate(() => window._lastPreview.dimensions
+        .map(d => `${d.elevation.replace('Elevation ', '')}:${d.label}:${d.kind || '-'}`).join(' ')));
+    const course = await page.evaluate(() => {
+        const d = window._lastPreview.dimensions.find(x => x.kind === 'course');
+        if (!d) return null;
+        openCourseDialog(d);
+        return { title: document.getElementById('course-title').textContent,
+                 where: document.getElementById('course-where').textContent,
+                 value: document.getElementById('course-value').value,
+                 chainButton: document.getElementById('course-chain').style.display !== 'none' };
+    });
+    console.log('course dialog:', JSON.stringify(course));
+    const applied = !course ? 'no course dim' : await page.evaluate(async () => {
+        document.getElementById('course-value').value = 300;
+        applyCourse('one');
+        await new Promise(r => setTimeout(r, 1500));
+        return { cover: window._lastPreview.info[0].cover, courses: window._lastPreview.info[0].n_courses };
+    });
+    console.log('after applying 300:', JSON.stringify(applied));
+    if (course) {
+        await page.evaluate(async () => {
+            openCourseDialog(window._lastPreview.dimensions.find(x => x.kind === 'course'));
+            resetCourse();
+            await new Promise(r => setTimeout(r, 1500));
+        });
+        console.log('after reset:', await page.evaluate(() => window._lastPreview.info[0].cover));
+    }
+
+    // Chain 2 has two members, so the dialog offers the scope choice.
+    const chainScope = await page.evaluate(async () => {
+        const b = state.elevations.find(e => e.chain.members.length > 1);
+        const d = window._lastPreview.dimensions.find(x => x.kind === 'course' && x.elevation === b.result.name);
+        openCourseDialog(d);
+        const offered = document.getElementById('course-chain').style.display !== 'none';
+        document.getElementById('course-value').value = 250;
+        applyCourse('chain');
+        await new Promise(r => setTimeout(r, 1500));
+        return { offered, chain: b.chain.name,
+                 members: b.chain.members.map(m => `${m.name}=${m.cover}`).join(' '),
+                 covers: window._lastPreview.info.map(i => `${i.elevation.replace('Elevation ', '')}:${i.cover}`).join(' ') };
+    });
+    console.log('chain scope:', JSON.stringify(chainScope));
+    await page.evaluate(async () => {
+        const b = state.elevations.find(e => e.chain.members.length > 1);
+        openCourseDialog(window._lastPreview.dimensions.find(x => x.kind === 'course' && x.elevation === b.result.name));
+        resetCourse();
+        await new Promise(r => setTimeout(r, 1200));
+    });
+
+    // The offset belongs to one elevation: shifting B must leave C where it is.
+    const offsetScope = await page.evaluate(async () => {
+        const b = state.elevations.find(e => e.chain.members.length > 1);
+        const c = b.chain.members.find(m => m !== b);
+        const battens = name => window._lastPreview.geometry
+            .filter(m => m.ifc_type === 'batten' && m.elevation === name)
+            .map(m => Math.round(Math.min(...m.profile.map(q => q[0])))).sort((x, y) => x - y).slice(1, 4);
+        setActive(state.elevations.indexOf(b));
+        await updatePreview();
+        const before = { B: battens(b.result.name), C: battens(c.result.name) };
+        onSlider(90);                 // the panel slider, on the active elevation
+        await updatePreview();
+        const after = { B: battens(b.result.name), C: battens(c.result.name) };
+        const offsets = b.chain.members.map(m => `${m.name}=${m.offset}`).join(' ');
+        onSlider(0);
+        await updatePreview();
+        return { chain: b.chain.name, moved: b.name, offsets, before, after,
+                 restored: battens(b.result.name).join(',') === before.B.join(',') };
+    });
+    console.log('offset scope:', JSON.stringify(offsetScope));
 
     // Top and bottom of the cladding, set by two clicks in the model after Build.
     await page.evaluate(() => frameElevation(state.elevations[0].result));

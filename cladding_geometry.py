@@ -30,6 +30,11 @@ def build_elevation(p, elev, layout=None):
     along = run / 2.0 + float(elev.get("offset", 0.0)) - start
     centre = (hi - along) if elev.get("chain_reversed") else (lo + along)   # in this elevation's u
     offset = centre - W / 2.0
+    # A course height typed on a dimension overrides the parameter, for this elevation
+    # or for every member of its chain — whichever scope was chosen.
+    over = {k: float(elev[k]) for k in ("cover", "panel_h") if elev.get(k)}
+    if over:
+        p = dict(p, **over)
     meshes, dims = [], []
     info = {"elevation": name, "width": W, "height": H, "battens": p["battens"],
             "has_cb": p["has_cb"], "unsupported_joints": 0}
@@ -110,10 +115,14 @@ def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
             m["corner"] = corner
 
 
-def _dim(elev, p1, p2, label, offset, norm):
-    return {"elevation": elev, "p1": [float(p1[0]), float(p1[1])],
-            "p2": [float(p2[0]), float(p2[1])], "label": label,
-            "offset": float(offset), "norm": [float(norm[0]), float(norm[1])]}
+def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None):
+    """*kind* names what the dimension measures, so the UI can offer to edit it."""
+    d = {"elevation": elev, "p1": [float(p1[0]), float(p1[1])],
+         "p2": [float(p2[0]), float(p2[1])], "label": label,
+         "offset": float(offset), "norm": [float(norm[0]), float(norm[1])]}
+    if kind:
+        d["kind"], d["value"] = kind, float(value)
+    return d
 
 
 def _vertical_battens(p, us, meshes, name, frame, depth, H, ifc_type="batten", w=None, d=None):
@@ -163,7 +172,8 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     if len(battens) > 1:
         dims.append(_dim(name, [battens[0], 0], [battens[1], 0], "%.0f c/c" % (battens[1] - battens[0]), 300, [0, -1]))
     if courses:
-        dims.append(_dim(name, [W, courses[0]], [W, courses[0] + cover], "Course %.0f" % cover, 300, [1, 0]))
+        dims.append(_dim(name, [W, courses[0]], [W, courses[0] + cover], "Course %.0f" % cover, 300, [1, 0],
+                         "course", cover))
         dims.append(_dim(name, [W, courses[-1]], [W, H], "Cut %.0f" % (H - courses[-1]), 600, [1, 0]))
     return depth + p["plank_t"]
 
@@ -198,7 +208,8 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
         dims.append(_dim(name, [0, battens[0]], [0, battens[1]], "%.0f c/c" % (battens[1] - battens[0]), 600, [-1, 0]))
     if starts:
         dims.append(_dim(name, [max(0, starts[0]), H], [max(0, starts[0]) + (cover if starts[0] >= 0 else left_cut), H],
-                         ("Course %.0f" % cover) if starts[0] >= 0 else ("Cut %.0f" % left_cut), 300, [0, 1]))
+                         ("Course %.0f" % cover) if starts[0] >= 0 else ("Cut %.0f" % left_cut), 300, [0, 1],
+                         "course" if starts[0] >= 0 else None, cover))
     return depth + p["plank_t"]
 
 
@@ -261,7 +272,8 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     for o in holes:
         dims.append(_dim(name, [o[0], o[3]], [o[1], o[3]], "Opening %.0f" % (o[1] - o[0]), 250, [0, 1]))
     if courses:
-        dims.append(_dim(name, [W, courses[0]], [W, courses[0] + p["panel_h"]], "Course %.0f" % p["panel_h"], 300, [1, 0]))
+        dims.append(_dim(name, [W, courses[0]], [W, courses[0] + p["panel_h"]], "Course %.0f" % p["panel_h"],
+                         300, [1, 0], "course", p["panel_h"]))
     return face
 
 

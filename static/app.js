@@ -10,7 +10,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // A chain generates nothing until it is built: picking is a selection, the wizard
 // turns it into cladding. See static/wizard.js.
 function newChain() {
-    const chain = { name: 'Chain ' + (++state.seq), offset: 0, members: [], length: 0, built: false,
+    const chain = { name: 'Chain ' + (++state.seq), members: [], length: 0, built: false,
                     topZ: null, bottomZ: null };
     state.chains.push(chain);
     return chain;
@@ -21,6 +21,7 @@ function newElevation(chain) {
     const name = 'Elevation ' + String.fromCharCode(65 + (n % 26)) + (n >= 26 ? Math.floor(n / 26) : '');
     const e = { name, picks: [], result: null, manual: [], disabled: {},
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
+                offset: 0,
                 cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, clipLo: 0, clipHi: null };
     e.chain.members.push(e);
     state.elevations.push(e);
@@ -47,7 +48,7 @@ function setActive(i) {
     const sel = document.getElementById('active-elev');
     sel.innerHTML = state.elevations.map((e, k) => `<option value="${k}" ${k === i ? 'selected' : ''}>${chainLabel(e)}</option>`).join('');
     const e = state.elevations[i];
-    document.getElementById('offset').value = e ? e.chain.offset : 0;
+    document.getElementById('offset').value = e ? e.offset : 0;
     updateSliderRange();
     updatePreview();
 }
@@ -103,6 +104,7 @@ function elevationCard(e, i) {
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
+        + (e.cover || e.panelH ? ` · course ${Math.round(e.cover || e.panelH)}` : '')
         + (ok && (e.chain.topZ !== null || e.chain.bottomZ !== null)
             ? ` · levels ${Math.round(Math.max(0, vLocal(e, e.chain.bottomZ) || 0))}–${Math.round(Math.min(r.height, vLocal(e, e.chain.topZ) === null ? r.height : vLocal(e, e.chain.topZ)))}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
@@ -270,13 +272,14 @@ async function relinkChain(chain) {
 
 // ─── EDIT MODE ───
 // A built chain is edited, not re-picked. Clicking one of its faces brings its
-// setting-out over the view: the offset shifts every batten and board along the run.
+// setting-out over the view. The offset is this elevation's alone, so two faces of a
+// chain can be set out differently — at the cost of the joints carrying round.
 function openEditWidget(e) {
     state.editing = e;
     document.getElementById('edit-widget').style.display = '';
     document.getElementById('edit-title').textContent = chainLabel(e);
     updateSliderRange();
-    setStatus('Editing ' + chainLabel(e) + ' — shift the setting-out along the run', 'ready');
+    setStatus('Editing ' + chainLabel(e) + ' — shift this elevation\'s setting-out', 'ready');
 }
 
 function closeEditWidget() {
@@ -304,6 +307,8 @@ function setPickMode(on) {
 
 function onViewportClick(event) {
     if (event.target !== renderer.domElement || !allMeshes.length || state._dragged) return;
+    const dim = pickDim(event);
+    if (dim && !state.levels) { openCourseDialog(dim); return; }
     // While the level picker is open every click is a height, wherever it lands.
     if (state.levels) {
         const p = pickAt(event);
@@ -351,10 +356,16 @@ async function runExtraction(e) {
     try {
         const t0 = performance.now();
         pyodide.globals.set('_payload_json', JSON.stringify(payload));
+        pyodide.globals.set('_params_json', JSON.stringify(getParams()));
+        // The engine works out the cladding zone's depth, so the rule lives in one place.
         const out = await pyodide.runPythonAsync(`
 import json as _json
 from fabric_extract import extract_elevation as _ex
-_json.dumps(_ex(_json.loads(_payload_json)))`);
+from cladding_constants import _parse as _parse_params
+from cladding_primitives import buildup_depth as _buildup_depth
+_pl = _json.loads(_payload_json)
+_pl.setdefault("options", {})["clad_depth"] = _buildup_depth(_parse_params(_json.loads(_params_json)))
+_json.dumps(_ex(_pl))`);
         e.result = JSON.parse(out);
         console.log(`extract ${e.name}: ${Math.round(performance.now() - t0)} ms, ok=${e.result.ok}`, e.result.warnings);
         if (e.result.ok) {
@@ -393,14 +404,15 @@ function elevationRecords() {
         if (!chain.built) continue;   // picked but not built: nothing is generated for it yet
         const members = chain.members.filter(e => e.result && e.result.ok).sort((a, b) => a.start - b.start);
         for (const e of members) {
-            out.push(Object.assign({}, e.result, { name: e.name, offset: chain.offset, abutments: abutmentsFor(e), storey: e.storey,
+            out.push(Object.assign({}, e.result, { name: e.name, offset: e.offset || 0, abutments: abutmentsFor(e), storey: e.storey,
                                                    chain: members.length > 1 ? chain.name : null, chain_start: e.start,
                                                    chain_reversed: e.rev, corner_lo: e.cornerLo || 0,
                                                    corner_hi: e.cornerHi || 0, master_lo: !!e.masterLo,
                                                    master_hi: !!e.masterHi, clip_lo: e.clipLo || 0,
                                                    clip_hi: e.clipHi,
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
-                                                   clip_v_hi: vLocal(e, chain.topZ) }));
+                                                   clip_v_hi: vLocal(e, chain.topZ),
+                                                   cover: e.cover || null, panel_h: e.panelH || null }));
         }
     }
     return out;
@@ -450,20 +462,20 @@ function updateSliderRange() {
     const s = document.getElementById('offset');
     s.min = -Math.round(half); s.max = Math.round(half); s.step = 5;
     const e = state.elevations[state.active];
-    if (e) { e.chain.offset = Math.max(-half, Math.min(half, e.chain.offset)); s.value = e.chain.offset; }
-    document.getElementById('offset-val').textContent = (e ? e.chain.offset : 0) + ' mm';
+    if (e) { e.offset = Math.max(-half, Math.min(half, e.offset || 0)); s.value = e.offset; }
+    document.getElementById('offset-val').textContent = (e ? e.offset : 0) + ' mm';
     const w = document.getElementById('edit-offset');   // the widget mirrors the panel slider
     w.min = s.min; w.max = s.max; w.step = s.step; w.value = s.value;
-    document.getElementById('edit-offset-val').textContent = (e ? Math.round(e.chain.offset) : 0) + ' mm';
+    document.getElementById('edit-offset-val').textContent = (e ? Math.round(e.offset || 0) : 0) + ' mm';
 }
 
 function onSlider(value) {
     const e = state.elevations[state.active];
     if (!e) return;
-    e.chain.offset = parseFloat(value);
-    document.getElementById('offset-val').textContent = e.chain.offset + ' mm';
-    document.getElementById('edit-offset').value = e.chain.offset;
-    document.getElementById('edit-offset-val').textContent = Math.round(e.chain.offset) + ' mm';
+    e.offset = parseFloat(value);
+    document.getElementById('offset-val').textContent = e.offset + ' mm';
+    document.getElementById('edit-offset').value = e.offset;
+    document.getElementById('edit-offset-val').textContent = Math.round(e.offset) + ' mm';
     updatePreview();
 }
 
@@ -497,7 +509,8 @@ _json.dumps(_o)`);
         params.elevations.forEach(e => byName[e.name] = e);
         renderGeometry(result.geometry);
         renderOutlines(params.elevations, params.splash);
-        renderDimensions(result.dimensions, byName);
+        const act = state.elevations[state.active];
+        renderDimensions(result.dimensions, byName, act && act.result ? act.result.name : null);
         renderChecks(result.checks);
         renderInfo(result.info);
     } catch (err) { console.error('preview failed', err); setStatus('Preview error: ' + err.message, 'busy'); }
@@ -713,6 +726,7 @@ function initApp() {
     }
     document.addEventListener('keydown', e => {
         if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
+        if (document.getElementById('course-dialog').classList.contains('open')) { closeCourseDialog(); return; }
         if (state.levels) { dismissLevels(); return; }
         closeEditWidget();
     });

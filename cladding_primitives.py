@@ -174,19 +174,38 @@ def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0):
     return segs, unsupported
 
 
+MAX_SPLASH_STRETCH = 3.0   # cap the 1/cos blow-up on a near-vertical abutment (~70 deg)
+
+
+def _splash_offsets(line, splash):
+    """Vertical offset at each vertex that keeps the band *splash* clear of the line
+    measured perpendicular to it: level runs give *splash*, a pitch opens it up by
+    1/cos(pitch), and a vertex between two slopes takes the steeper of the pair."""
+    segs = []
+    for (u0, v0), (u1, v1) in zip(line, line[1:]):
+        du = abs(u1 - u0)
+        stretch = math.hypot(du, v1 - v0) / du if du > 1e-9 else MAX_SPLASH_STRETCH
+        segs.append(splash * min(MAX_SPLASH_STRETCH, stretch))
+    return [max(segs[max(0, i - 1)], segs[min(i, len(segs) - 1)]) for i in range(len(line))]
+
+
 def splash_rings(elev, splash):
     """Splash-zone polygons (rings of [u, v]) above each enabled abutment line.
-    A level abutment gives a rectangle; a pitched one gives a band that follows
-    the roof line, *splash* mm tall measured vertically."""
+
+    The band clears the abutment by *splash* measured perpendicular to it, which on a
+    level slab is simply that height. A pitched roof needs more vertical room to keep
+    the same clearance off its surface, so the band opens up by 1/cos(pitch): 150 mm
+    off a 30 degree roof is 173 mm of vertical band."""
     rings = []
     for ab in elev.get("abutments", []):
         if not ab.get("enabled", True) or splash <= 0:
             continue
-        line = ab.get("line") or [[float(ab["u0"]), float(ab["v"])], [float(ab["u1"]), float(ab["v"])]]
+        raw = ab.get("line") or [[float(ab["u0"]), float(ab["v"])], [float(ab["u1"]), float(ab["v"])]]
+        line = [[float(u), float(v)] for u, v in raw]
         if len(line) < 2:
             continue
-        rings.append([[float(u), float(v)] for u, v in line]
-                     + [[float(u), float(v) + splash] for u, v in reversed(line)])
+        top = [[u, v + o] for (u, v), o in zip(line, _splash_offsets(line, splash))]
+        rings.append(line + top[::-1])
     return rings
 
 
