@@ -11,7 +11,8 @@ from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
-                                 base_level, corner_ends, openings, buildup_depth, clip_bounds)
+                                 base_level, corner_ends, openings, buildup_depth, clip_bounds,
+                                 clip_bounds_v)
 
 
 def build_elevation(p, elev, layout=None):
@@ -24,6 +25,7 @@ def build_elevation(p, elev, layout=None):
     # so modules carry on around corners. Each elevation occupies [start, start + W]
     # of the run, reversed where the corner flips the u direction.
     lo, hi = clip_bounds(elev)            # the clad part of the face, cut back at corners
+    v_lo, v_hi = clip_bounds_v(elev)      # and cut to the top and bottom picked for the chain
     start, run = layout or (0.0, hi - lo)
     along = run / 2.0 + float(elev.get("offset", 0.0)) - start
     centre = (hi - along) if elev.get("chain_reversed") else (lo + along)   # in this elevation's u
@@ -45,8 +47,13 @@ def build_elevation(p, elev, layout=None):
                                  holes=poly.get("holes")))
         depth += t
 
-    v0 = base_level(elev, p["splash"])
+    # Coursing runs between the picked levels: a picked bottom is where the boards
+    # start, so it takes over from the splash zone above the elevation base.
+    splash_v0 = base_level(elev, p["splash"])
+    v0 = max(splash_v0, v_lo)
+    H = min(H, v_hi)                      # coursing stops at the picked top
     info["base_level"] = v0
+    info["clad_top"] = H                  # "height" stays the face, as "width" does
     bw, bd = p["batten_w"], p["batten_d"]
 
     region = clip_region(elev, p["splash"])
@@ -67,9 +74,10 @@ def build_elevation(p, elev, layout=None):
     left, right, detail = corner_ends(elev, p)
     _apply_corner(meshes, {lo: left, hi: right}, detail, skip=("reveal", "closer"))
     info["corner"] = {"detail": detail, "left": list(left), "right": list(right)}
-    # Splash zone dimension at the left edge of the ground band.
+    # The band at the foot: a splash zone above an abutment, or the level that was picked.
     if v0 > 0:
-        dims.append(_dim(name, [0, 0], [0, v0], "Splash %.0f" % v0, 300, [-1, 0]))
+        dims.append(_dim(name, [0, 0], [0, v0],
+                         ("Splash %.0f" if v0 <= splash_v0 + 0.5 else "Base %.0f") % v0, 300, [-1, 0]))
     info["total_depth"] = depth
     info["n_boards"] = sum(1 for m in meshes if m["ifc_type"] in ("plank", "panel"))
     return meshes, dims, info

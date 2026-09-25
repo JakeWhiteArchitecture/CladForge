@@ -220,3 +220,31 @@ def test_the_click_position_limits_the_region_to_its_own_patch():
     # Two clicks, one in each piece: both are kept, as before seeding.
     pair = extract_elevation(dict(pay, seeds=[list(world(4000.0, 600.0)), list(world(4000.0, 2500.0))]))
     assert len(pair["polygons"]) == 2 and not any("left out" in w for w in pair["warnings"])
+
+
+def test_top_and_bottom_levels_cut_the_cladding(elevation):
+    """Two picked heights bound the cladding. Nothing is generated outside them, and
+    the layers that follow the outline are cut to the band too."""
+    full = generate_preview({"elevations": [dict(elevation, offset=0)], "cladding_type": "plank",
+                             "sheathing": True, "trim": True})
+    band = generate_preview({"elevations": [dict(elevation, offset=0, clip_v_lo=800.0, clip_v_hi=2200.0)],
+                             "cladding_type": "plank", "sheathing": True, "trim": True})
+    assert band["geometry"] and len(band["geometry"]) < len(full["geometry"])
+    for m in band["geometry"]:
+        vs = [q[1] for q in m["profile"]]
+        assert min(vs) >= 800.0 - 1.0 and max(vs) <= 2200.0 + 1.0, (m["ifc_type"], min(vs), max(vs))
+    assert band["info"][0]["base_level"] >= 800.0
+
+
+def test_the_base_splash_can_be_switched_off(elevation):
+    """The elevation base is an assumption, not a detected abutment, so the wizard can
+    turn its splash zone off — while a detected slab keeps its own."""
+    def lowest(splash_on):
+        abuts = [dict(a, enabled=(a["source"] != "base") or splash_on)
+                 for a in elevation["abutments"]]
+        out = generate_preview({"elevations": [dict(elevation, abutments=abuts, offset=0)],
+                                "cladding_type": "plank", "trim": True})
+        return min(min(q[1] for q in m["profile"]) for m in out["geometry"] if m["ifc_type"] == "plank")
+
+    assert lowest(True) >= 150.0            # lifted clear of the ground
+    assert lowest(False) < 150.0            # boards run to the foot of the face

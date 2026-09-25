@@ -1,7 +1,7 @@
 /* CladForge app — elevation state, Pyodide engine, live preview, downloads. */
 
 const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDragging: false,
-               model: null, seq: 0, editing: null };
+               model: null, seq: 0, editing: null, levels: null };
 let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null;
 
 // ─── ELEVATIONS AND CHAINS ───
@@ -10,7 +10,8 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // A chain generates nothing until it is built: picking is a selection, the wizard
 // turns it into cladding. See static/wizard.js.
 function newChain() {
-    const chain = { name: 'Chain ' + (++state.seq), offset: 0, members: [], length: 0, built: false };
+    const chain = { name: 'Chain ' + (++state.seq), offset: 0, members: [], length: 0, built: false,
+                    topZ: null, bottomZ: null };
     state.chains.push(chain);
     return chain;
 }
@@ -101,7 +102,9 @@ function elevationCard(e, i) {
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
-        + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '');
+        + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
+        + (ok && (e.chain.topZ !== null || e.chain.bottomZ !== null)
+            ? ` · levels ${Math.round(Math.max(0, vLocal(e, e.chain.bottomZ) || 0))}–${Math.round(Math.min(r.height, vLocal(e, e.chain.topZ) === null ? r.height : vLocal(e, e.chain.topZ)))}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
         <div class="elev-head"><input class="elev-name" value="${e.name}" onclick="event.stopPropagation()" onchange="renameElevation(${i}, this.value)">
             <span class="elev-meta">${meta}${e.storey ? ' · ' + e.storey.name : ''}${place}</span></div>
@@ -300,8 +303,14 @@ function setPickMode(on) {
 }
 
 function onViewportClick(event) {
-    if (event.target !== renderer.domElement || !state.pickMode || !allMeshes.length) return;
-    if (state._dragged) return;
+    if (event.target !== renderer.domElement || !allMeshes.length || state._dragged) return;
+    // While the level picker is open every click is a height, wherever it lands.
+    if (state.levels) {
+        const p = pickAt(event);
+        if (p) levelPicked(toIfc(p.point)[2]);
+        return;
+    }
+    if (!state.pickMode) return;
     const hit = pickAt(event);
     if (!hit) return;
     const faces = coplanarFaces(hit.mesh, hit.faceIndex);
@@ -389,10 +398,17 @@ function elevationRecords() {
                                                    chain_reversed: e.rev, corner_lo: e.cornerLo || 0,
                                                    corner_hi: e.cornerHi || 0, master_lo: !!e.masterLo,
                                                    master_hi: !!e.masterHi, clip_lo: e.clipLo || 0,
-                                                   clip_hi: e.clipHi }));
+                                                   clip_hi: e.clipHi,
+                                                   clip_v_lo: vLocal(e, chain.bottomZ) || 0,
+                                                   clip_v_hi: vLocal(e, chain.topZ) }));
         }
     }
     return out;
+}
+
+// A picked level is a world height; each elevation reads it in its own v.
+function vLocal(e, z) {
+    return (z === null || z === undefined) ? null : z - e.result.frame.origin[2];
 }
 
 function getParams() {
@@ -696,7 +712,9 @@ function initApp() {
         slider.addEventListener('change', release);
     }
     document.addEventListener('keydown', e => {
-        if (e.key === 'Escape' && !document.getElementById('chain-wizard').classList.contains('open')) closeEditWidget();
+        if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
+        if (state.levels) { skipLevel(); skipLevel(); return; }
+        closeEditWidget();
     });
     document.getElementById('download-reminder').addEventListener('click', e => { if (e.target.id === 'download-reminder') e.currentTarget.classList.remove('open'); });
 }

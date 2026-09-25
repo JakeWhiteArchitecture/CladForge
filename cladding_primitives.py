@@ -267,6 +267,17 @@ def clip_bounds(elev):
     return (lo, hi) if hi - lo > 1.0 else (0.0, width)
 
 
+def clip_bounds_v(elev):
+    """(v_lo, v_hi) in this elevation's v: where the cladding starts and stops up the
+    face. Set by picking a point for the top and one for the bottom; unset means the
+    whole face."""
+    height = float(elev["height"])
+    lo = max(0.0, float(elev.get("clip_v_lo") or 0.0))
+    hi = elev.get("clip_v_hi")
+    hi = min(height, float(hi)) if hi is not None else height
+    return (lo, hi) if hi - lo > 1.0 else (0.0, height)
+
+
 def chain_layout(elevations, face_depth, detail):
     """Run coordinates measured along the cladding face, so a corner adds the wrap on
     both of its sides. Returns {elevation name: (start, run length)}."""

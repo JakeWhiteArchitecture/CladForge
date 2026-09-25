@@ -51,13 +51,14 @@ function wizStepIds() {
     if (WIZ.draft.type === 'plank') ids.push('orient');
     ids.push('dims', 'battens');
     if (wizNeedsCb()) ids.push('cbattens');
+    ids.push('base');
     return ids;
 }
 
 function openWizard() {
     if (!readyChains().length) return;
     WIZ.draft = { type: toggleValue('cladding-type') || 'plank',
-                  orient: toggleValue('plank-orient') || 'horizontal', dims: {} };
+                  orient: toggleValue('plank-orient') || 'horizontal', base: 'foot', dims: {} };
     for (const group of Object.keys(WIZ_GROUPS)) for (const [id] of WIZ_GROUPS[group]) WIZ.draft.dims[id] = val(id);
     WIZ.step = 0;
     document.getElementById('chain-wizard').classList.add('open');
@@ -76,6 +77,7 @@ function wizTitle(id) {
     if (id === 'orient') return 'Horizontal or vertical?';
     if (id === 'battens') return wizBattenRun() + ' battens';
     if (id === 'cbattens') return 'Counter-battens';
+    if (id === 'base') return 'Where does the cladding start?';
     return WIZ.draft.type === 'panel' ? 'Panel dimensions' : 'Plank dimensions';
 }
 
@@ -86,6 +88,7 @@ function wizNote(id) {
             : `${wizBattenRun()} battens carry the boards. Centres are a maximum: the run is divided evenly to reach it.`;
     }
     if (id === 'cbattens') return 'Counter-battens run behind the battens so the cavity still drains where the battens cross the flow.';
+    if (id === 'base') return 'This is only about the foot of the wall. Every slab or roof the extractor found meeting the face keeps its splash zone either way.';
     return 'Everything else — insulation, splash zone, corners, openings — keeps its current setting and stays editable in the panel once the chain is built.';
 }
 
@@ -114,6 +117,10 @@ function wizBody(id) {
     if (id === 'orient') return wizChoice('orient', [
         ['horizontal', 'Horizontal', 'Planks run along the elevation on vertical battens'],
         ['vertical', 'Vertical', 'Planks run up the elevation on horizontal battens over counter-battens']]);
+    if (id === 'base') return wizChoice('base', [
+        ['foot', 'At the foot of the wall', 'Nothing meets the wall here, so the boards run all the way down'],
+        ['splash', 'Above a splash zone', `A ${val('splash')} mm band is left at the base, as at any other abutment`]])
+        + `<p class="hint">${wizNote('base')}</p>`;
     return wizFields(id === 'dims' ? WIZ.draft.type : id) + `<p class="hint">${wizNote(id)}</p>`;
 }
 
@@ -145,10 +152,74 @@ function wizBuild() {
         for (const [fid] of WIZ_GROUPS[group]) if (!wizDerived(fid)) document.getElementById(fid).value = d.dims[fid];
     }
     built.forEach(c => c.built = true);
+    // The synthetic "Elevation base" line is the only splash zone this answers for;
+    // a detected slab or roof keeps its own either way.
+    for (const chain of (built.length ? built : readyChains())) {
+        for (const m of chainFaces(chain)) m.disabled['base|0|0'] = d.base !== 'splash';
+    }
     closeWizard();
     onTypeChange();   // syncs the panel sections and the offset slider, then previews
     renderElevationList();
     setStatus(built.length ? 'Built ' + built.map(c => c.name).join(', ') : 'Rebuilt', 'ready');
+    startLevelPick(built.length ? built : readyChains());
+}
+
+// ─── TOP AND BOTTOM OF THE CLADDING ───
+// Two clicks after the build, one per level. Only the height of each point is used,
+// and the pair applies to the whole chain: every face is clamped to its own extent,
+// so a lower wing in the same run never gets cladding floating above it.
+function startLevelPick(chains) {
+    const live = (chains || []).filter(c => chainFaces(c).length);
+    if (!live.length) return;
+    state.levels = { chains: live, step: 0, top: null, bottom: null };
+    renderLevelPick();
+}
+
+function renderLevelPick() {
+    const L = state.levels, box = document.getElementById('level-picker');
+    if (!L) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    document.getElementById('level-title').textContent =
+        L.step === 0 ? 'Click a point for the TOP of the cladding' : 'Click a point for the BOTTOM of the cladding';
+    document.getElementById('level-note').textContent = L.step === 0
+        ? 'Anywhere in the model — only the height of the point is used. Skip to run to the top of the face.'
+        : (L.top === null ? 'Top left at the face. ' : `Top set at ${Math.round(L.top)}. `)
+          + 'Skip to run to the foot of the face.';
+    document.getElementById('level-step').textContent = `Level ${L.step + 1} of 2`;
+}
+
+function levelPicked(z) {
+    const L = state.levels;
+    if (!L) return;
+    if (L.step === 0) { L.top = z; L.step = 1; renderLevelPick(); return; }
+    L.bottom = z;
+    finishLevelPick();
+}
+
+function skipLevel() {
+    const L = state.levels;
+    if (!L) return;
+    if (L.step === 0) { L.step = 1; renderLevelPick(); return; }
+    finishLevelPick();
+}
+
+function finishLevelPick() {
+    const L = state.levels;
+    state.levels = null;
+    document.getElementById('level-picker').style.display = 'none';
+    if (L.top !== null && L.bottom !== null) {   // clicked the wrong way round: still a band
+        const hi = Math.max(L.top, L.bottom), lo = Math.min(L.top, L.bottom);
+        L.chains.forEach(c => { c.topZ = hi; c.bottomZ = lo; });
+    } else {
+        L.chains.forEach(c => {
+            if (L.top !== null) c.topZ = L.top;
+            if (L.bottom !== null) c.bottomZ = L.bottom;
+        });
+    }
+    const set = [L.top !== null ? 'top ' + Math.round(L.top) : '', L.bottom !== null ? 'bottom ' + Math.round(L.bottom) : ''].filter(Boolean);
+    setStatus(set.length ? 'Cladding ' + set.join(', ') : 'Cladding runs the full face', 'ready');
+    renderElevationList();
+    updatePreview();
 }
 
 function initWizard() {

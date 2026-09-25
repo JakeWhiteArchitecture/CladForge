@@ -85,7 +85,7 @@ async function main() {
         await page.waitForTimeout(1200);
     }
     // Picking generates nothing: the chain has to be built through the wizard first.
-    async function buildChain(type, orient, useButton) {
+    async function buildChain(type, orient, useButton, levels) {
         // The button only shows while a chain is unbuilt; Enter reopens the wizard either way.
         const pending = await page.evaluate(() => pendingChains().length > 0);
         if (pending) {
@@ -112,6 +112,19 @@ async function main() {
             await page.waitForTimeout(150);
         }
         await page.waitForFunction(() => !document.getElementById('chain-wizard').classList.contains('open'), null, { timeout: 10000 });
+        await page.waitForTimeout(400);
+        // Build hands over to the level picker: two clicks for top and bottom, or skip.
+        if (await page.isVisible('#level-picker')) {
+            console.log('  level picker:', await page.evaluate(() => document.getElementById('level-title').textContent));
+            if (levels) {
+                await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * (1 - levels[0]));
+                await page.waitForTimeout(300);
+                await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * (1 - levels[1]));
+            } else {
+                await page.click('#level-picker .wiz-actions button:last-child');
+            }
+            await page.waitForFunction(() => !state.levels, null, { timeout: 10000 });
+        }
         await page.waitForTimeout(1200);
     }
 
@@ -268,6 +281,19 @@ async function main() {
     console.log('counter-battens built:', await page.evaluate(() =>
         window._lastPreview.geometry.filter(m => m.ifc_type === 'counter_batten').length + ' at '
         + document.getElementById('cb_centres').value + ' c/c'));
+
+    // Top and bottom of the cladding, set by two clicks in the model after Build.
+    await page.evaluate(() => frameElevation(state.elevations[0].result));
+    await page.waitForTimeout(600);
+    await buildChain('plank', 'horizontal', false, [0.72, 0.30]);
+    console.log('picked levels:', await page.evaluate(() => state.chains.filter(c => c.built)
+        .map(c => `${c.name} top ${c.topZ === null ? '-' : Math.round(c.topZ)} bottom ${c.bottomZ === null ? '-' : Math.round(c.bottomZ)}`).join(' | ')));
+    console.log('clad band vs face:', await page.evaluate(() => {
+        const vs = window._lastPreview.geometry.filter(m => m.ifc_type === 'plank')
+            .flatMap(m => m.profile.map(q => q[1]));
+        const info = window._lastPreview.info[0];
+        return vs.length ? `boards ${Math.round(Math.min(...vs))}–${Math.round(Math.max(...vs))} of face 0–${Math.round(info.height)} (clad top ${Math.round(info.clad_top)})` : 'none';
+    }));
 
     // Planks cannot lap, so the option disables itself and falls back to a mitre.
     await page.click('#cladding-type .turn-btn[data-value="plank"]');

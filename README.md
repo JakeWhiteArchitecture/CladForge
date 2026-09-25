@@ -27,10 +27,11 @@ genuinely new code in the stack.
 | 3 | Grow picks into coplanar regions, name Elevation A, B, C | Pyodide (`fabric_extract.py`) |
 | 4 | Subtract openings and penetrations: interior holes, plus the notches openings cut in the outline | Pyodide (`fabric_extract.py`) |
 | 5 | Detect slab and roof abutments, set out the splash zone | Pyodide (`fabric_extract.py`) |
-| 6 | Build the chain: plank or panel, orientation, board, batten and counter-batten sizes | UI wizard (`static/wizard.js`) |
-| 7 | Refine buildup, corners, openings, setting-out | UI |
-| 8 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
-| 9 | Export IFC4X3 and DXF | Pyodide (both) |
+| 6 | Build the chain: plank or panel, orientation, board, batten and counter-batten sizes, base of the cladding | UI wizard (`static/wizard.js`) |
+| 7 | Pick the top and bottom of the cladding | UI, two clicks in the model |
+| 8 | Refine buildup, corners, openings, setting-out | UI |
+| 9 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
+| 10 | Export IFC4X3 and DXF | Pyodide (both) |
 
 Extraction runs once per selection and is cached on the elevation. Coursing
 and buildup run in Pyodide on every parameter change, so the offset slider is
@@ -41,8 +42,13 @@ Picking and generating are separate. Clicking faces grows elevations and chains
 and nothing else: no cladding exists until the chain is built. Once a face is
 extracted, **Make chain** appears at the top right of the view and **Enter**
 opens the wizard — plank or panel, horizontal or vertical (planks only), the
-board dimensions, the battens, and the counter-battens where the buildup has
-them — and **Build** generates that chain. A step that does not apply is not
+board dimensions, the battens, the counter-battens where the buildup has them,
+and where the cladding starts at the foot of the wall — and **Build** generates
+that chain. Build hands straight over to two clicks in the model: one for the
+**top** of the cladding and one for the **bottom**. Only the height of each
+point is used, the pair applies to the whole chain, and each face is clamped to
+its own extent, so a lower wing in the same run never gets cladding above it.
+Either click can be skipped to run to the face. A step that does not apply is not
 asked: panels never course, so they skip the orientation, and a buildup with
 no counter-battens skips their step. In panel mode the batten centres are
 shown but not editable, because the panel bay sets them. Every pending chain
@@ -93,8 +99,11 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
    the splash band follows the roof line. Untick a false one, or type a level and
    **Add level** where detection fails.
 4. Press **Enter** (or **Make chain**, top right) to build the chain: the wizard
-   asks for plank or panel, the orientation, the board sizes, the battens, and
-   the counter-battens if the buildup has them. Nothing is generated before this.
+   asks for plank or panel, the orientation, the board sizes, the battens, the
+   counter-battens if the buildup has them, and whether the cladding starts at
+   the foot of the wall or above a splash zone. Nothing is generated before this.
+   Build then asks for two points in the model: the top of the cladding and the
+   bottom. Skip either to run to the face.
 5. Refine anything in the panel — sheathing, insulation, splash zone, corners,
    openings, batten section and centres. It all previews live from here on.
 6. Drag the **horizontal offset** slider to control where the closing cuts land,
@@ -114,6 +123,7 @@ default. Each is one place in the code, so any of them can be flipped.
 | Region definition [ASSUMED] | Yes. A region is coplanar; openings are interior holes and never split a region. Separate patches on one plane merge into one elevation (one frame, one coursing, boards clipped to the union). | `fabric_extract._union_faces` |
 | Selection mode [OPEN] | Both. One click grows the connected coplanar patch (SunForm's flood fill), and further clicks merge more patches into the same elevation. Each click's position is kept as a seed: if the cuts leave the region in pieces, only the pieces a seed falls in are clad, so a slab or roof crossing a face does not carry the cladding past it. A face that is already clad is not a selection any more — clicking it opens that chain's setting-out over the view instead. | `viewer.coplanarFaces`, `app.onViewportClick` |
 | Openings source [OPEN] | Mesh voids. web-ifc punches `IfcRelVoidsElement` openings into the wall mesh, so they arrive free as holes. Penetrations (anything else crossing the face plane: pipes, beams, windows if the void was not punched) are sectioned and subtracted as convex-hull holes. Switch off with the *Subtract penetrations* checkbox. | `fabric_extract.extract_elevation` |
+| Splash zone at the base [ASSUMED] | The synthetic "Elevation base" line is an assumption, not a detected intersection, so the wizard asks: **at the foot of the wall** (the default — the boards run all the way down) or **above a splash zone**. Every detected slab or roof keeps its own splash zone either way, and the base line stays on the elevation card to tick back on. | `cladding_primitives.base_level`, `wizard.wizBuild` |
 | Abutments | Any `IfcSlab`/`IfcRoof` that reaches the face plane inside the region is sectioned on the plane and its upper edge becomes the abutment *line*: level for a flat roof or slab, pitched where a roof meets a gable (two slopes meeting at the ridge, say). The splash zone is a band of constant vertical height above that line, so it follows the roof. A slab that passes through the face is also cut out of the region. Manual levels can be added per elevation. | `fabric_extract._section`, `_top_line`, `cladding_primitives.splash_rings` |
 | Corner detail | Three details, set for the whole job and reported per corner in the panel. **Mitred** (default) cuts the whole buildup on the corner's bisector plane, so every layer wraps. **Master-lap, open joint** is a panel detail: at an external corner the master board wraps past and runs out to the far face of the other side's cladding while the board behind stops a joint gap short of the master's back; at a re-entrant corner nothing wraps, so the master runs into the corner and the other board stops a joint gap clear of the master's whole buildup. The layers behind a lap stay square at the corner. **Square** stops everything at the wall corner. Away from a right angle both lap ends slope with depth. Each corner gets a row under its chain naming the two faces, the angle, whether it is external or re-entrant, and which face masters, with a Swap button; clicking the row highlights that corner in the model. A corner bead or profile is not modelled yet. | `cladding_primitives.corner_ends`, `app.cornerRows` |
 | Chains (corners) | A click that is coplanar with the active elevation merges into it. A click on a face that turns a corner from any elevation in the active chain becomes the next elevation in that chain: Elevation A becomes "Chain 1 · A → B → C". A face that meets nothing starts a new chain. Coursing is centred on the whole run and the offset slider is per chain, so panel joints and batten centres carry round the corner (the run reverses through re-entrant corners). Corner allowances and trims are not modelled: the run length is the sum of the face widths. | `fabric_extract.chain_link`, `app.linkIntoChain`, `cladding_geometry.build_elevation` |
@@ -204,14 +214,14 @@ the title area.
 |---|---|---|
 | fabric_extract.py | 421 | 400 |
 | cladding_constants.py | 82 | 80 |
-| cladding_geometry.py | 289 | 400 |
-| cladding_primitives.py | 297 | 300 |
-| cladding_booleans.py | 206 | 200 |
+| cladding_geometry.py | 302 | 400 |
+| cladding_primitives.py | 308 | 300 |
+| cladding_booleans.py | 208 | 200 |
 | cladding_preview.py | 45 | 100 |
 | ifc_generator.py | 396 | 400 |
 | dxf_generator.py | 248 | 500 |
 | app.py | 78 | 150 |
-| templates/index.html | 224 | 500 |
+| templates/index.html | 233 | 500 |
 
 `fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 21 and
 6 lines); splitting the region clean-up — notches, seeded patches — into its own

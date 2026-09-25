@@ -177,6 +177,15 @@
         </div>
         <div class="status-chip busy" id="status-chip">Loading…</div>
         <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
+        <div class="edit-widget" id="level-picker" style="display:none">
+            <div class="edit-head"><span id="level-title">Click a point for the TOP of the cladding</span>
+                <span class="wiz-step" id="level-step">Level 1 of 2</span></div>
+            <p class="hint" id="level-note" style="margin:2px 0 8px"></p>
+            <div class="wiz-actions">
+                <button class="btn btn-secondary btn-sm" onclick="skipLevel()">Skip</button>
+                <button class="btn btn-secondary btn-sm" onclick="skipLevel(); skipLevel()">Use the whole face</button>
+            </div>
+        </div>
         <div class="edit-widget" id="edit-widget" style="display:none">
             <div class="edit-head"><span id="edit-title">Chain 1</span>
                 <button class="mini" onclick="closeEditWidget()" title="Close (Esc)">✕</button></div>
