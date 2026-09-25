@@ -376,6 +376,8 @@ function meshTriangles(mesh) {
     return faceTriangles(mesh, Array.from({ length: count }, (_, i) => i));
 }
 
+const CONTEXT_TRI_BUDGET = 60000;   // the engine runs in a fixed WASM heap: past this it dies
+
 function contextFor(pickedMeshes, tris, margin, outward) {
     // Every other element that could touch the picked face: its bounding box overlaps the
     // faces' box (grown by *margin*) AND some corner of it lies within reach of the face
@@ -385,7 +387,7 @@ function contextFor(pickedMeshes, tris, margin, outward) {
     bb.expandByScalar(margin);
     const n = new THREE.Vector3(outward[0], outward[2], -outward[1]).normalize();
     const d = n.dot(new THREE.Vector3(tris[0][0][0], tris[0][0][2], -tris[0][0][1]));
-    const out = [];
+    const near = [];
     for (const meta of meshMeta) {
         if (pickedMeshes.has(meta.mesh)) continue;
         const mb = meta.mesh.geometry.boundingBox.clone().applyMatrix4(meta.mesh.matrixWorld);
@@ -395,9 +397,21 @@ function contextFor(pickedMeshes, tris, margin, outward) {
             const s = n.x * x + n.y * y + n.z * z - d; lo = Math.min(lo, s); hi = Math.max(hi, s);
         }
         if (hi < -margin || lo > margin) continue;
-        out.push({ type: meta.type, name: meta.name, tris: meshTriangles(meta.mesh) });
+        near.push({ meta, reach: Math.min(Math.abs(lo), Math.abs(hi)) });   // how close it comes to the face
     }
-    return out;
+    // A big model can offer far more geometry than the engine's heap will hold, and
+    // overrunning it kills the runtime outright rather than raising. Send the elements
+    // that come closest to the face and report the rest rather than risking that.
+    near.sort((a, b) => a.reach - b.reach);
+    const elements = [];
+    let used = 0, dropped = 0;
+    for (const { meta } of near) {
+        const t = meshTriangles(meta.mesh);
+        if (used && used + t.length > CONTEXT_TRI_BUDGET) { dropped++; continue; }
+        used += t.length;
+        elements.push({ type: meta.type, name: meta.name, tris: t });
+    }
+    return { elements, dropped, triangles: used };
 }
 
 function highlightFaces(mesh, faceIndices, color = PICK_COLOR) {

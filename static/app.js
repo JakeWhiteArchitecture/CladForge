@@ -2,7 +2,7 @@
 
 const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDragging: false,
                model: null, seq: 0, editing: null, levels: null };
-let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null;
+let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null, _restarting = false;
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -344,9 +344,9 @@ async function runExtraction(e) {
     if (!pyReady) { setStatus('Engine still loading…', 'busy'); return; }
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
-    const context = contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300, e.picks[0].normal);
-    const nTris = context.reduce((a, c) => a + c.tris.length, 0);
-    setStatus(`Extracting ${e.name}… ${tris.length} faces, ${context.length} nearby elements (${nTris} triangles)`, 'busy');
+    const { elements: context, dropped, triangles: nTris } = contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300, e.picks[0].normal);
+    setStatus(`Extracting ${e.name}… ${tris.length} faces, ${context.length} nearby elements (${nTris} triangles)`
+              + (dropped ? `, ${dropped} too far to fit` : ''), 'busy');
     e.error = null;
     renderElevationList();
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
@@ -369,6 +369,7 @@ _json.dumps(_ex(_pl))`);
         e.result = JSON.parse(out);
         console.log(`extract ${e.name}: ${Math.round(performance.now() - t0)} ms, ok=${e.result.ok}`, e.result.warnings);
         if (e.result.ok) {
+            if (dropped) e.result.warnings.push(`${dropped} nearby element(s) left out to keep the engine within memory`);
             const linked = await linkIntoChain(e);
             const corner = linked ? `${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)` : e.name + ' extracted';
             setStatus(e.chain.built ? corner : corner + ' — press Enter to build', 'ready');
@@ -379,7 +380,14 @@ _json.dumps(_ex(_pl))`);
             setStatus(e.name + ': ' + e.error, 'busy');
         }
     } catch (err) {
-        console.error(err); e.result = null; e.error = 'Extraction error: ' + err.message;
+        console.error(err);
+        // A C++ abort inside WASM kills the runtime for good rather than raising, so the
+        // only way back is a fresh one. Rebuild it once and retry before giving up.
+        if (/fatally failed|Aborted/i.test(err.message || '') && !e._restarted) {
+            e._restarted = true;
+            if (await restartEngine()) return runExtraction(e);
+        }
+        e.result = null; e.error = 'Extraction error: ' + err.message;
         setStatus(e.name + ': ' + e.error, 'busy');
     }
     renderElevationList();
@@ -513,7 +521,13 @@ _json.dumps(_o)`);
         renderDimensions(result.dimensions, byName, act && act.result ? act.result.name : null);
         renderChecks(result.checks);
         renderInfo(result.info);
-    } catch (err) { console.error('preview failed', err); setStatus('Preview error: ' + err.message, 'busy'); }
+    } catch (err) {
+        console.error('preview failed', err);
+        if (/fatally failed|Aborted/i.test(err.message || '')) {
+            if (await restartEngine()) return updatePreview();
+        }
+        setStatus('Preview error: ' + err.message, 'busy');
+    }
 }
 
 function renderChecks(checks) {
@@ -674,7 +688,21 @@ _to_dxf(_o["geometry"], _p, _o["info"])`);
 }
 
 // ─── PYODIDE ───
-async function initPyodide() {
+async function restartEngine() {
+    if (_restarting) return false;          // one rebuild at a time
+    _restarting = true;
+    setStatus('Engine stopped — rebuilding it…', 'busy');
+    pyReady = false; ifcReady = false; pyodide = null; window.pyodide = null;
+    try {
+        await initPyodide(false);           // the caller retries; do not re-run everything
+    } catch (err) {
+        console.error('engine restart failed', err);
+    }
+    _restarting = false;
+    return pyReady;
+}
+
+async function initPyodide(resume = true) {
     try {
         setStatus('Loading Python runtime…', 'busy');
         pyodide = await loadPyodide();
@@ -695,7 +723,7 @@ sys.path.insert(0, '/home/pyodide')
 import cladding_preview, fabric_extract, dxf_generator`);
         pyReady = true;
         setStatus(allMeshes.length ? 'Ready — click a wall face' : 'Ready — load an IFC', 'ready');
-        for (const e of state.elevations) if (e.picks.length && !e.result) runExtraction(e);
+        if (resume) for (const e of state.elevations) if (e.picks.length && !e.result) runExtraction(e);
         updatePreview();
     } catch (err) { console.error(err); setStatus('Engine failed to load: ' + err.message, 'busy'); }
 }

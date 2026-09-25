@@ -254,6 +254,11 @@ two PyPI deps that are not in the Pyodide distribution from local copies
 
 ## Limitations
 
+- The engine runs in a fixed WASM heap, and overrunning it kills the runtime outright
+  rather than raising something Python can catch. Context is therefore capped at
+  `CONTEXT_TRI_BUDGET` triangles (60,000), sending the elements that come closest to the
+  face plane first and reporting the rest on the elevation card. If the runtime does die,
+  the app rebuilds it and retries once instead of leaving the session unusable.
 - Walls only: faces within 5° of vertical. Pitched abutment lines come from the
   upper edge of the roof's section through the face plane; a roof that is an open
   or broken mesh falls back to the convex hull of its section.
