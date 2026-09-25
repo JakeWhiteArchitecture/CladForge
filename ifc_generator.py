@@ -94,7 +94,7 @@ def _create_file():
 
 def _schema_label(ifc):
     """What was actually written, which is not always the headline schema."""
-    return getattr(ifc, "schema_identifier", None) or getattr(ifc, "schema", None) or IFC_SCHEMA_LABEL
+    return getattr(ifc, "schema", None) or getattr(ifc, "schema_identifier", None) or IFC_SCHEMA_LABEL
 
 
 # ── geometry ─────────────────────────────────────────────────────────────

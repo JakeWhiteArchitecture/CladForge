@@ -619,7 +619,7 @@ async function ensureIfcOpenShell(btn) {
     await pyodide.runPythonAsync(`
 import micropip
 await micropip.install(["lark", "isodate", "python-dateutil", "typing_extensions"])
-await micropip.install("https://ifcopenshell.github.io/wasm-wheels/ifcopenshell-0.8.2+d50e806-cp312-cp312-emscripten_3_1_58_wasm32.whl")
+await micropip.install("https://ifcopenshell.github.io/wasm-wheels/ifcopenshell-0.8.5-cp313-cp313-pyodide_2025_0_wasm32.whl")
 import ifc_generator`);
     ifcReady = true;
 }

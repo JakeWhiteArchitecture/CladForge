@@ -30,7 +30,7 @@ genuinely new code in the stack.
 | 6 | Build the chain: plank or panel, orientation, board, batten and counter-batten sizes | UI wizard (`static/wizard.js`) |
 | 7 | Refine buildup, corners, openings, setting-out | UI |
 | 8 | Generate battens, counter-battens, boards or panels | Pyodide, per frame (`cladding_geometry.py`) |
-| 9 | Export IFC and DXF | Pyodide (both) |
+| 9 | Export IFC4X3 and DXF | Pyodide (both) |
 
 Extraction runs once per selection and is cached on the elevation. Coursing
 and buildup run in Pyodide on every parameter change, so the offset slider is
@@ -63,12 +63,19 @@ coursing, checks, and both exports — runs in the browser, so the page also
 works on static hosting: copy `templates/index.html` to the root next to
 `static/` and the `.py` files, and the only thing lost is that import fallback.
 
-**Schema.** IFC export runs through the IfcOpenShell WASM wheel, which carries
-IFC2X3 and IFC4 only — no IFC4X3. `_create_file` asks the build which schemas
-it has and takes the newest, so the browser writes **IFC4**, and the exported
-file reports the schema it actually used rather than a headline one. A
-server-side export route would restore IFC4X3, since the native IfcOpenShell
-in `requirements.txt` has it.
+**Runtimes and schema.** IFC export runs through the IfcOpenShell WASM wheel
+in the browser, so the runtime pins matter: **Pyodide 0.29.0** (CPython 3.13,
+`pyodide_2025_0`) with **IfcOpenShell 0.8.5**, which carries IFC2X3, IFC4 and
+IFC4X3_ADD2. The export writes IFC4X3, with no server involved.
+
+The pins are a matched set, not three independent choices. The wheel's ABI tag
+has to match the Pyodide build, and Shapely — which the whole engine rests on —
+has to exist for that build. Pyodide 0.29 ships Shapely 2.0.7 and numpy 2.2.5,
+which is what makes this combination work. An earlier pairing (Pyodide 0.27.4
+with IfcOpenShell 0.8.2) had no IFC4X3 at all, and asking that build for one
+killed the runtime rather than raising something Python could catch — so
+`_create_file` asks `schema_names()` which schemas the build has and takes the
+newest, instead of trying them and hoping to catch the failure.
 
 A demo model is in `tests/sample_house.ifc` (regenerate with
 `python tests/make_sample.py`).
@@ -227,7 +234,9 @@ The smoke test drives Chromium through Playwright: loads the sample house,
 picks the south and east walls, builds each chain through the wizard (by Enter
 and by the button), moves the slider, switches to panels, and downloads both
 exports. It also checks that picking alone generates nothing. `VENDOR_DIR` is only needed where the CDNs are
-unreachable; it serves Pyodide, Three.js and web-ifc from local copies.
+unreachable; it serves Pyodide, Three.js, web-ifc, the IfcOpenShell wheel and the
+two PyPI deps that are not in the Pyodide distribution from local copies
+(`<dir>/{pyodide,three,web-ifc,wasm-wheels,pypi}`).
 
 ## Limitations
 
