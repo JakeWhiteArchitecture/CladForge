@@ -171,6 +171,26 @@ async function main() {
     await page.keyboard.press('Escape');
     await page.evaluate(async () => { document.getElementById('edit-offset').value = 0; onEditSlide(0); await new Promise(r => setTimeout(r, 1200)); });
     console.log('widget closed:', await page.evaluate(() => document.getElementById('edit-widget').style.display === 'none'));
+    // The engine runs in a fixed heap: killing it must not brick the session.
+    console.log('context budget:', await page.evaluate(() => {
+        const e = state.elevations[0];
+        const tris = [];
+        for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
+        const c = contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300, e.picks[0].normal);
+        return `${c.elements.length} elements, ${c.triangles} triangles, ${c.dropped} dropped (budget ${CONTEXT_TRI_BUDGET})`;
+    }));
+    const recovered = await page.evaluate(async () => {
+        const before = pyReady;
+        const ok = await restartEngine();   // what the app does when the runtime dies
+        return { before, rebuilt: ok, ready: pyReady };
+    });
+    console.log('engine rebuild:', JSON.stringify(recovered));
+    await page.waitForTimeout(500);
+    console.log('preview still works after rebuild:', await page.evaluate(async () => {
+        await updatePreview();
+        return window._lastPreview.geometry.length > 0;
+    }));
+
     console.log('pick seeds recorded:', await page.evaluate(() =>
         state.elevations[0].picks.map(p => p.point && p.point.map(c => Math.round(c)).join(',')).join(' | ')));
 
