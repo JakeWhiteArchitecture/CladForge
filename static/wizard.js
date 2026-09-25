@@ -182,7 +182,7 @@ function renderLevelPick() {
     document.getElementById('level-title').textContent = L.step === 0
         ? 'Set the height of the top of the cladding' : 'Set the height of the cladding baserail';
     document.getElementById('level-note').textContent =
-        'Click any point in the model — only its height is used. '
+        'Click any point in the model — only its height is used. A red dot sits on a surface; it turns green when it snaps to a corner. '
         + (L.step === 0 ? 'Dismiss to keep the top as it is.'
                         : (L.top === null ? 'Dismiss to keep the cladding as it is.'
                                           : `Top set at ${Math.round(L.top)}. Dismiss to keep the base as it is.`));
@@ -206,6 +206,7 @@ function dismissLevels() {
 function finishLevelPick() {
     const L = state.levels;
     state.levels = null;
+    showSnap(null);
     document.getElementById('level-picker').style.display = 'none';
     if (L.top !== null && L.bottom !== null) {   // clicked the wrong way round: still a band
         const hi = Math.max(L.top, L.bottom), lo = Math.min(L.top, L.bottom);

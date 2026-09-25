@@ -291,6 +291,48 @@ function pickDim(event) {
     return hits.length ? hits[0].object.userData.dim : null;
 }
 
+// ─── SNAPPING ───
+// The level picker shows where a click will land: a red dot on a surface, a green one
+// when it has snapped to a corner of the face under the cursor.
+const SNAP_PX = 14;          // how close, on screen, a corner has to be to snap
+let snapMarker = null;
+
+function makeDot(hex) {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d');
+    g.beginPath(); g.arc(32, 32, 24, 0, Math.PI * 2);
+    g.fillStyle = hex; g.fill(); g.lineWidth = 6; g.strokeStyle = '#ffffff'; g.stroke();
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, sizeAttenuation: false }));
+    m.scale.set(0.035, 0.035, 1);
+    m.renderOrder = 999;
+    return m;
+}
+
+function snapPick(event) {
+    const hit = pickAt(event);
+    if (!hit) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    const mx = event.clientX - rect.left, my = event.clientY - rect.top;
+    const pos = hit.mesh.geometry.attributes.position;
+    let best = null, bestD = SNAP_PX;
+    for (const k of ['a', 'b', 'c']) {
+        const vi = hit.face[k];
+        const v = new THREE.Vector3(pos.getX(vi), pos.getY(vi), pos.getZ(vi)).applyMatrix4(hit.mesh.matrixWorld);
+        const sp = v.clone().project(camera);
+        const d = Math.hypot((sp.x + 1) / 2 * rect.width - mx, (1 - sp.y) / 2 * rect.height - my);
+        if (d < bestD) { bestD = d; best = v; }
+    }
+    return { point: best || hit.point, snapped: !!best };
+}
+
+function showSnap(snap) {
+    if (snapMarker) { scene.remove(snapMarker); snapMarker = null; }
+    if (!snap) return;
+    snapMarker = makeDot(snap.snapped ? '#22c55e' : '#ef4444');
+    snapMarker.position.copy(snap.point);
+    scene.add(snapMarker);
+}
+
 function pickAt(event) {
     const rect = renderer.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1,
@@ -302,7 +344,7 @@ function pickAt(event) {
     const hit = hits[0];
     const normal = hit.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize();
     if (normal.dot(camera.position.clone().sub(hit.point)) < 0) normal.negate();   // face the viewer
-    return { mesh: hit.object, faceIndex: hit.faceIndex, point: hit.point, normal };
+    return { mesh: hit.object, faceIndex: hit.faceIndex, face: hit.face, point: hit.point, normal };
 }
 
 function faceNormals(geo) {

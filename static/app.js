@@ -311,8 +311,8 @@ function onViewportClick(event) {
     if (dim && !state.levels) { openCourseDialog(dim); return; }
     // While the level picker is open every click is a height, wherever it lands.
     if (state.levels) {
-        const p = pickAt(event);
-        if (p) levelPicked(toIfc(p.point)[2]);
+        const snap = snapPick(event);
+        if (snap) levelPicked(toIfc(snap.point)[2]);
         return;
     }
     if (!state.pickMode) return;
@@ -808,6 +808,11 @@ function initApp() {
     vp.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; state._dragged = false; });
     vp.addEventListener('pointermove', e => { if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) state._dragged = true; });
     vp.addEventListener('click', onViewportClick);
+    // While picking levels, show where the click would land and whether it snaps.
+    vp.addEventListener('pointermove', e => {
+        if (!state.levels || e.target !== renderer.domElement) { if (snapMarker) showSnap(null); return; }
+        showSnap(snapPick(e));
+    });
     const drop = document.getElementById('file-drop');
     drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));

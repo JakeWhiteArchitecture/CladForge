@@ -413,6 +413,24 @@ async function main() {
     });
     console.log('offset scope:', JSON.stringify(offsetScope));
 
+    // The level picker's dot: red on a surface, green when it snaps to a corner.
+    await page.evaluate(() => frameElevation(state.elevations[0].result));
+    await page.waitForTimeout(500);
+    console.log('snap dot:', await page.evaluate(() => {
+        const r = renderer.domElement.getBoundingClientRect();
+        const mid = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+        const onFace = snapPick(mid);
+        const hit = pickAt(mid);
+        const pos = hit.mesh.geometry.attributes.position, vi = hit.face.a;
+        const v = new THREE.Vector3(pos.getX(vi), pos.getY(vi), pos.getZ(vi)).applyMatrix4(hit.mesh.matrixWorld).project(camera);
+        const near = { clientX: r.left + (v.x + 1) / 2 * r.width + 5, clientY: r.top + (1 - v.y) / 2 * r.height + 4 };
+        const atCorner = snapPick(near);
+        showSnap(atCorner);
+        const colour = snapMarker.material.map.image.getContext('2d').getImageData(32, 32, 1, 1).data.slice(0, 3).join(',');
+        showSnap(null);
+        return JSON.stringify({ surface: onFace && onFace.snapped, corner: atCorner && atCorner.snapped, cornerDot: colour });
+    }));
+
     // Top and bottom of the cladding, set by two clicks in the model after Build.
     await page.evaluate(() => frameElevation(state.elevations[0].result));
     await page.waitForTimeout(600);

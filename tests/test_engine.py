@@ -161,3 +161,24 @@ def test_panel_seam_noggins_wait_for_counter_battens(elevation):
     assert (noggins, cbs, status) == (0, 0, "warn")
     noggins, cbs, status = build("yes")
     assert noggins > 0 and cbs > 0 and status == "pass"
+
+
+def test_sliding_the_offset_keeps_the_batten_centres(elevation):
+    """Sliding the set-out moves the grid of battens as a whole. Only the distance to
+    the edge battens changes; every gap between regular battens stays at the pitch."""
+    def interior_gaps(kind, offset, **kw):
+        out = generate_preview(_params(elevation, cladding_type=kind, offset=offset, trim=False,
+                                       set_out_from_openings=False, **kw))
+        us = sorted({round(min(q[0] for q in m["profile"]) + 25, 1)
+                     for m in out["geometry"] if m["ifc_type"] == "batten"})
+        gaps = [round(b - a, 1) for a, b in zip(us, us[1:])]
+        return gaps[1:-1], out     # drop the two end gaps, which are meant to vary
+
+    for kind in ("plank", "panel"):
+        base, _ = interior_gaps(kind, 0)
+        pitch = max(set(base), key=base.count)
+        for off in (-150, 40, 170):
+            gaps, out = interior_gaps(kind, off)
+            assert gaps and all(abs(g - pitch) < 1.0 for g in gaps), (kind, off, gaps)
+            labels = [d["label"] for d in out["dimensions"] if "c/c" in d["label"]]
+            assert labels == ["%.0f c/c" % pitch], (kind, off, labels)
