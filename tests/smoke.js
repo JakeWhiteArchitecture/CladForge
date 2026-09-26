@@ -262,6 +262,28 @@ async function main() {
     await page.waitForTimeout(1500);
     await page.screenshot({ path: path.join(__dirname, 'smoke_panel.png') });
     console.log('panel overlay:', await page.evaluate(() => document.getElementById('dim-overlay').innerText.replace(/\n/g, ' | ')));
+    // Panel rows: each row has its own dimension, and typing over one sets that row only.
+    const rowEdit = await page.evaluate(async () => {
+        const rows = () => window._lastPreview.info[0].rows.join('/');
+        const panels = () => window._lastPreview.geometry.filter(m => m.ifc_type === 'panel').length;
+        const d = window._lastPreview.dimensions.find(x => x.kind === 'row' && x.row === 0);
+        const before = { rows: rows(), panels: panels(), labels: window._lastPreview.dimensions
+            .filter(x => x.kind === 'row' || /^Cut/.test(x.label)).map(x => x.label).join(' ') };
+        if (!d) return { before };
+        openCourseDialog(d);
+        const title = document.getElementById('course-title').textContent;
+        document.getElementById('course-value').value = 900;
+        applyCourse('one');
+        await new Promise(r => setTimeout(r, 1500));
+        const after = { rows: rows(), panels: panels(), stored: state.elevations[0].panelRows.join('/') };
+        openCourseDialog(window._lastPreview.dimensions.find(x => x.kind === 'row'));
+        resetCourse();
+        await new Promise(r => setTimeout(r, 1500));
+        return { title, before, after, reset: rows() };
+    });
+    console.log('panel rows:', JSON.stringify(rowEdit));
+    if (!rowEdit.after || !rowEdit.after.rows.startsWith('900/') || rowEdit.reset !== rowEdit.before.rows)
+        throw new Error('row edit did not apply or reset: ' + JSON.stringify(rowEdit));
 
     // The wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
     await lookAt('Wing south wall', [0, 0.3, 1]);

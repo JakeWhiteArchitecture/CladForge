@@ -167,9 +167,10 @@ def _schedule(p, info, meshes):
                      "openings, so panel edges land on the jambs" if info.get("set_out_from_openings")
                      else "is centred on the elevation"))
     if p["cladding_type"] == "panel":
-        lines.append("Panels: %d pieces (%d full %.0fx%.0f) in %d courses, joint gap %.0f" % (
-            counts.get("panel", 0), info.get("n_full", 0), p["panel_w"], p["panel_h"],
-            info.get("n_courses", 0), p["panel_gap"]))
+        rows = info.get("rows") or []
+        lines.append("Panels: %d pieces in %d rows, joint gap %.0f. Rows bottom up: %s (top row is the "
+                     "closing cut); every row is dimensioned on the right." % (
+                         counts.get("panel", 0), len(rows), p["panel_gap"], ", ".join("%.0f" % h for h in rows)))
     else:
         lines.append("Planks: %d pieces %.0fx%.0f, %d courses @ %.0f cover (%s)" % (
             counts.get("plank", 0), p["plank_w"], p["plank_t"], info.get("n_courses", 0), info.get("cover", 0),

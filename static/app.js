@@ -104,7 +104,8 @@ function elevationCard(e, i) {
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
-        + (e.cover || e.panelH ? ` · course ${Math.round(e.cover || e.panelH)}` : '')
+        + (e.cover ? ` · course ${Math.round(e.cover)}` : '')
+        + (e.panelRows && e.panelRows.length ? ` · rows ${e.panelRows.map(Math.round).join('/')}` : '')
         + (ok && (e.chain.topZ !== null || e.chain.bottomZ !== null)
             ? ` · levels ${Math.round(Math.max(0, vLocal(e, e.chain.bottomZ) || 0))}–${Math.round(Math.min(r.height, vLocal(e, e.chain.topZ) === null ? r.height : vLocal(e, e.chain.topZ)))}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
@@ -454,7 +455,7 @@ function elevationRecords() {
                                                    clip_hi: e.clipHi,
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
                                                    clip_v_hi: vLocal(e, chain.topZ),
-                                                   cover: e.cover || null, panel_h: e.panelH || null }));
+                                                   cover: e.cover || null, panel_rows: e.panelRows || null }));
         }
     }
     return out;

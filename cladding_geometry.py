@@ -14,7 +14,7 @@ from cladding_constants import frame_to_world
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
                                  base_level, corner_ends, openings, buildup_depth, clip_bounds,
-                                 clip_bounds_v)
+                                 clip_bounds_v, panel_rows)
 
 
 def build_elevation(p, elev, layout=None):
@@ -32,9 +32,10 @@ def build_elevation(p, elev, layout=None):
     along = run / 2.0 + float(elev.get("offset", 0.0)) - start
     centre = (hi - along) if elev.get("chain_reversed") else (lo + along)   # in this elevation's u
     offset = centre - W / 2.0
-    # A course height typed on a dimension overrides the parameter, for this elevation
-    # or for every member of its chain — whichever scope was chosen.
-    over = {k: float(elev[k]) for k in ("cover", "panel_h") if elev.get(k)}
+    # A plank course typed on a dimension overrides the parameter, for this elevation or
+    # for every member of its chain — whichever scope was chosen. Panel rows are a list
+    # carried on the elevation the same way (elev["panel_rows"]), read by _panels.
+    over = {k: float(elev[k]) for k in ("cover",) if elev.get(k)}
     if over:
         p = dict(p, **over)
     meshes, dims = [], []
@@ -117,13 +118,15 @@ def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
             m["corner"] = corner
 
 
-def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None):
-    """*kind* names what the dimension measures, so the UI can offer to edit it."""
+def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None, **extra):
+    """*kind* names what the dimension measures, so the UI can offer to edit it, and
+    *extra* carries what it needs to write the value back (a panel row's index)."""
     d = {"elevation": elev, "p1": [float(p1[0]), float(p1[1])],
          "p2": [float(p2[0]), float(p2[1])], "label": label,
          "offset": float(offset), "norm": [float(norm[0]), float(norm[1])]}
     if kind:
         d["kind"], d["value"] = kind, float(value)
+    d.update(extra)
     return d
 
 
@@ -272,27 +275,29 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     battens = [u for u in supports if all(abs(u - j) > bw / 2 for j in jambs)]
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cavity_t = depth - cavity_start
-    courses = stacked_positions(v0, H, p["panel_h"] + gap)
+    rows, short = panel_rows(elev.get("panel_rows"), p["panel_h"], gap, v0, H)
     # A noggin between vertical battens sits on the drainage plane and dams it, so the
     # horizontal seams are left unsupported unless a counter-batten layer holds the
-    # battens off the wall and the water can run down behind them.
-    for j, v in enumerate(courses[:-1] if p["has_cb"] else []):
-        vj = v + p["panel_h"] + gap / 2
+    # battens off the wall and the water can run down behind them. With one, every row
+    # joint gets its noggin, whatever the rows' heights.
+    for j, (v, h) in enumerate(rows[:-1] if p["has_cb"] else []):
+        vj = v + h + gap / 2
         for k, (a, b) in enumerate(zip(battens, battens[1:])):
             if b - a > bw + 1:
                 meshes.append(_prism(_rect(a + bw / 2, vj - bw / 2, b - bw / 2, vj + bw / 2), depth - p["batten_d"],
-                                     p["batten_d"], frame, "cross_batten", "%s Cross Batten C%d-%d" % (name, j + 1, k + 1), name))
-    info["seam_noggins"] = bool(p["has_cb"]) and len(courses) > 1
-    for j, v in enumerate(courses):
+                                     p["batten_d"], frame, "cross_batten", "%s Cross Batten R%d-%d" % (name, j + 1, k + 1), name))
+    info["seam_noggins"] = bool(p["has_cb"]) and len(rows) > 1
+    for j, (v, h) in enumerate(rows):
         for k, (s, e, _full) in enumerate(panels):
-            meshes.append(_prism(_rect(s, v, e, v + p["panel_h"]), depth, p["panel_t"], frame, "panel",
-                                 "%s Panel C%d-%d" % (name, j + 1, k + 1), name))
+            meshes.append(_prism(_rect(s, v, e, v + h), depth, p["panel_t"], frame, "panel",
+                                 "%s Panel R%d-%d" % (name, j + 1, k + 1), name))
     face = depth + p["panel_t"]
     fulls = [pn for pn in panels if pn[2]]
     widths = sorted({round(e - s, 1) for s, e, _f in panels})
-    info.update(n_courses=len(courses), cover=p["panel_w"] + gap, batten_centres=p["batten_centres"],
+    info.update(n_courses=len(rows), cover=p["panel_w"] + gap, batten_centres=p["batten_centres"],
+                rows=[round(h, 1) for _v, h in rows], short_rows=short,
                 closing_cut_left=(fulls[0][0] if fulls else W), closing_cut_right=(W - fulls[-1][1]) if fulls else 0.0,
-                closing_cut_top=(H - courses[-1]) if courses else 0.0, n_full=len(fulls) * len(courses),
+                closing_cut_top=rows[-1][1] if rows else 0.0, n_full=len(fulls) * len(rows),
                 set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
     dims += _batten_dims(name, battens, p["batten_centres"], True, W)
@@ -302,9 +307,13 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
         dims.append(_dim(name, [fulls[0][0], H], [fulls[0][1], H], "Panel %.0f" % (fulls[0][1] - fulls[0][0]), 300, [0, 1]))
     for o in holes:
         dims.append(_dim(name, [o[0], o[3]], [o[1], o[3]], "Opening %.0f" % (o[1] - o[0]), 250, [0, 1]))
-    if courses:
-        dims.append(_dim(name, [W, courses[0]], [W, courses[0] + p["panel_h"]], "Course %.0f" % p["panel_h"],
-                         300, [1, 0], "course", p["panel_h"]))
+    # One dimension per row up the right-hand side, each naming the row it edits; the
+    # top row is the closing cut, which is whatever is left, so it is read-only.
+    for j, (v, h) in enumerate(rows):
+        if j < len(rows) - 1:
+            dims.append(_dim(name, [W, v], [W, v + h], "R%d %.0f" % (j + 1, h), 300, [1, 0], "row", h, row=j))
+        else:
+            dims.append(_dim(name, [W, v], [W, v + h], "Cut %.0f" % h, 300, [1, 0]))
     return face
 
 

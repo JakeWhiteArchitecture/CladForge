@@ -264,9 +264,8 @@ def test_a_course_height_can_be_set_per_elevation(elevation):
     assert wide["info"][0]["cover"] == 300.0
     assert wide["info"][0]["n_courses"] < base["info"][0]["n_courses"]
 
-    # panels take the override on their own field
-    panels = generate_preview({"elevations": [dict(elevation, offset=0, panel_h=1500.0)],
+    # panels take a list of row heights instead (see test_rows.py)
+    panels = generate_preview({"elevations": [dict(elevation, offset=0, panel_rows=[1500.0])],
                                "cladding_type": "panel", "trim": False})
-    heights = {round(max(q[1] for q in m["profile"]) - min(q[1] for q in m["profile"]))
-               for m in panels["geometry"] if m["ifc_type"] == "panel"}
-    assert heights == {1500}
+    row = next(d for d in panels["dimensions"] if d.get("kind") == "row")
+    assert row["value"] == 1500.0 and row["row"] == 0

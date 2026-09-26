@@ -2,6 +2,7 @@
 
 from cladding_constants import (_parse, PLANK_SPAN_TABLE, MIN_CAVITY, FIXING_EMBEDMENT,
                                 MAX_BATTEN_SPAN)
+from cladding_primitives import ROW_MIN
 
 MIN_CLOSING_CUT = 100.0   # mm – narrower closing pieces are hard to fix and look wrong
 
@@ -61,6 +62,14 @@ def check_rules(params, infos=None):
                                                         max(i.get("panel_widths") or [0])))
         cuts = [c for c in (i.get("closing_cut_left", 0), i.get("closing_cut_right", 0),
                             i.get("min_panel", 0)) if 0 < c < MIN_CLOSING_CUT]
+        if i.get("short_rows"):
+            add("Panel rows", "warn", "%s: row %s asked for less than %.0fmm — raised to %.0fmm, the "
+                "shortest row that can be fixed" % (i["elevation"], ", ".join(str(r + 1) for r in i["short_rows"]),
+                                                    ROW_MIN, ROW_MIN), len(i["short_rows"]))
+        top = i.get("closing_cut_top", 0) if i.get("rows") else 0
+        if 0 < top < MIN_CLOSING_CUT:
+            add("Panel rows", "warn", "%s: the closing row at the top is only %.0fmm — change a row height "
+                "so it is at least %.0fmm" % (i["elevation"], top, MIN_CLOSING_CUT), top)
         if cuts:
             add("Closing cut", "warn", "%s: a panel only %.0fmm wide is narrower than %.0fmm — shift the "
                 "setting-out or move a joint" % (i["elevation"], min(cuts), MIN_CLOSING_CUT), min(cuts))

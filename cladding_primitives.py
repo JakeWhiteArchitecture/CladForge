@@ -39,6 +39,33 @@ def stacked_positions(start, end, pitch):
     return out
 
 
+ROW_MIN, ROW_MAX = 150.0, 3000.0     # mm – a listed panel row; short rows are deliberate tiers
+
+
+def panel_rows(heights, default_h, gap, start, end):
+    """Panel rows up a face as [(v, h)], bottom first, and the indices of rows asked
+    for below ROW_MIN. *heights* lists the rows in order; once it runs out the rows
+    carry on at *default_h*. Rows stack from *start* with *gap* between them, and the
+    top row is the closing cut, taking whatever height is left below *end*: a listed
+    row that does not fit is cut, and rows listed above the top are dropped."""
+    out, short = [], []
+    heights = [float(h) for h in (heights or []) if h]
+    v, i = float(start), 0
+    while v < end - 1e-6:
+        if i < len(heights):
+            if heights[i] < ROW_MIN:
+                short.append(i)
+            h = min(ROW_MAX, max(ROW_MIN, heights[i]))
+        else:
+            h = default_h
+        if v + h + gap >= end - 1e-6:          # nothing starts above this one
+            out.append((v, min(h, end - v)))
+            break
+        out.append((v, h))
+        v, i = v + h + gap, i + 1
+    return out, short
+
+
 def batten_positions(length, width, centres, offset, edges=True):
     """Batten centrelines across *length*: arrayed at *centres* about the middle
     (shifted by *offset*), plus an edge batten at each end. Battens closer than
