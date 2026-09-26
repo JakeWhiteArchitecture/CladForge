@@ -45,6 +45,9 @@ function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' ·
 
 function setActive(i) {
     state.active = i;
+    // Flat on an elevation, choosing another swings the view across to it.
+    const flat = state.elevations[i];
+    if (in2D() && flat && flat.result && flat.result.ok) enter2D(flat.result.name, flat.result.frame, cladBox(flat));
     renderElevationList();
     const sel = document.getElementById('active-elev');
     sel.innerHTML = state.elevations.map((e, k) => `<option value="${k}" ${k === i ? 'selected' : ''}>${chainLabel(e)}</option>`).join('');
@@ -118,6 +121,7 @@ function elevationCard(e, i) {
 }
 
 function renderElevationList() {
+    update2DButton();
     const box = document.getElementById('elevation-list');
     if (!state.elevations.length) {
         box.innerHTML = '<p class="hint">No elevations yet. Load a model, then click a wall face.</p>';
@@ -295,6 +299,39 @@ async function relinkChain(chain) {
     for (const m of members) { m.chain = chain; chain.members.push(m); if (m.result && m.result.ok) await linkIntoChain(m); }
     renderElevationList();
     updatePreview();
+}
+
+// ─── 2D ELEVATION ───
+// The clad part of an elevation in its own (u, v): cut back at corners, and between the
+// chain's picked top and bottom where they are set.
+function cladBox(e) {
+    const r = e.result, lo = vLocal(e, e.chain.bottomZ), hi = vLocal(e, e.chain.topZ);
+    const u0 = e.clipLo || 0, u1 = (e.clipHi === null || e.clipHi === undefined) ? r.width : e.clipHi;
+    return { u0, u1: u1 - u0 > 1 ? u1 : r.width,
+             v0: Math.max(0, lo || 0), v1: Math.min(r.height, hi === null ? r.height : hi) };
+}
+
+function can2D() {
+    const e = state.elevations[state.active];
+    return !!(e && e.result && e.result.ok);
+}
+
+function toggle2D() {
+    if (in2D()) { exit2D(); update2DButton(); return; }
+    if (!can2D()) { setStatus('Pick and extract an elevation first — the 2D view looks at the active one', 'busy'); return; }
+    const e = state.elevations[state.active];
+    enter2D(e.result.name, e.result.frame, cladBox(e));
+    update2DButton();
+}
+
+function update2DButton() {
+    for (const id of ['view-2d', 'edit-2d']) {
+        const b = document.getElementById(id);
+        if (!b) continue;
+        b.textContent = in2D() ? '3D' : '2D elevation';
+        b.disabled = !in2D() && !can2D();
+        b.title = in2D() ? 'Back to the 3D view (Esc)' : 'Look at the active elevation flat and square-on (E)';
+    }
 }
 
 // ─── EDIT MODE ───
@@ -854,10 +891,15 @@ function initApp() {
         slider.addEventListener('change', release);
     }
     document.addEventListener('keydown', e => {
+        const el = document.activeElement, typing = el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
+        const modal = ['chain-wizard', 'course-dialog', 'download-reminder'].some(id => document.getElementById(id).classList.contains('open'));
+        if ((e.key === 'e' || e.key === 'E') && !typing && !modal && !e.ctrlKey && !e.metaKey && !e.altKey) { toggle2D(); return; }
         if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
         if (document.getElementById('course-dialog').classList.contains('open')) { closeCourseDialog(); return; }
         if (state.levels) { dismissLevels(); return; }
-        closeEditWidget();
+        // Escape unwinds one thing at a time: the edit widget first, then the flat view.
+        if (state.editing) { closeEditWidget(); return; }
+        if (in2D()) { exit2D(); update2DButton(); }
     });
     document.getElementById('download-reminder').addEventListener('click', e => { if (e.target.id === 'download-reminder') e.currentTarget.classList.remove('open'); });
 }

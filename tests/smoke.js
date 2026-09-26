@@ -285,6 +285,35 @@ async function main() {
     if (!rowEdit.after || !rowEdit.after.rows.startsWith('900/') || rowEdit.reset !== rowEdit.before.rows)
         throw new Error('row edit did not apply or reset: ' + JSON.stringify(rowEdit));
 
+    // 2D elevation: E swings the camera round to face the active elevation, then hands
+    // over to an orthographic camera; Escape brings the 3D pose back.
+    await page.evaluate(() => { setActive(0); document.activeElement && document.activeElement.blur(); });
+    await page.waitForTimeout(800);
+    const pose3d = await page.evaluate(() => [camera.position.toArray(), controls.target.toArray()].map(v => v.map(Math.round).join(',')).join(' → '));
+    await page.keyboard.press('e');
+    await page.waitForTimeout(1200);
+    const flat = await page.evaluate(() => {
+        const cam = activeCamera(), f = state.elevations[0].result.frame;
+        const look = cam.position.clone().sub(controls.target).normalize();
+        const n = new THREE.Vector3(f.n[0], 0, -f.n[1]).normalize();
+        const faded = modelGroup.children.every(m => Math.abs(m.material.opacity - VIEW2D_FADE) < 1e-6);
+        return { ortho: !!cam.isOrthographicCamera, square: +look.dot(n).toFixed(6), up: cam.up.toArray().join(','),
+                 zoom: +cam.zoom.toFixed(3), rotate: controls.enableRotate, faded, dims: dimGroup.visible,
+                 button: document.getElementById('view-2d').textContent };
+    });
+    console.log('2D view:', JSON.stringify(flat));
+    await page.screenshot({ path: path.join(__dirname, 'smoke_2d.png') });
+    if (!flat.ortho || flat.square < 0.99999 || flat.rotate || !flat.faded || flat.button !== '3D')
+        throw new Error('2D view is not flat and square-on: ' + JSON.stringify(flat));
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(1200);
+    const back = await page.evaluate(() => ({ ortho: !!activeCamera().isOrthographicCamera, rotate: controls.enableRotate,
+        pose: [camera.position.toArray(), controls.target.toArray()].map(v => v.map(Math.round).join(',')).join(' → '),
+        opacity: modelGroup.children[0].material.opacity }));
+    console.log('back to 3D:', JSON.stringify(back), '| was', pose3d);
+    if (back.ortho || !back.rotate || back.pose !== pose3d)
+        throw new Error('3D pose not restored: ' + JSON.stringify(back) + ' vs ' + pose3d);
+
     // The wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
     await lookAt('Wing south wall', [0, 0.3, 1]);
     await page.waitForFunction(() => state.elevations.length === 2 && state.elevations[1].result && state.elevations[1].result.ok && state.elevations[1].chain !== state.elevations[0].chain, null, { timeout: 60000 });

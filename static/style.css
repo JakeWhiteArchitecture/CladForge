@@ -124,7 +124,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .reminder-text { font-size: 13px; line-height: 1.6; color: var(--text); }
 
 /* Make chain: nothing is generated until the picked chain is built. */
-#make-chain { position: absolute; top: 34px; right: 10px; z-index: 6; padding: 9px 16px; border: none;
+.view-actions { position: absolute; top: 34px; right: 10px; z-index: 6; display: flex; gap: 8px; }
+#view-2d { padding: 9px 16px; border: 1px solid var(--accent); border-radius: 20px; background: rgba(22,33,62,0.92);
+    color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+#view-2d:hover:not(:disabled) { background: #1a4a80; }
+#view-2d:disabled { opacity: 0.4; cursor: default; }
+#make-chain { padding: 9px 16px; border: none;
     border-radius: 20px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
     cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
 #make-chain:hover { background: var(--accent-hover); }
