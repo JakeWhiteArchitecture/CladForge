@@ -264,3 +264,61 @@ def test_extraction_gives_up_rather_than_grinding():
     assert not any("Ran out of time" in w for w in full["warnings"])
     assert len(full["abutments"]) > 1
     assert full["width"] == out_of_time["width"]       # the face itself is read either way
+
+
+def _three_faces(detail_ab=None, detail_bc=None, job="mitre"):
+    """A → B → C, external right angles at both of B's ends. The detail at each corner
+    is an override held by both faces that meet there; None means the job setting."""
+    a, b = extract_elevation(payload()), extract_elevation(corner_payload())
+    c = dict(extract_elevation(payload()), name="Elevation C")
+    common = dict(chain="Chain 1", chain_reversed=False, offset=0)
+    ra = dict(a, chain_start=0, corner_hi=1.0, master_hi=True, detail_hi=detail_ab, **common)
+    rb = dict(b, chain_start=a["width"], corner_lo=1.0, master_lo=False, detail_lo=detail_ab,
+              corner_hi=1.0, master_hi=True, detail_hi=detail_bc, **common)
+    rc = dict(c, chain_start=a["width"] + b["width"], corner_lo=1.0, master_lo=False,
+              detail_lo=detail_bc, **common)
+    return {"elevations": [ra, rb, rc], "cladding_type": "panel", "corner": job, "trim": False,
+            "reveals": False, "set_out_from_openings": False}
+
+
+def test_each_corner_takes_its_own_detail():
+    """One mitred corner and one lapped corner in the same chain: each end of each face
+    is built exactly as it would be if the whole job used that end's detail."""
+    mixed = generate_preview(_three_faces(detail_bc="lap"))          # A–B from the job: mitre
+    mitre = generate_preview(_three_faces(job="mitre"))
+    lap = generate_preview(_three_faces(job="lap"))
+    by_name = lambda out: {m["name"]: m.get("corner") or {} for m in out["geometry"]}  # noqa: E731
+    got, want_mitre, want_lap = by_name(mixed), by_name(mitre), by_name(lap)
+    assert set(got) == set(want_mitre) == set(want_lap)
+    left, right = ("k_l", "ext_l", "u_l"), ("k_r", "ext_r", "u_r")
+    side = lambda c, keys: {k: c[k] for k in keys if k in c}  # noqa: E731
+    for name, corner in got.items():
+        elev = name.split(" ")[1]
+        if elev == "A":
+            assert side(corner, right) == side(want_mitre[name], right), name
+        elif elev == "B":
+            assert side(corner, left) == side(want_mitre[name], left), name
+            assert side(corner, right) == side(want_lap[name], right), name
+        else:
+            assert side(corner, left) == side(want_lap[name], left), name
+    # the lap is a board detail: behind it the layers stay square, while the mitre
+    # at B's other end cuts every layer
+    battens_b = [c for n, c in got.items() if " B Batten" in n]
+    assert any("k_l" in c for c in battens_b) and not any("k_r" in c for c in battens_b)
+    info = {i["elevation"]: i["corner"]["details"] for i in mixed["info"]}
+    assert info["Elevation B"] == ["mitre", "lap"], info
+
+
+def test_a_corner_override_falls_back_like_the_job_setting():
+    """Master-lap is a panel detail: a lap set on one corner falls back to a mitre in
+    plank mode, and a square corner adds nothing to the chain run."""
+    params = dict(_three_faces(detail_bc="lap"), cladding_type="plank")
+    info = {i["elevation"]: i["corner"]["details"] for i in generate_preview(params)["info"]}
+    assert info["Elevation B"] == ["mitre", "mitre"], info
+    from cladding_constants import _parse
+    from cladding_primitives import buildup_depth, chain_layout
+    for override in ("butt", None):
+        p = _parse(_three_faces(detail_ab=override))
+        run = chain_layout(p["elevations"], buildup_depth(p), p["corner"])["Elevation A"][1]
+        p_job = _parse(_three_faces(job=override or "mitre", detail_bc="mitre"))
+        assert run == chain_layout(p_job["elevations"], buildup_depth(p_job), p_job["corner"])["Elevation A"][1]

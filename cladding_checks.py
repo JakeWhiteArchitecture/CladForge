@@ -73,14 +73,17 @@ def check_rules(params, infos=None):
         if cuts:
             add("Closing cut", "warn", "%s: a panel only %.0fmm wide is narrower than %.0fmm — shift the "
                 "setting-out or move a joint" % (i["elevation"], min(cuts), MIN_CLOSING_CUT), min(cuts))
-    corners = [i.get("corner") or {} for i in infos]
-    ends = sum(1 for c in corners for side in ("left", "right") if any(c.get(side) or ()))
-    if ends:
-        detail = next((c.get("detail") for c in corners if c.get("detail")), "mitre")
-        add("Corners", "pass", "%d corner end(s), %s" % (ends, {
+    # Each corner end carries its own detail, so count the ends per detail.
+    per = {}
+    for c in (i.get("corner") or {} for i in infos):
+        for side, detail in zip(("left", "right"), c.get("details") or (c.get("detail"),) * 2):
+            if any(c.get(side) or ()):
+                per[detail] = per.get(detail, 0) + 1
+    if per:
+        add("Corners", "pass", "; ".join("%d corner end(s), %s" % (n, {
             "mitre": "mitred: the whole buildup wraps on the bisector plane",
             "lap": "master-lap: one board masters the corner and the other butts behind it, joint gap exposed",
-            "butt": "square: both boards stop at the wall corner"}[detail]))
+            "butt": "square: both boards stop at the wall corner"}[d]) for d, n in sorted(per.items())))
     bad = sum(i.get("unsupported_joints", 0) for i in infos)
     if bad:
         add("End joints", "warn", "%d board end joints fall between battens — shorten max length or adjust centres" % bad, bad)

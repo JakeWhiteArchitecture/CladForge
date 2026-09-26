@@ -350,6 +350,33 @@ async function main() {
     console.log('after swap:', await page.evaluate(() => (document.querySelector('.corner-row') || {}).textContent));
     console.log('lap check:', await page.evaluate(() => (Array.from(document.querySelectorAll('.check-item span'))
         .map(s => s.textContent).find(t => t.indexOf('corner end') >= 0) || 'none')));
+    // Corner detail per corner: add the wing's north wall to the wing chain so it turns
+    // two corners, then lap one and check the other stays mitred.
+    await page.click('#corner-type .turn-btn[data-value="mitre"]');
+    await page.evaluate(() => setActive(state.elevations.findIndex(e => e.result && e.result.name === 'Elevation C')));
+    await lookAt('Wing north wall', [0, 0.3, -1]);
+    await page.waitForFunction(() => state.elevations.length === 5 && state.elevations[4].result && state.elevations[4].result.ok && state.elevations[4].link, null, { timeout: 60000 });
+    await page.waitForTimeout(1500);
+    const perCorner = await page.evaluate(async () => {
+        const chain = state.elevations[4].chain;
+        const rows = () => Array.from(document.querySelectorAll('.corner-row')).map(r => r.dataset.detail);
+        const before = rows();
+        setCornerDetail(chain.name, 1, 'lap');
+        await updatePreview();
+        const details = window._lastPreview.info.filter(i => chain.members.some(m => m.name === i.elevation))
+            .map(i => `${i.elevation.replace('Elevation ', '')}:${i.corner.details.join('/')}`).join(' ');
+        const text = Array.from(document.querySelectorAll('.corner-row')).map(r => r.textContent.replace(/\s+/g, ' ')).join(' || ');
+        const after = rows();
+        setCornerDetail(chain.name, 1, '');
+        await updatePreview();
+        return { chain: chain.name, members: chain.members.map(m => m.name).join(','), before, after, details, text, reset: rows() };
+    });
+    console.log('per-corner detail:', JSON.stringify(perCorner));
+    if (perCorner.after.join() !== 'mitre,lap' || perCorner.reset.join() !== 'mitre,mitre' || perCorner.details.indexOf('lap') < 0)
+        throw new Error('per-corner detail did not apply: ' + JSON.stringify(perCorner));
+    await page.evaluate(async () => { setActive(4); deleteElevation(); await new Promise(r => setTimeout(r, 1500)); });
+    await page.click('#corner-type .turn-btn[data-value="lap"]');
+    await page.waitForTimeout(1200);
     // Vertical planks need counter-battens, so the wizard grows a step for them.
     await buildChain('plank', 'vertical');
     console.log('counter-battens built:', await page.evaluate(() =>

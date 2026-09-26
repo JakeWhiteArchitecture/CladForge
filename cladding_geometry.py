@@ -79,9 +79,16 @@ def build_elevation(p, elev, layout=None):
     _openings_extras(p, elev, meshes, holes, layers, depth - board - layers, depth, board)
     info["openings"] = len(holes)
 
-    left, right, detail = corner_ends(elev, p)
-    _apply_corner(meshes, {lo: left, hi: right}, detail, skip=("reveal", "closer"))
-    info["corner"] = {"detail": detail, "left": list(left), "right": list(right)}
+    # Each end takes its own corner's detail: a lap at one end and a mitre at the other
+    # treat the layers behind the boards differently, so the ends are applied apart.
+    left, right, (d_left, d_right) = corner_ends(elev, p)
+    _apply_corner(meshes, {lo: left}, d_left, skip=("reveal", "closer"))
+    _apply_corner(meshes, {hi: right}, d_right, skip=("reveal", "closer"))
+    k_run = (elev.get("corner_lo"), elev.get("corner_hi"))          # run order, like the details
+    k_left, k_right = k_run[::-1] if elev.get("chain_reversed") else k_run
+    used = {d for d, k in ((d_left, k_left), (d_right, k_right)) if k}
+    info["corner"] = {"detail": used.pop() if len(used) == 1 else ("mixed" if used else d_left),
+                      "details": [d_left, d_right], "left": list(left), "right": list(right)}
     # The band at the foot: a splash zone above an abutment, or the level that was picked.
     if v0 > 0:
         dims.append(_dim(name, [0, 0], [0, v0],

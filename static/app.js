@@ -22,7 +22,8 @@ function newElevation(chain) {
     const e = { name, picks: [], result: null, manual: [], disabled: {},
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
                 offset: 0,
-                cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, clipLo: 0, clipHi: null };
+                cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, detailLo: null, detailHi: null,
+                clipLo: 0, clipHi: null };
     e.chain.members.push(e);
     state.elevations.push(e);
     setActive(n);
@@ -152,22 +153,47 @@ function chainCorners(chain) {
     return out;
 }
 
+// Each corner can override the job's corner detail. The two faces meeting there hold the
+// same value (lo member's detailHi, hi member's detailLo), set together as the master is.
+const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master-lap, open joint', butt: 'Square' };
+
+function cornerDetailInForce(c) {
+    const job = toggleValue('corner-type') || 'mitre';
+    const d = c.lo.detailHi || job;
+    return (d === 'lap' && toggleValue('cladding-type') !== 'panel') ? 'mitre' : d;
+}
+
 function cornerRows(chain, members) {
-    const detail = toggleValue('corner-type') || 'mitre';
     const rows = chainCorners(chain);
     if (!rows.length) return '';
+    const panel = toggleValue('cladding-type') === 'panel';
     return rows.map((c, i) => {
         const angle = c.hi.link ? Math.abs(c.hi.link.angle).toFixed(0) : '';
         const kind = c.k > 0 ? 'external' : 're-entrant';
+        const detail = cornerDetailInForce(c);
         const master = c.lo.masterHi ? c.lo.name : c.hi.name;
-        const label = { mitre: 'Mitred', lap: 'Master-lap, open joint', butt: 'Square' }[detail];
+        const own = c.lo.detailHi || '';
+        const pick = `<select class="corner-detail" title="Corner detail for this corner" onclick="event.stopPropagation()"
+            onchange="setCornerDetail('${chain.name}', ${i}, this.value)">`
+            + [['', 'Job default'], ['mitre', 'Mitred'], ['lap', 'Master lap'], ['butt', 'Square']]
+                .map(([v, t]) => `<option value="${v}" ${v === own ? 'selected' : ''} ${v === 'lap' && !panel ? 'disabled' : ''}>${t}</option>`).join('')
+            + '</select>';
         const swap = detail === 'lap'
             ? ` · <b>${master.replace('Elevation ', '')}</b> masters <button class="mini" onclick="event.stopPropagation(); swapCorner('${chain.name}', ${i})">Swap</button>`
             : '';
-        return `<div class="corner-row" onclick="selectCorner('${chain.name}', ${i})">`
+        return `<div class="corner-row" data-detail="${detail}" onclick="selectCorner('${chain.name}', ${i})">`
             + `${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner`
-            + ` · ${angle}° ${kind} · ${label}${swap}</div>`;
+            + ` · ${angle}° ${kind} · <span class="corner-in-force">${CORNER_LABEL[detail]}${own ? '' : ' (job)'}</span>${swap} ${pick}</div>`;
     }).join('');
+}
+
+function setCornerDetail(chainName, index, value) {
+    const chain = state.chains.find(c => c.name === chainName);
+    const corner = chain && chainCorners(chain)[index];
+    if (!corner) return;
+    corner.lo.detailHi = corner.hi.detailLo = value || null;
+    renderElevationList();
+    updatePreview();
 }
 
 function swapCorner(chainName, index) {
@@ -224,8 +250,8 @@ function placeInChain(e, other, link) {
     // The corner's slope belongs to the touching end of both members. The face that
     // was already in the chain masters the lap by default; the corner row swaps it.
     const k = link.k || 0;
-    if (after) { other.cornerHi = k; e.cornerLo = k; other.masterHi = true; e.masterLo = false; }
-    else { other.cornerLo = k; e.cornerHi = k; other.masterLo = true; e.masterHi = false; }
+    if (after) { other.cornerHi = k; e.cornerLo = k; other.masterHi = true; e.masterLo = false; other.detailHi = e.detailLo = null; }
+    else { other.cornerLo = k; e.cornerHi = k; other.masterLo = true; e.masterHi = false; other.detailLo = e.detailHi = null; }
     e.link = link;
 }
 
@@ -255,7 +281,7 @@ async function linkIntoChain(e) {
         chain.members = chain.members.filter(m => m !== e);
         e.chain = newChain(); e.chain.members.push(e);
     }
-    e.start = 0; e.rev = false; e.link = null; e.cornerLo = 0; e.cornerHi = 0;
+    e.start = 0; e.rev = false; e.link = null; e.cornerLo = 0; e.cornerHi = 0; e.detailLo = e.detailHi = null;
     e.clipLo = 0; e.clipHi = null;
     relayoutChain(e.chain);
     return false;
@@ -264,7 +290,7 @@ async function linkIntoChain(e) {
 async function relinkChain(chain) {
     const members = chain.members.slice().sort((a, b) => a.start - b.start);
     chain.members = [];
-    members.forEach(m => { m.cornerLo = 0; m.cornerHi = 0; m.masterLo = false; m.masterHi = false;
+    members.forEach(m => { m.cornerLo = 0; m.cornerHi = 0; m.masterLo = false; m.masterHi = false; m.detailLo = m.detailHi = null;
                            m.link = null; m.clipLo = 0; m.clipHi = null; });
     for (const m of members) { m.chain = chain; chain.members.push(m); if (m.result && m.result.ok) await linkIntoChain(m); }
     renderElevationList();
@@ -451,7 +477,8 @@ function elevationRecords() {
                                                    chain: members.length > 1 ? chain.name : null, chain_start: e.start,
                                                    chain_reversed: e.rev, corner_lo: e.cornerLo || 0,
                                                    corner_hi: e.cornerHi || 0, master_lo: !!e.masterLo,
-                                                   master_hi: !!e.masterHi, clip_lo: e.clipLo || 0,
+                                                   master_hi: !!e.masterHi, detail_lo: e.detailLo || null,
+                                                   detail_hi: e.detailHi || null, clip_lo: e.clipLo || 0,
                                                    clip_hi: e.clipHi,
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
                                                    clip_v_hi: vLocal(e, chain.topZ),
@@ -492,6 +519,7 @@ function onTypeChange() {
     document.getElementById('panel-section').style.display = panel ? '' : 'none';
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
     document.getElementById('batten_centres').readOnly = panel;
+    renderElevationList();              // the corner rows say which detail is in force
     updateSliderRange();
     updatePreview();
 }
