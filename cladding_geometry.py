@@ -90,9 +90,13 @@ def build_elevation(p, elev, layout=None):
     info["corner"] = {"detail": used.pop() if len(used) == 1 else ("mixed" if used else d_left),
                       "details": [d_left, d_right], "left": list(left), "right": list(right)}
     # The band at the foot: a splash zone above an abutment, or the level that was picked.
+    # Typing over the splash sets the splash zone; over a picked base or the top, the
+    # chain's picked level.
     if v0 > 0:
-        dims.append(_dim(name, [0, 0], [0, v0],
-                         ("Splash %.0f" if v0 <= splash_v0 + 0.5 else "Base %.0f") % v0, 300, [-1, 0]))
+        splash = v0 <= splash_v0 + 0.5
+        dims.append(_dim(name, [0, 0], [0, v0], ("Splash %.0f" if splash else "Base %.0f") % v0, 300, [-1, 0],
+                         "splash" if splash else "level_base", p["splash"] if splash else v0))
+    dims.append(_dim(name, [0, 0], [0, H], "Top %.0f" % H, 900, [-1, 0], "level_top", H))
     info["total_depth"] = depth
     info["n_boards"] = sum(1 for m in meshes if m["ifc_type"] in ("plank", "panel"))
     return meshes, dims, info
@@ -137,19 +141,27 @@ def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None, **extra):
     return d
 
 
-def _batten_dims(name, battens, pitch, along_u, H_or_W):
+LOCK_CENTRES = "The panel bay sets the batten centres: change the panel width"
+LOCK_OPENING = "The structural opening sets this width"
+LOCK_BAYS = "Set out from the structural openings: the bays follow the jambs"
+
+
+def _batten_dims(name, battens, pitch, along_u, H_or_W, lock=None):
     """The c/c dimension between two regular battens, and the end distance to the edge
     batten when it differs. Measuring c/c from the edge batten reported the end
-    distance under the name of the centres, so it seemed to change with the slider."""
+    distance under the name of the centres, so it seemed to change with the slider.
+    The centres are editable unless *lock* says what drives them."""
     out = []
     pairs = list(zip(battens, battens[1:]))
     regular = next(((a, b) for a, b in pairs if abs((b - a) - pitch) < 1.0), None)
-    def dim(a, b, label, off):
+    def dim(a, b, label, off, **kw):
         if along_u:
-            return _dim(name, [a, 0], [b, 0], label, off, [0, -1])
-        return _dim(name, [0, a], [0, b], label, off, [-1, 0])
+            return _dim(name, [a, 0], [b, 0], label, off, [0, -1], **kw)
+        return _dim(name, [0, a], [0, b], label, off, [-1, 0], **kw)
     if regular:
-        out.append(dim(regular[0], regular[1], "%.0f c/c" % pitch, 300 if along_u else 600))
+        extra = {"lock": lock} if lock else {}
+        out.append(dim(regular[0], regular[1], "%.0f c/c" % pitch, 300 if along_u else 600,
+                       kind="centres", value=pitch, **extra))
     if pairs and abs((pairs[0][1] - pairs[0][0]) - pitch) >= 1.0:
         out.append(dim(pairs[0][0], pairs[0][1], "End %.0f" % (pairs[0][1] - pairs[0][0]), 300 if along_u else 600))
     return out
@@ -307,13 +319,20 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
                 closing_cut_top=rows[-1][1] if rows else 0.0, n_full=len(fulls) * len(rows),
                 set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
-    dims += _batten_dims(name, battens, p["batten_centres"], True, W)
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_CENTRES)
+    # The left closing cut and the first full panel set out the face: typing a cut solves
+    # for the offset, typing the panel sets the panel width. Set out from the openings,
+    # the bays follow the jambs instead and both are read-only.
+    lock = {"lock": LOCK_BAYS} if jambs else {}
     if fulls and fulls[0][0] > 1:
-        dims.append(_dim(name, [0, H], [fulls[0][0], H], "Cut %.0f" % fulls[0][0], 300, [0, 1]))
+        dims.append(_dim(name, [0, H], [fulls[0][0], H], "Cut %.0f" % fulls[0][0], 300, [0, 1],
+                         "cut_left", fulls[0][0], bay=p["panel_w"] + gap, **lock))
     if fulls:
-        dims.append(_dim(name, [fulls[0][0], H], [fulls[0][1], H], "Panel %.0f" % (fulls[0][1] - fulls[0][0]), 300, [0, 1]))
+        dims.append(_dim(name, [fulls[0][0], H], [fulls[0][1], H], "Panel %.0f" % (fulls[0][1] - fulls[0][0]), 300, [0, 1],
+                         "panel_w", fulls[0][1] - fulls[0][0], **lock))
     for o in holes:
-        dims.append(_dim(name, [o[0], o[3]], [o[1], o[3]], "Opening %.0f" % (o[1] - o[0]), 250, [0, 1]))
+        dims.append(_dim(name, [o[0], o[3]], [o[1], o[3]], "Opening %.0f" % (o[1] - o[0]), 250, [0, 1],
+                         "opening", o[1] - o[0], lock=LOCK_OPENING))
     # One dimension per row up the right-hand side, each naming the row it edits; the
     # top row is the closing cut, which is whatever is left, so it is read-only.
     for j, (v, h) in enumerate(rows):

@@ -177,6 +177,8 @@
             <div><span class="dim-label">Boards:</span> <span class="dim-value" id="dim-boards">--</span></div>
         </div>
         <div class="status-chip busy" id="status-chip">Loading…</div>
+        <div class="dim2d-layer" id="dim2d-layer"></div>
+        <div class="dim2d-editor" id="dim2d-editor" style="display:none"></div>
         <div class="view-actions">
             <button id="view-2d" onclick="toggle2D()" disabled title="Look at the active elevation flat and square-on (E)">2D elevation</button>
             <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
@@ -249,6 +251,7 @@
     <script src="static/view2d.js"></script>
     <script src="static/app.js"></script>
     <script src="static/wizard.js"></script>
+    <script src="static/dims2d.js"></script>
     <script>initApp();</script>
 </body>
 </html>

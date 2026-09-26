@@ -12,7 +12,7 @@ const VIEW2D_MARGIN = 1.1;      // and a little more round that
 const VIEW2D_FADE = 0.2;        // host model opacity while flat
 
 let orthoCamera = null;
-const view2d = { on: false, name: null, saved: null, anim: null, faded: [] };
+const view2d = { on: false, name: null, saved: null, anim: null, faded: [], onFrame: null };
 
 // The camera the controls drive is the one on screen: perspective in 3D, orthographic in 2D.
 function activeCamera() { return controls ? controls.object : camera; }
@@ -118,20 +118,14 @@ function apply2DLook(on) {
     }
     filter2D();
     dimGroup.visible = on || layerVisible.dims;
+    // Flat, the labels are HTML over the view (dims2d.js); the sprites are for 3D.
+    for (const o of dimGroup.children) if (o.isSprite) o.visible = !on;
 }
 
 // Called after every render of the cladding too, since a preview rebuilds it.
 function filter2D() {
     for (const layer of cladGroup.children)
         for (const o of layer.children) o.visible = !view2d.on || o.userData.elevation === view2d.name;
-}
-
-// Dimension labels are sprites sized in model millimetres; flat, keep them the size
-// they were on screen whatever the zoom.
-function scale2DLabels() {
-    const zoom = controls.object === orthoCamera ? orthoCamera.zoom : 1;
-    for (const o of dimGroup.children)
-        if (o.isSprite && o.userData.base) o.scale.set(o.userData.base[0] / zoom, o.userData.base[1] / zoom, 1);
 }
 
 function enter2D(name, frame, box) {
@@ -160,7 +154,6 @@ function exit2D() {
     goPerspective();
     view2d.on = false;
     apply2DLook(false);
-    scale2DLabels();
     const saved = view2d.saved, off = saved.pos.clone().sub(saved.target);
     animatePose(currentPose(), { target: saved.target, dir: off.clone().normalize(), dist: off.length() }, () => {
         camera.position.copy(saved.pos);
@@ -179,5 +172,4 @@ function reset2D() {
     goPerspective();
     view2d.on = false;
     apply2DLook(false);
-    scale2DLabels();
 }

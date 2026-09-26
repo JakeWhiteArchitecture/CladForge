@@ -56,7 +56,7 @@ function initThree() {
     (function animate() {
         requestAnimationFrame(animate);
         controls.update();
-        if (view2d.on) scale2DLabels();
+        if (view2d.on && view2d.onFrame) view2d.onFrame();     // the 2D labels follow the view
         renderer.render(scene, activeCamera());
     })();
 }
@@ -292,7 +292,7 @@ function setModelVisible(on) { layerVisible.model = on; modelGroup.visible = on;
 
 // ─── PICKING ───
 function pickDim(event) {
-    if (!dimLabels.length || !dimGroup.visible) return null;
+    if (!dimLabels.length || !dimGroup.visible || view2d.on) return null;    // flat, labels are HTML
     const rect = renderer.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1,
                                     -((event.clientY - rect.top) / rect.height) * 2 + 1);
@@ -519,6 +519,7 @@ function highlightCorner(frame, u, height) {
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
                                 new THREE.LineBasicMaterial({ color: 0xffd166, depthTest: false, linewidth: 2 }));
     cornerGroup.add(line);
+    if (view2d.on) return;            // flat, the view stays square-on; the line is enough
     const mid = pts[0].clone().lerp(pts[1], 0.5);
     controls.target.copy(mid);
     controls.update();
@@ -593,7 +594,6 @@ function makeLabel(text, editable) {
     const tex = new THREE.CanvasTexture(canvas);
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
     sprite.scale.set(canvas.width * 4, canvas.height * 4, 1);
-    sprite.userData.base = [canvas.width * 4, canvas.height * 4];   // 2D rescales from this
     return sprite;
 }
 
@@ -616,10 +616,13 @@ function renderDimensions(dims, elevByName, only) {
         const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),
                                             new THREE.LineBasicMaterial({ color: 0x00ccff, depthTest: false }));
         dimGroup.add(line);
-        const label = makeLabel(d.label, !!d.kind);
+        // In 3D only the courses and rows open the course dialog; the rest are edited flat.
+        const editable = d.kind === 'course' || d.kind === 'row';
+        const label = makeLabel(d.label, editable);
         label.position.copy(new THREE.Vector3((d.p1[0] + d.p2[0]) / 2 + nx * (off + 120), (d.p1[1] + d.p2[1]) / 2 + ny * (off + 120), 0).applyMatrix4(M));
+        label.visible = !view2d.on;        // flat, HTML labels take over (dims2d.js)
         dimGroup.add(label);
-        if (d.kind) { label.userData.dim = d; dimLabels.push(label); }
+        if (editable) { label.userData.dim = d; dimLabels.push(label); }
     }
     dimGroup.visible = layerVisible.dims || view2d.on;    // flat, the dimensions are the point
 }

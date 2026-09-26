@@ -165,3 +165,22 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
     .panel { width: 100%; min-width: 0; height: 55vh; border-right: none; border-bottom: 1px solid var(--border); }
     .legend, .dim-overlay { font-size: 10px; }
 }
+
+/* 2D elevation: dimension labels over the flat view, typed over where they sit. */
+.dim2d-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 4; }
+.dim2d { position: absolute; transform: translate(-50%, -50%); pointer-events: auto; white-space: nowrap;
+    font: 600 12px sans-serif; padding: 2px 7px; border-radius: 3px; color: #00ccff;
+    background: rgba(10,10,26,0.85); border: 1px solid transparent; cursor: default; }
+.dim2d.editable { background: rgba(0,80,110,0.92); border-color: #00ccff; cursor: text; }
+.dim2d.editable:hover { background: #006d8f; }
+.dim2d.locked { color: #6b7a8c; border: 1px dashed #3a4a5c; cursor: help; }
+.dim2d.corner-badge { color: #111; background: #ffd166; border-color: #ffd166; border-radius: 10px; cursor: pointer; }
+.dim2d-editor { position: absolute; transform: translate(-50%, 16px); z-index: 7; background: rgba(22,33,62,0.98);
+    border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    font-size: 12px; color: var(--text); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 280px; }
+.dim2d-editor .d2-title { width: 100%; font-weight: 600; color: var(--accent); }
+.dim2d-editor input { width: 90px; padding: 4px 6px; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 4px; }
+.dim2d-editor .d2-scope, .dim2d-editor .d2-actions { width: 100%; display: flex; gap: 4px; }
+.dim2d-editor .d2-scope .turn-btn { flex: 1; padding: 4px 6px; font-size: 11px; }
+.dim2d-editor .d2-hint { width: 100%; font-size: 10px; color: var(--hint); }
+.dim2d-editor select { font-size: 11px; background: var(--bg); color: var(--text); border: 1px solid var(--border); }

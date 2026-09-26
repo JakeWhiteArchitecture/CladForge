@@ -111,10 +111,25 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
    mode each **row** has its own dimension, so rows can differ in height. A chain is
    set out as one run, so the dialog asks whether to apply it to the whole chain or to
    that elevation alone. Only the active elevation's dimensions are drawn.
-7. Drag the **horizontal offset** slider to control where the closing cuts land,
+7. Press **E** (or **2D elevation**, top right, or in the edit widget) to look at the
+   active elevation flat and square-on. The camera swings round to face it and hands
+   over to an orthographic view fitted to the cladding and its dimensions: pan and zoom
+   work, rotation is locked, the host model fades back and the other elevations'
+   cladding is hidden. Choosing another elevation swings across to it; **E**, **Esc** or
+   **3D** swings back to where you were. Nothing is recomputed either way.
+8. In 2D, **click a dimension to type over it** where it sits: Enter applies, Esc
+   cancels, Tab moves to the next. Each writes to what it measures — a panel row (with
+   a chain / this-elevation toggle, **Split row** and **Merge with row above**), the
+   plank course, the left closing cut (which solves for the offset) and the first panel
+   width when the setting-out is centred, the plank batten centres, the splash zone,
+   and the top and baserail levels. Greyed labels are driven by something else and say
+   what: the batten centres in panel mode, the openings, and the bays when set out from
+   the openings. A badge at each cornered end shows the detail (M, L with the master,
+   S); click it to change that corner or swap its master.
+9. Drag the **horizontal offset** slider to control where the closing cuts land,
    or click the cladding itself: a face that is already clad is not re-picked,
    it opens its chain's setting-out over the view.
-8. Read the checks, then download IFC4X3 or DXF. The legend toggles every layer,
+10. Read the checks, then download IFC4X3 or DXF. The legend toggles every layer,
    including the picked wall faces and the outline, so the buildup can be read on
    its own.
 
@@ -146,6 +161,7 @@ default. Each is one place in the code, so any of them can be flipped.
 | Plank vertical setting-out [OPEN] | Starts at the top of the ground splash zone and works up; the closing cut lands at the top. The slider only shifts along the wall. | `cladding_geometry._horizontal_planks` |
 | End joints [OPEN] | Must land on a batten, staggered course to course (odd courses start with a half-length board). Joints that cannot reach a batten are cut at max length and counted as a warning. | `cladding_primitives.split_run` |
 | Coursing at openings [OPEN] | Straight through and cut. Coursing never resets at a reveal. | `cladding_booleans.apply_boolean_ops` |
+| 2D elevation | A view, not a mode of the model: nothing is rebuilt on the way in or out. The perspective camera turns on a sphere about the target (a slerp, eased over 600 ms) so it swings round the model rather than through it, then an orthographic camera takes over with the frustum the perspective one saw at that distance, so the swap does not jump. Everything that picks or projects goes through the active camera. Flat, dimensions are HTML labels placed from projected points each frame, so they stay readable at any zoom; in 3D they stay sprites, and only courses and rows open the course dialog. Every dimension carries its kind and value (and a row its index, a cut its bay), or a *lock* naming what drives it. | `view2d.enter2D`, `exit2D`, `activeCamera`, `dims2d.applyDim`, `cladding_geometry._dim` |
 | Panel rows | Panel courses are a list of **row heights**, bottom row first, carried on the elevation (`panel_rows`). With no list every row is the panel height, as before. Rows stack up from the base with the joint gap between them; once the list runs out they carry on at the panel height, and the top row is always the closing cut, taking whatever is left. Each listed row is held to 150–3000 mm: rows down to 150 are deliberate tiers, and a row asked for below that, or a closing row under 100 mm, is flagged in the checks. Every row gets its own dimension up the right-hand side, which can be typed over for this elevation or the whole chain; the closing row is dimensioned read-only as the cut. Noggins go behind every row joint when counter-battens are on. Panels are named by row, *Panel R2-3*, and the DXF dimensions every row and lists the heights in its schedule. | `cladding_primitives.panel_rows`, `cladding_geometry._panels`, `cladding_checks.check_rules` |
 | Horizontal panel joints [ASSUMED] | Open joints at the gap. Noggins behind them only where counter-battens are on: a noggin between vertical battens sits on the drainage plane and dams it, so by default the seams are left to a proprietary horizontal profile and the checks say so. | `cladding_geometry._panels` |
 | Batten orientation | Derived, never a free choice. Horizontal planks → vertical battens. Vertical planks → horizontal battens on vertical counter-battens. Panels → vertical battens, with seam noggins only when counter-battens are on. The only override is *Counter-battens: force on/off*, and the checks flag the buildups that then fail to drain. | `cladding_constants._parse`, `cladding_preview.check_rules` |

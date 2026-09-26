@@ -317,11 +317,13 @@ function can2D() {
 }
 
 function toggle2D() {
-    if (in2D()) { exit2D(); update2DButton(); return; }
+    if (in2D()) { exit2D(); update2DButton(); renderDims2D(); return; }
     if (!can2D()) { setStatus('Pick and extract an elevation first — the 2D view looks at the active one', 'busy'); return; }
     const e = state.elevations[state.active];
     enter2D(e.result.name, e.result.frame, cladBox(e));
     update2DButton();
+    renderDims2D();
+    setStatus('2D elevation: click a dimension to type over it · E or Esc for 3D', 'ready');
 }
 
 function update2DButton() {
@@ -598,6 +600,7 @@ async function updatePreview() {
     updateDerivedStatic(params);
     if (!pyReady || !params.elevations.length) {
         renderGeometry([]); renderOutlines([], 0); renderDimensions([], {}); renderChecks([]); renderInfo([]);
+        renderDims2D();
         return;
     }
     const seq = ++_seq;
@@ -619,6 +622,7 @@ _json.dumps(_o)`);
         renderOutlines(params.elevations, params.splash);
         const act = state.elevations[state.active];
         renderDimensions(result.dimensions, byName, act && act.result ? act.result.name : null);
+        renderDims2D();
         renderChecks(result.checks);
         renderInfo(result.info);
     } catch (err) {
@@ -867,6 +871,7 @@ function initApp() {
     initWebIfc();
     initPyodide();
     initWizard();
+    initDims2D();
     renderElevationList();
     onTypeChange();
     const vp = document.getElementById('viewport');
@@ -899,7 +904,7 @@ function initApp() {
         if (state.levels) { dismissLevels(); return; }
         // Escape unwinds one thing at a time: the edit widget first, then the flat view.
         if (state.editing) { closeEditWidget(); return; }
-        if (in2D()) { exit2D(); update2DButton(); }
+        if (in2D()) { exit2D(); update2DButton(); renderDims2D(); }
     });
     document.getElementById('download-reminder').addEventListener('click', e => { if (e.target.id === 'download-reminder') e.currentTarget.classList.remove('open'); });
 }
