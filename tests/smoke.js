@@ -413,6 +413,23 @@ async function main() {
     });
     console.log('offset scope:', JSON.stringify(offsetScope));
 
+    // Clicking a member of a built chain makes its base the chain's course datum.
+    const datum = await page.evaluate(async () => {
+        const b = state.elevations.find(e => e.chain.members.length > 1);
+        const c = b.chain.members.find(m => m !== b);
+        const sent = () => [...new Set(getParams().elevations.filter(r => r.chain === b.chain.name)
+                                                             .map(r => r.course_datum_from))].join(',');
+        setActive(state.elevations.indexOf(c)); openEditWidget(c);
+        await updatePreview();
+        const afterC = sent(), note = document.getElementById('edit-datum').textContent;
+        setActive(state.elevations.indexOf(b)); closeEditWidget();
+        await updatePreview();
+        return { b: b.name, c: c.name, afterC, afterB: sent(), note };
+    });
+    console.log('course datum:', JSON.stringify(datum));
+    if (datum.afterC !== datum.c || datum.afterB !== datum.b || !datum.note.includes(datum.c))
+        throw new Error('clicking an elevation did not move the chain datum: ' + JSON.stringify(datum));
+
     // The level picker's dot: red on a surface, green when it snaps to a corner.
     await page.evaluate(() => frameElevation(state.elevations[0].result));
     await page.waitForTimeout(500);

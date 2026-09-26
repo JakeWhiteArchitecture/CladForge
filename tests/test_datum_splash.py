@@ -77,3 +77,23 @@ def test_courses_share_one_datum_round_the_chain():
     alone = generate_preview({"elevations": [dict(rb, chain=None)], "cladding_type": "panel",
                               "panel_h": 1200, "panel_gap": 10, "trim": False})
     assert not set(_panel_seams(alone, rb)[1:]) & set(za)
+
+
+def test_clicked_elevation_sets_the_chain_datum():
+    """Click an elevation and the whole chain courses from its base instead: full panels
+    start at that face's foot, and the lower face gets the cut course at its base."""
+    a = extract_elevation(payload())
+    b = extract_elevation(corner_payload())
+    common = dict(chain="Chain 1", chain_reversed=False, offset=0, course_datum_from="Elevation B")
+    ra = dict(a, chain_start=0, **common)
+    rb = dict(b, chain_start=a["width"], clip_v_lo=437.0, **common)
+    out = generate_preview({"elevations": [ra, rb], "cladding_type": "panel", "panel_h": 1200,
+                            "panel_gap": 10, "trim": False})
+    za, zb = _panel_seams(out, ra), _panel_seams(out, rb)
+    assert zb == [537.0, 1747.0, 2957.0], zb      # full courses from B's base
+    assert za == [250.0] + zb, za                  # A cut at its own base, then B's joints
+    # A name that is not in the chain falls back to the lowest start.
+    stale = [dict(r, course_datum_from="Elevation Z") for r in (ra, rb)]
+    out = generate_preview({"elevations": stale, "cladding_type": "panel", "panel_h": 1200,
+                            "panel_gap": 10, "trim": False})
+    assert _panel_seams(out, ra)[0] == 250.0 and 1460.0 in _panel_seams(out, rb)

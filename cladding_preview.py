@@ -14,13 +14,17 @@ def _build_all(p):
     live = [clip_elevation(e) for e in p["elevations"] if e.get("ok", True) and e.get("polygons")]
     p["elevations"] = live      # the outline, splash bands and trimming all follow the clip
     layout = chain_layout(live, buildup_depth(p), corner_detail(p))
-    # One course datum per chain: the lowest level any member starts cladding at.
-    datums = {}
+    # One course datum per chain: where the chosen member starts cladding (the elevation
+    # last clicked), or failing that the lowest start of any member.
+    datums, chosen = {}, {}
     for elev in live:
         if elev.get("chain"):
             lo, _hi = clip_bounds_v(elev)
             z = float(elev["frame"]["origin"][2]) + max(base_level(elev, p["splash"]), lo)
             datums[elev["chain"]] = min(z, datums.get(elev["chain"], z))
+            if elev.get("course_datum_from") == elev.get("name"):
+                chosen[elev["chain"]] = z
+    datums.update(chosen)
     for elev in live:
         if elev.get("chain") in datums:
             elev["course_datum_z"] = datums[elev["chain"]]
