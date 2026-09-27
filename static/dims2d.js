@@ -59,6 +59,7 @@ function renderDims2D() {
 // master for a lap. Clicking one offers the corner row's selector and Swap.
 function cornerBadges(e, layer) {
     const box = cladBox(e), M = frameMatrix(e.result.frame, 60);
+    // (the opening badges below use the same frame)
     chainCorners(e.chain).forEach((c, i) => {
         if (c.lo !== e && c.hi !== e) return;
         const runHi = c.lo === e;                         // the corner is at e's end of the run
@@ -68,7 +69,7 @@ function cornerBadges(e, layer) {
         const el = document.createElement('button');
         el.className = 'dim2d corner-badge';
         el.dataset.key = 'corner:' + i;
-        el.textContent = { mitre: 'M', lap: 'L', butt: 'S' }[detail] + (detail === 'lap' ? ' · ' + master : '');
+        el.textContent = CORNER_LETTER[detail] + (detail === 'lap' ? ' · ' + master : '');
         el.title = `${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner: ${CORNER_LABEL[detail]}`
             + (detail === 'lap' ? `, ${master} masters` : '');
         const item = { corner: { chain: e.chain.name, index: i }, el,
@@ -77,6 +78,22 @@ function cornerBadges(e, layer) {
         layer.appendChild(el);
         D2.items.push(item);
     });
+    // Each window and door: a badge on its left jamb (both jambs share it) and one on its head.
+    for (const o of openingsOf(e)) {
+        const [u0, u1, v0, v1] = o.rect;
+        for (const [part, u, v] of [['jamb', u0, (v0 + v1) / 2], ['head', (u0 + u1) / 2, v1]]) {
+            const el = document.createElement('button');
+            el.className = 'dim2d corner-badge opening-badge';
+            el.dataset.key = 'opening:' + o.key + ':' + part;
+            el.textContent = CORNER_LETTER[o[part]] + (o[part] === 'lap' ? (o[part + '_master'] === 'face' ? ' · face' : ' · lining') : '');
+            el.title = `${part === 'jamb' ? 'Jambs' : 'Head'}: ${CORNER_LABEL[o[part]]} — click to change`;
+            const item = { edge: { kind: part, p1: [u, v], p2: [u, v] }, el,
+                           at: new THREE.Vector3(u, v, 0).applyMatrix4(M) };
+            el.onclick = ev => { ev.stopPropagation(); openEdgeEditor(item); };
+            layer.appendChild(el);
+            D2.items.push(item);
+        }
+    }
 }
 
 // Every frame while flat: put each label where its point projects.
@@ -138,6 +155,66 @@ function edgeLines(e, layer) {
     layer.appendChild(svg);
 }
 
+// The chain corner at the end of *e* that an orange corner edge sits on.
+function cornerAt(e, u) {
+    const box = cladBox(e);
+    return chainCorners(e.chain).findIndex(c => (c.lo === e || c.hi === e)
+        && Math.abs(((c.lo === e) !== !!e.rev ? box.u1 : box.u0) - u) < 2);
+}
+
+// The window or door whose jamb or head an edge (or badge) lies on.
+function openingAt(e, part, p) {
+    return openingsOf(e).find(o => {
+        const [u0, u1, v0, v1] = o.rect;
+        return part === 'jamb' ? (Math.abs(p[0] - u0) < 2 || Math.abs(p[0] - u1) < 2) && p[1] >= v0 - 2 && p[1] <= v1 + 2
+                               : Math.abs(p[1] - v1) < 2 && p[0] >= u0 - 2 && p[0] <= u1 + 2;
+    });
+}
+
+// The detail part of the box: a chain corner's detail and master, or an opening's jambs
+// or head, whose change asks whether it goes to every window and door in the chain.
+function detailBlock(e, item, box) {
+    const kind = item.edge.kind;
+    if (kind === 'corner') {
+        const i = cornerAt(e, item.edge.p1[0]), c = chainCorners(e.chain)[i];
+        if (!c) return '';
+        selectCorner(e.chain.name, i);
+        const detail = cornerDetailInForce(c);
+        item.bind = () => {
+            document.getElementById('o2-detail').onchange = ev => { setCornerDetail(e.chain.name, i, ev.target.value); closeDimEditor(); };
+            const sw = document.getElementById('o2-swap');
+            if (sw) sw.onclick = () => { swapCorner(e.chain.name, i); closeDimEditor(); };
+        };
+        return `<div class="d2-row">Detail <select id="o2-detail">${cornerOptions(c.lo.detailHi || '', profileOffered(c.k), true)}</select>
+            ${detail === 'lap' ? '<button class="mini" id="o2-swap">Swap master</button>' : ''}</div>`;
+    }
+    if (kind !== 'jamb' && kind !== 'head') return '';
+    const o = openingAt(e, kind, item.edge.p1);
+    if (!o) return '';
+    const pending = { detail: o[kind], master: o[kind + '_master'] };
+    const ask = () => {
+        document.getElementById('o2-ask').style.display = '';
+        const arr = document.getElementById('o2-master');
+        if (arr) arr.style.display = pending.detail === 'lap' ? '' : 'none';
+    };
+    item.bind = () => {
+        document.getElementById('o2-detail').onchange = ev => { pending.detail = ev.target.value; ask(); };
+        box.querySelectorAll('[data-master]').forEach(b => b.onclick = () => {
+            pending.master = b.dataset.master;
+            box.querySelectorAll('[data-master]').forEach(x => x.classList.toggle('active', x === b));
+            ask();
+        });
+        document.getElementById('o2-yes').onclick = () => { setOpeningDetail(e, o.key, kind, pending.detail, pending.master, 'chain'); closeDimEditor(); };
+        document.getElementById('o2-no').onclick = () => { setOpeningDetail(e, o.key, kind, pending.detail, pending.master, 'one'); closeDimEditor(); };
+    };
+    return `<div class="d2-row">${kind === 'jamb' ? 'Both jambs' : 'Head'} <select id="o2-detail">${cornerOptions(o[kind], toggleValue('cladding-type') === 'panel', false)}</select></div>
+        <div class="d2-scope turn-toggle" id="o2-master" style="${o[kind] === 'lap' ? '' : 'display:none'}">
+            <button class="turn-btn ${o[kind + '_master'] === 'face' ? 'active' : ''}" data-master="face">Face board over</button>
+            <button class="turn-btn ${o[kind + '_master'] === 'reveal' ? 'active' : ''}" data-master="reveal">Lining over</button></div>
+        <div class="d2-ask" id="o2-ask" style="display:none">Apply this to every window and door in this chain?${kind === 'head' ? ' (heads only)' : ''}
+            <button class="mini" id="o2-yes">Yes</button> <button class="mini" id="o2-no">No, this one only</button></div>`;
+}
+
 function openEdgeEditor(item) {
     const e = d2Elev(view2d.name);
     if (!e) return;
@@ -147,10 +224,13 @@ function openEdgeEditor(item) {
     const vent = kind === 'head' ? `<div class="d2-scope turn-toggle" id="e2-vent">
             <button class="turn-btn ${ed.vent === 'front' ? 'active' : ''}" data-vent="front">Vent at front</button>
             <button class="turn-btn ${ed.vent === 'back' ? 'active' : ''}" data-vent="back">Vent at back</button></div>` : '';
-    box.innerHTML = `<div class="d2-title" style="color:${EDGE_COLOUR[kind]}">${title} · ${e.chain.name}</div>${vent}
+    item.bind = null;
+    const detail = detailBlock(e, item, box);
+    box.innerHTML = `<div class="d2-title" style="color:${EDGE_COLOUR[kind]}">${title} · ${e.chain.name}</div>${detail}${vent}
         <span>${what}</span> <input id="e2-input" type="number" step="1" min="0" max="100" value="${Math.round(ed[key])}"> <span class="unit">mm</span>
-        <div class="d2-hint">Applies to every elevation in ${e.chain.name} · Enter to apply · Esc to cancel</div>`;
+        <div class="d2-hint">${what} applies to every elevation in ${e.chain.name} · Enter to apply · Esc to cancel</div>`;
     box.style.display = '';
+    if (item.bind) item.bind();
     const input = document.getElementById('e2-input');
     input.disabled = kind === 'head' && ed.vent !== 'back';
     box.querySelectorAll('[data-vent]').forEach(b => b.onclick = () => {
@@ -311,8 +391,7 @@ function openCornerEditor(item) {
     const panel = toggleValue('cladding-type') === 'panel';
     const ed = document.getElementById('dim2d-editor');
     ed.innerHTML = `<div class="d2-title">${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner · ${CORNER_LABEL[detail]}</div>
-        <select id="d2-corner">${[['', 'Job default'], ['mitre', 'Mitred'], ['lap', 'Master lap'], ['butt', 'Square']]
-            .map(([v, t]) => `<option value="${v}" ${v === own ? 'selected' : ''} ${v === 'lap' && !panel ? 'disabled' : ''}>${t}</option>`).join('')}</select>
+        <select id="d2-corner">${cornerOptions(own, profileOffered(c.k), true)}</select>
         ${detail === 'lap' ? `<button class="mini" id="d2-swap">Swap master</button>` : ''}
         <button class="mini" id="d2-close">Done</button>`;
     ed.style.display = '';

@@ -27,7 +27,7 @@ function newElevation(chain) {
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
                 offset: 0,
                 cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, detailLo: null, detailHi: null,
-                clipLo: 0, clipHi: null };
+                clipLo: 0, clipHi: null, openingDetails: {} };
     e.chain.members.push(e);
     state.elevations.push(e);
     setActive(n);
@@ -204,12 +204,53 @@ function chainCorners(chain) {
 
 // Each corner can override the job's corner detail. The two faces meeting there hold the
 // same value (lo member's detailHi, hi member's detailLo), set together as the master is.
-const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master-lap, open joint', butt: 'Square' };
+const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master', profile: 'Profile', butt: 'Square' };
+const CORNER_LETTER = { mitre: 'M', lap: 'L', profile: 'P', butt: 'S' };
+
+// The corner profile is for right-angled external corners of panel cladding only.
+function profileOffered(k) { return toggleValue('cladding-type') === 'panel' && k > 0 && Math.abs(k - 1) < 0.05; }
 
 function cornerDetailInForce(c) {
     const job = toggleValue('corner-type') || 'mitre';
-    const d = c.lo.detailHi || job;
-    return (d === 'lap' && toggleValue('cladding-type') !== 'panel') ? 'mitre' : d;
+    const d = c.lo.detailHi || job, panel = toggleValue('cladding-type') === 'panel';
+    if (d === 'lap' && !panel) return 'mitre';
+    if (d === 'profile' && !profileOffered(c.k)) return 'mitre';
+    return d;
+}
+
+// The four details as <option>s, Master and Profile greyed where they do not apply.
+function cornerOptions(own, profileOk, withDefault) {
+    const panel = toggleValue('cladding-type') === 'panel';
+    return (withDefault ? [['', 'Job default']] : []).concat([['mitre', 'Mitred'], ['lap', 'Master'], ['profile', 'Profile'], ['butt', 'Square']])
+        .map(([v, t]) => {
+            const off = (v === 'lap' && !panel) || (v === 'profile' && !profileOk);
+            const why = v === 'lap' ? 'panel cladding only' : 'right-angled external corners of panel cladding only';
+            return `<option value="${v}" ${v === own ? 'selected' : ''} ${off ? 'disabled' : ''}>${t}${off ? ' (' + why + ')' : ''}</option>`;
+        }).join('');
+}
+
+// ─── WINDOW AND DOOR CORNERS ───
+// Each opening's jambs share one detail and one master arrangement (mirrored); its head
+// has its own. Choices live on the elevation by opening key (u0,v0 of the structural
+// opening), so they survive every rebuild.
+function openingsOf(m) {
+    const info = ((window._lastPreview || {}).info || []).find(i => m.result && i.elevation === m.result.name);
+    return (info && info.opening_details) || [];
+}
+
+function setOpeningDetail(e, key, part, detail, master, scope) {
+    const targets = scope === 'chain' ? e.chain.members.filter(m => m.result && m.result.ok) : [e];
+    for (const m of targets) {
+        const keys = scope === 'chain' ? openingsOf(m).map(o => o.key) : [key];
+        for (const k of keys) {
+            m.openingDetails = m.openingDetails || {};
+            const cur = m.openingDetails[k] = Object.assign({}, m.openingDetails[k]);
+            cur[part] = detail;
+            cur[part + '_master'] = master;
+        }
+    }
+    renderElevationList();
+    onNumeric();
 }
 
 function cornerRows(chain, members) {
@@ -223,10 +264,7 @@ function cornerRows(chain, members) {
         const master = c.lo.masterHi ? c.lo.name : c.hi.name;
         const own = c.lo.detailHi || '';
         const pick = `<select class="corner-detail" title="Corner detail for this corner" onclick="event.stopPropagation()"
-            onchange="setCornerDetail('${chain.name}', ${i}, this.value)">`
-            + [['', 'Job default'], ['mitre', 'Mitred'], ['lap', 'Master lap'], ['butt', 'Square']]
-                .map(([v, t]) => `<option value="${v}" ${v === own ? 'selected' : ''} ${v === 'lap' && !panel ? 'disabled' : ''}>${t}</option>`).join('')
-            + '</select>';
+            onchange="setCornerDetail('${chain.name}', ${i}, this.value)">` + cornerOptions(own, profileOffered(c.k), true) + '</select>';
         const swap = detail === 'lap'
             ? ` · <b>${master.replace('Elevation ', '')}</b> masters <button class="mini" onclick="event.stopPropagation(); swapCorner('${chain.name}', ${i})">Swap</button>`
             : '';
@@ -570,7 +608,8 @@ function elevationRecords() {
                                                    course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
                                                    edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
-                                                   head_vent: chain.edges.vent, head_air: chain.edges.air }));
+                                                   head_vent: chain.edges.vent, head_air: chain.edges.air,
+                                                   opening_details: e.openingDetails || {} }));
         }
     }
     return out;
@@ -599,11 +638,13 @@ function getParams() {
 function onTypeChange() {
     const panel = toggleValue('cladding-type') === 'panel';
     // The master-lap needs a board to run past the corner, so it is a panel detail.
-    const lap = document.querySelector('#corner-type .turn-btn[data-value="lap"]');
-    lap.disabled = !panel;
-    lap.title = panel ? '' : 'Panel cladding only';
-    lap.style.opacity = panel ? '' : '0.45';
-    if (!panel && lap.classList.contains('active')) selectToggle('corner-type', 'mitre');
+    for (const v of ['lap', 'profile']) {          // Master and Profile are panel details
+        const b = document.querySelector('#corner-type .turn-btn[data-value="' + v + '"]');
+        b.disabled = !panel;
+        b.title = panel ? '' : 'Panel cladding only';
+        b.style.opacity = panel ? '' : '0.45';
+        if (!panel && b.classList.contains('active')) selectToggle('corner-type', 'mitre');
+    }
     document.getElementById('panel-section').style.display = panel ? '' : 'none';
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
     document.getElementById('batten_centres').readOnly = panel;
@@ -892,7 +933,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_geometry', 'cladding_booleans',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_geometry', 'cladding_booleans',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

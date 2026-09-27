@@ -25,6 +25,7 @@ LAYERS = {
     "BATTEN":         {"color": 4, "linetype": "CONTINUOUS"},
     "CLADDING":       {"color": 5, "linetype": "CONTINUOUS"},
     "CLOSER":         {"color": 1, "linetype": "CONTINUOUS"},
+    "CORNER_PROFILE": {"color": 9, "linetype": "CONTINUOUS"},
     "DIMS":           {"color": 7, "linetype": "CONTINUOUS"},
     "NOTES":          {"color": 7, "linetype": "CONTINUOUS"},
 }
@@ -180,7 +181,7 @@ def _schedule(p, info, meshes):
     corner = info.get("corner") or {}
     ends = [(side, corner.get(side) or (0.0, 0.0)) for side in ("left", "right")]
     if any(any(v) for _s, v in ends):
-        names = {"mitre": "mitred", "lap": "master-lap, open joint", "butt": "square"}
+        names = {"mitre": "mitred", "lap": "master, open joint", "profile": "corner profile", "butt": "square"}
         details = dict(zip(("left", "right"), corner.get("details") or (corner.get("detail"),) * 2))
         lines.append("Corners: %s. Boards are drawn to their outer face, which is the cut length." % (
             ", ".join("%s end %s, %s %.0fmm at the cladding face" % (
@@ -222,9 +223,13 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for m in by_elev.get(name, []):
             if m["ifc_type"] == "reveal":
                 continue        # a reveal lining is perpendicular to this view
+            if m["ifc_type"] == "corner_profile":
+                continue        # its profile is a plan section; the elevation shows its strip
             layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
             for k in range(1 + len(m.get("holes") or [])):
                 dxf.add_ring(_corner_ring(m, k), layer, ox, 0.0)
+        for ring in info.get("profile_strips") or []:      # the nose of each corner profile, D wide
+            dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         for d in [d for d in dims if d["elevation"] == name]:
             _draw_dim_line(dxf, (d["p1"][0] + ox, d["p1"][1]), (d["p2"][0] + ox, d["p2"][1]),
                            d["offset"], d["label"], tuple(d["norm"]))
@@ -244,7 +249,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
 
     notes = ["%s  -  %s companion export  -  units mm" % (TOOL_NAME, IFC_SCHEMA_LABEL), DISCLAIMER]
     notes += _wrap(SCOPE_NOTE) + _wrap(QUANTITY_NOTE)
-    notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING CLOSER DIMS NOTES")
+    notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING CLOSER CORNER_PROFILE DIMS NOTES")
     _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), sheet_min_y - 600.0, 60.0)
     return dxf.to_string()
 

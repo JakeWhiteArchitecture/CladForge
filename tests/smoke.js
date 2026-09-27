@@ -432,6 +432,52 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (zFront === null || zFront - zBack !== 10) throw new Error('head ventilation did not lower the lining: ' + zFront + ' → ' + zBack);
     await page.keyboard.press('Escape');
     await page.evaluate(async () => { Object.assign(state.elevations[0].chain.edges, EDGE_DEFAULTS); syncEdgeFields(); await updatePreview(); });
+
+    // Window and door corners. Changing a jamb asks whether it goes to every window and door
+    // in the chain: Yes sets both of A's openings; No sets just the one clicked.
+    await page.waitForTimeout(600);
+    const jambBadges = () => page.$$('.opening-badge[data-key$=":jamb"]');
+    await (await jambBadges())[0].click();
+    await page.selectOption('#o2-detail', 'lap');
+    const asked = await page.isVisible('#o2-ask');
+    await page.click('#o2-yes');
+    await page.waitForTimeout(1800);
+    const toAll = await page.evaluate(() => Object.values(state.elevations[0].openingDetails).map(d => d.jamb).join(','));
+    await (await jambBadges())[1].click();
+    await page.selectOption('#o2-detail', 'profile');
+    await page.click('#o2-no');
+    await page.waitForTimeout(1800);
+    const openingsNow = await page.evaluate(() => ({
+        jambs: openingsOf(state.elevations[0]).map(o => o.jamb).join(','),
+        profiles: window._lastPreview.geometry.filter(m => m.ifc_type === 'corner_profile').map(m => m.name.replace('Elevation ', '')).join(','),
+        badges: Array.from(document.querySelectorAll('.opening-badge')).map(b => b.textContent).join(','),
+        others: state.elevations.slice(1).map(e => Object.keys(e.openingDetails || {}).length).join(',') }));
+    console.log('2D openings:', JSON.stringify({ asked, toAll, ...openingsNow }));
+    if (!asked || toAll !== 'lap,lap' || openingsNow.jambs.split(',').sort().join() !== 'lap,profile'
+        || openingsNow.profiles.split(',').length !== 2 || /[1-9]/.test(openingsNow.others))
+        throw new Error('opening corner details did not apply as asked: ' + JSON.stringify({ asked, toAll, openingsNow }));
+    // "Every window and door in this chain" reaches every member of the chain and no other chain.
+    const scopeOnly = await page.evaluate(() => {
+        const saved = window._lastPreview;
+        window._lastPreview = { info: [{ elevation: 'X1', opening_details: [{ key: 'a' }, { key: 'b' }] },
+                                       { elevation: 'X2', opening_details: [{ key: 'c' }] },
+                                       { elevation: 'Y1', opening_details: [{ key: 'd' }] }] };
+        const cx = { members: [] }, cy = { members: [] };
+        const mk = (name, chain) => { const m = { result: { ok: true, name }, chain, openingDetails: {} }; chain.members.push(m); return m; };
+        const x1 = mk('X1', cx), x2 = mk('X2', cx), y1 = mk('Y1', cy);
+        const realNumeric = onNumeric, realList = renderElevationList;
+        onNumeric = () => {}; renderElevationList = () => {};
+        setOpeningDetail(x1, 'a', 'jamb', 'lap', 'reveal', 'chain');
+        setOpeningDetail(x2, 'c', 'head', 'profile', 'face', 'one');
+        onNumeric = realNumeric; renderElevationList = realList;
+        window._lastPreview = saved;
+        return JSON.stringify([x1.openingDetails, x2.openingDetails, y1.openingDetails]);
+    });
+    console.log('opening scope:', scopeOnly);
+    if (scopeOnly !== JSON.stringify([{ a: { jamb: 'lap', jamb_master: 'reveal' }, b: { jamb: 'lap', jamb_master: 'reveal' } },
+                                      { c: { jamb: 'lap', jamb_master: 'reveal', head: 'profile', head_master: 'face' } }, {}]))
+        throw new Error('apply-to-all reached the wrong openings: ' + scopeOnly);
+    await page.evaluate(async () => { state.elevations[0].openingDetails = {}; await updatePreview(); });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(1200);
     const back = await page.evaluate(() => ({ ortho: !!activeCamera().isOrthographicCamera, rotate: controls.enableRotate,
@@ -544,6 +590,29 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (badges.join() !== 'M,M' || viaBadge.rows.filter(d => d === 'lap').length !== 1 || viaBadge.rows.filter(d => d === 'mitre').length !== 1)
         throw new Error('corner badge did not set one corner: ' + JSON.stringify(viaBadge));
     await page.evaluate(async () => { const ch = state.elevations[4].chain; setCornerDetail(ch.name, 0, ''); setCornerDetail(ch.name, 1, ''); toggle2D(); await updatePreview(); });
+    await page.waitForTimeout(1200);
+    // Profile at the B–C chain corner (external, right-angled): a profile element and a P
+    // badge. Never offered at a re-entrant corner.
+    const profiled = await page.evaluate(async () => {
+        const ch = state.elevations[4].chain, c = chainCorners(ch)[0];
+        setCornerDetail(ch.name, 0, 'profile');
+        await updatePreview();
+        setActive(state.elevations.findIndex(e => e.name === 'Elevation C')); toggle2D();
+        await new Promise(r => setTimeout(r, 1500));
+        const out = { detail: cornerDetailInForce(c),
+                      meshes: window._lastPreview.geometry.filter(m => m.ifc_type === 'corner_profile').map(m => m.name),
+                      badges: Array.from(document.querySelectorAll('.corner-badge:not(.opening-badge)')).map(b => b.textContent),
+                      reentrantOffered: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(-1), true)),
+                      externalOffered: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true)) };
+        toggle2D();
+        setCornerDetail(ch.name, 0, '');
+        await updatePreview();
+        return out;
+    });
+    console.log('corner profile:', JSON.stringify(profiled));
+    if (profiled.detail !== 'profile' || profiled.meshes.length !== 1 || !profiled.badges.includes('P')
+        || profiled.reentrantOffered || !profiled.externalOffered)
+        throw new Error('corner profile not placed or offered wrongly: ' + JSON.stringify(profiled));
     await page.waitForTimeout(1200);
     await page.evaluate(async () => { setActive(4); deleteElevation(); await new Promise(r => setTimeout(r, 1500)); });
     await page.click('#corner-type .turn-btn[data-value="lap"]');
@@ -722,9 +791,15 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     // Planks cannot lap, so the option disables itself and falls back to a mitre.
     await page.click('#cladding-type .turn-btn[data-value="plank"]');
     await page.waitForTimeout(1200);
-    console.log('lap disabled for planks:', await page.evaluate(() =>
-        document.querySelector('#corner-type .turn-btn[data-value="lap"]').disabled
-        + ' active=' + document.querySelector('#corner-type .turn-btn.active').dataset.value));
+    const plankCorners = await page.evaluate(() => ({
+        lap: document.querySelector('#corner-type .turn-btn[data-value="lap"]').disabled,
+        profile: document.querySelector('#corner-type .turn-btn[data-value="profile"]').disabled,
+        active: document.querySelector('#corner-type .turn-btn.active').dataset.value,
+        options: /value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true))
+                 && /value="lap"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true)) }));
+    console.log('Master and Profile disabled for planks:', JSON.stringify(plankCorners));
+    if (!plankCorners.lap || !plankCorners.profile || !plankCorners.options || plankCorners.active !== 'mitre')
+        throw new Error('Master or Profile offered for planks: ' + JSON.stringify(plankCorners));
 
     // The server importer, the fallback for models web-ifc cannot build.
     await page.evaluate(() => loadModel(state.file, 'server'));

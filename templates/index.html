@@ -83,10 +83,11 @@
                 <div class="field"><label>Corners <span class="unit">where a chain turns</span></label>
                     <div id="corner-type" class="turn-toggle">
                         <button class="turn-btn active" data-value="mitre" onclick="selectToggle('corner-type','mitre'); renderElevationList(); updatePreview()">Mitred</button>
-                        <button class="turn-btn" data-value="lap" onclick="selectToggle('corner-type','lap'); renderElevationList(); updatePreview()">Master lap</button>
+                        <button class="turn-btn" data-value="lap" onclick="selectToggle('corner-type','lap'); renderElevationList(); updatePreview()">Master</button>
+                        <button class="turn-btn" data-value="profile" onclick="selectToggle('corner-type','profile'); renderElevationList(); updatePreview()">Profile</button>
                         <button class="turn-btn" data-value="butt" onclick="selectToggle('corner-type','butt'); renderElevationList(); updatePreview()">Square</button>
                     </div>
-                    <p class="hint" style="margin:4px 0 0">Mitred cuts the whole buildup on the corner's bisector. Master lap is a panel detail: one board runs past and the other butts behind it, leaving the joint gap exposed. Pick which board masters on the corner row above.</p>
+                    <p class="hint" style="margin:4px 0 0">The default for chain corners; each corner, jamb and head can be set on its own (the corner rows above, or click its edge in 2D). Mitred cuts the whole buildup on the corner's bisector. Master is a panel detail: one board runs out flush to the other's face and the other stops a joint gap clear of it. Profile is an aluminium outer corner profile, for right-angled external corners of panels. Square is a placeholder.</p>
                 </div>
                 <div class="derived">Battens: <span id="d-battens">Vertical</span><br>Cover / bay: <span id="d-cover">158 mm</span></div>
             </div>

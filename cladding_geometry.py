@@ -11,7 +11,9 @@ import math
 from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN
 from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
-from cladding_edges import classify_edges, mitre_pullback, offset_region, settings as edge_settings
+from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
+                            opening_key, settings as edge_settings)
+import cladding_corners as profiles
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
                                  base_level, corner_ends, openings, buildup_depth, clip_bounds,
@@ -79,8 +81,11 @@ def build_elevation(p, elev, layout=None):
     # timber filling the cavity, so it does not depend on the board above it.
     board = p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"]
     holes = openings(elev)
-    _openings_extras(p, elev, meshes, holes, layers, depth - board - layers, depth, board)
+    prof = {"strips": [], "warnings": [], "count": 0}     # corner profiles, for the DXF and checks
+    edges = classify_edges(elev, outline)
+    _openings_extras(p, elev, meshes, holes, layers, depth - board - layers, depth, board, prof, v0)
     info["openings"] = len(holes)
+    info["opening_details"] = [dict(d, key=opening_key(r), rect=list(r)) for r, d in opening_details(elev, p)]
 
     # Each end takes its own corner's detail: a lap at one end and a mitre at the other
     # treat the layers behind the boards differently, so the ends are applied apart.
@@ -97,6 +102,8 @@ def build_elevation(p, elev, layout=None):
             c = m.get("corner") or {}
             if m["ifc_type"] in ("panel", "plank") and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
                 m["corner"] = dict(c, **{"ext_" + side: c.get("ext_" + side, 0.0) - mitre_pullback(gap, k)})
+    _profiled_corners(p, elev, meshes, prof, edges, depth, ((lo, left, d_left, "l"), (hi, right, d_right, "r")))
+    info["profile_strips"], info["profile_warnings"], info["profiles"] = prof["strips"], prof["warnings"], prof["count"]
     k_run = (elev.get("corner_lo"), elev.get("corner_hi"))          # run order, like the details
     k_left, k_right = k_run[::-1] if elev.get("chain_reversed") else k_run
     used = {d for d, k in ((d_left, k_left), (d_right, k_right)) if k}
@@ -111,9 +118,45 @@ def build_elevation(p, elev, layout=None):
                          "splash" if splash else "level_base", p["splash"] if splash else v0))
     dims.append(_dim(name, [0, 0], [0, H], "Top %.0f" % H, 900, [-1, 0], "level_top", H))
     info["total_depth"] = depth
-    info["edges"] = classify_edges(elev, outline)     # coloured in the 2D view
+    info["edges"] = edges                             # coloured in the 2D view
     info["n_boards"] = sum(1 for m in meshes if m["ifc_type"] in ("plank", "panel"))
     return meshes, dims, info
+
+
+def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
+    """At a chain corner set to Profile the panels stop the nose (D, the panel thickness)
+    short of the outer corner line, square; the layers behind are already mitred, so the
+    battens run on under the flanges. The face before the corner in the run carries the
+    profile itself, over the clad height of the corner less the top and bottom offsets;
+    both faces show its strip and check their flange lies over a batten."""
+    name, frame, D = elev["name"], elev["frame"], p["panel_t"]
+    s = edge_settings(elev)
+    for u_end, (k, _ext), detail, side in ends:
+        if detail != "profile":
+            continue
+        for m in meshes:
+            c = m.get("corner") or {}
+            if m["ifc_type"] == "panel" and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
+                m["corner"] = dict(c, **{"k_" + side: 0.0, "ext_" + side: k * face - D})
+        at = [q[1] for e in edges if e["kind"] == "corner" and abs(e["p1"][0] - u_end) < 1.0 for q in (e["p1"], e["p2"])]
+        if not at:
+            continue
+        v_from, v_to = min(at) + s["bottom"], max(at) - s["top"]
+        toward = 1.0 if side == "r" else -1.0
+        u_c = u_end + toward * k * face                          # the outer corner line
+        before = (side == "r") != bool(elev.get("chain_reversed"))
+        if before:
+            m = profiles.vertical_profile(frame, u_c, toward, v_from, v_to, face, D,
+                                          "%s Corner Profile" % name, name)
+            if m:
+                meshes.append(m)
+                prof["count"] += 1
+        prof["strips"].append(profiles.strip(*sorted((u_c, u_c - toward * D)), v_from, v_to))
+        fl = profiles.FLANGE_A if before else profiles.FLANGE_B
+        span = sorted((u_c - toward * D, u_c - toward * (D + fl)))
+        if not profiles.flange_supported(meshes, name, span, (v_from, v_to), face - D):
+            prof["warnings"].append("%s: the corner profile's %.0f mm flange at the %s end is not over a batten"
+                                    % (name, fl, "right" if side == "r" else "left"))
 
 
 def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
@@ -402,11 +445,13 @@ def _row_list(elev, p, rows):
     return out
 
 
-def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board):
+def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board, prof, base):
     """Solid timber cavity closers at both vertical sides of every opening, and the
-    reveal linings: one up each jamb and one under the head. The face boards are mitred
-    to them whatever the corner detail is (cladding_edges.mitre_to_linings, after
-    trimming), with the chain's mitre gap in each joint. Sills are not lined."""
+    reveal linings: one up each jamb and one under the head. The face boards meet them
+    with the opening's corner detail — mitred by default, across the chain's mitre gap;
+    Master, Profile or Square as chosen (cladding_edges.reveal_treatment). Both jambs
+    share one detail, mirrored; the head has its own. The boards' side is applied after
+    trimming (cladding_edges.mitre_to_linings). Sills are not lined."""
     name, frame = elev["name"], elev["frame"]
     cw = p["closer_w"]
     s = edge_settings(elev)
@@ -414,9 +459,13 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
     # Vented at the back, the head lining drops by the air space and stops the same
     # distance short of the window frame (taken as the wall face), so air runs over it
     # and out at the frame. Vented at the front it is tight to the head and the open
-    # mitre joint at the front edge is the vent.
+    # joint at the front edge is the vent.
     air = s["air"] if s["vent"] == "back" else 0.0
+    details = dict((tuple(r), d) for r, d in opening_details(elev, p))
     for i, (u0, u1, v0, v1) in enumerate(holes):
+        d = details.get((u0, u1, v0, v1), {})
+        jamb = reveal_treatment(d.get("jamb", "mitre"), d.get("jamb_master", "face"), face, pull, board, p["panel_gap"])[1]
+        head_t = reveal_treatment(d.get("head", "mitre"), d.get("head_master", "face"), face, pull, board, p["panel_gap"])[1]
         for side, u in ((-1.0, u0), (1.0, u1)):
             # The closer sits in the wall side of the jamb and fills the cavity.
             a, b = (u - cw, u) if side < 0 else (u, u + cw)
@@ -427,14 +476,44 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
             lining = _prism(_rect(0.0, v0, face, v1), 0.0, board,
                             _reveal_frame(frame, u, face, -side), "reveal",
                             "%s Reveal %d%s" % (name, i + 1, "L" if side < 0 else "R"), name)
-            lining["corner"] = {"k_l": -1.0, "ext_l": -pull, "u_l": 0.0}
+            if jamb:
+                lining["corner"] = {"k_l": jamb[0], "ext_l": jamb[1], "u_l": 0.0}
             meshes.append(lining)
         ua, ub = u0 + board, u1 - board                      # between the jamb linings
-        if p["reveals"] and ub - ua > 1.0:
+        if not p["reveals"]:
+            continue
+        if ub - ua > 1.0:
             head = _prism(_rect(0.0, 0.0, face - air, ub - ua), 0.0, board,
                           _head_frame(frame, ua, v1 - air, face), "reveal", "%s Reveal %dH" % (name, i + 1), name)
-            head["corner"] = {"k_l": -1.0, "ext_l": -pull, "u_l": 0.0}
+            if head_t:
+                head["corner"] = {"k_l": head_t[0], "ext_l": head_t[1], "u_l": 0.0}
             meshes.append(head)
+        # Corner profiles at the arris, flange A on the elevation face. A jamb's runs up
+        # to the underside of the head lining; the head's runs between the jamb linings.
+        z_c = v1 - air - board                                # the head's arris
+        if d.get("jamb") == "profile":
+            for side, u_c in ((1.0, u0 + board), (-1.0, u1 - board)):
+                lo_v = max(v0, base + s["bottom"]) if v0 <= base else v0
+                m = profiles.vertical_profile(frame, u_c, side, lo_v, z_c, face, board,
+                                              "%s Jamb Profile %d%s" % (name, i + 1, "L" if side > 0 else "R"), name)
+                if m:
+                    meshes.append(m)
+                    prof["count"] += 1
+                    prof["strips"].append(profiles.strip(*sorted((u_c, u_c - side * board)), lo_v, z_c))
+                    span = sorted((u_c - side * board, u_c - side * (board + profiles.FLANGE_A)))
+                    if not profiles.flange_supported(meshes, name, span, (lo_v, z_c), face - board):
+                        prof["warnings"].append("%s: a jamb profile's flange at opening %d is not over a batten or closer"
+                                                % (name, i + 1))
+        if d.get("head") == "profile":
+            m = profiles.head_profile(frame, ua, ub, z_c, face, board, "%s Head Profile %d" % (name, i + 1), name)
+            if m:
+                meshes.append(m)
+                prof["count"] += 1
+                prof["strips"].append(profiles.strip(ua, ub, z_c, z_c + board))
+                if not profiles.flange_supported(meshes, name, (ua, ub), (z_c + board, z_c + board + profiles.FLANGE_A),
+                                                 face - board):
+                    prof["warnings"].append("%s: the head profile's flange at opening %d is not over a batten"
+                                            % (name, i + 1))
 
 
 def _head_frame(frame, u_start, v_head, face_depth):

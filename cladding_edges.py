@@ -136,28 +136,80 @@ def offset_region(elev, region, edges=None):
         return region
 
 
-# ── boards mitred to the linings ─────────────────────────────────────────
+# ── the corner detail at each opening ────────────────────────────────────
 
-def _opening_shift(a, b, holes, face, pull, air):
+DETAILS = ("mitre", "lap", "profile", "butt")      # Mitred, Master, Profile, Square
+OPENING_DEFAULT = {"jamb": "mitre", "jamb_master": "face", "head": "mitre", "head_master": "face"}
+
+
+def opening_key(rect):
+    """How a window or door is known between rebuilds: its structural corner."""
+    return "%.0f,%.0f" % (rect[0], rect[2])
+
+
+def opening_details(elev, p):
+    """[(rect, detail)] for every window and door, detail {"jamb", "jamb_master", "head",
+    "head_master"} as chosen on the elevation (elev["opening_details"], by opening_key)
+    or mitred by default. Both jambs of an opening share one detail and one arrangement,
+    mirrored; the head has its own. Master and Profile are panel details: with planks
+    the corner stays mitred."""
+    chosen = elev.get("opening_details") or {}
+    panel = p.get("cladding_type") == "panel"
+    out = []
+    for rect in openings(elev):
+        d = dict(OPENING_DEFAULT, **(chosen.get(opening_key(rect)) or {}))
+        for part in ("jamb", "head"):
+            if d[part] not in DETAILS or (d[part] in ("lap", "profile") and not panel):
+                d[part] = "mitre"
+            if d[part + "_master"] not in ("face", "reveal"):
+                d[part + "_master"] = "face"
+        out.append((rect, d))
+    return out
+
+
+def reveal_treatment(detail, master, face, pull, board, gap):
+    """How the face board and the lining meet at a jamb or head: (w, lining).
+
+    *w* = (e, k) is how far the face board's edge moves into the opening at depth s,
+    e + k·s. *lining* = (k, ext) is the lining's front end treatment (its u runs inward
+    from the cladding face, so its end sits at ext·-1 - k·s), or None where it runs
+    flush to the cladding face.
+      mitre    both cut on the bisector, the mitre gap straight across the joint
+      Master   "face": the face board runs past and covers the lining's edge, and the
+               lining stops a panel joint gap short of the board's back;
+               "reveal": the lining runs out flush to the face board's outside face,
+               and the face board stops a panel joint gap short of the lining
+      profile  both stop the profile's nose (D = board thickness) short of the arris
+      square   both stop square at the opening line (a placeholder)"""
+    if detail == "mitre":
+        return (face - pull, -1.0), (-1.0, -pull)
+    if detail == "lap":
+        return ((board, 0.0), (0.0, -(board + gap))) if master == "face" else ((-gap, 0.0), None)
+    if detail == "profile":
+        return (0.0, 0.0), (0.0, -board)
+    return (0.0, 0.0), None
+
+
+def _opening_shift(a, b, treatments, air):
     """The shift, as (du_e, du_k, dv_e, dv_k) at depth s: u += du_e + du_k·s, v += dv_e +
-    dv_k·s, for a board edge a→b lying along an opening's jamb or head, or None. The
-    board's outer face (s = face) stops *pull* short of the opening edge, and its back
-    runs on into the reveal by the board thickness: the bisector of the arris. Over a
-    head vented at the back the lining is *air* lower, and the board comes down to it."""
+    dv_k·s, for a board edge a→b lying along an opening's jamb or head, or None.
+    *treatments* is [(rect, w_jamb, w_head)] with w = (e, k) as from reveal_treatment.
+    Over a head vented at the back the lining is *air* lower, and the board comes down
+    to it whatever the detail."""
     dx, dy = b[0] - a[0], b[1] - a[1]
     length = math.hypot(dx, dy)
     if length < 1e-6:
         return None
     nx, ny = dy / length, -dx / length
-    for u0, u1, v0, v1 in holes:
+    for (u0, u1, v0, v1), wj, wh in treatments:
         inside_v = min(a[1], b[1]) >= v0 - TOL and max(a[1], b[1]) <= v1 + TOL
         if nx > 0.9 and abs(a[0] - u0) < TOL and abs(b[0] - u0) < TOL and inside_v:
-            return (face - pull, -1.0, 0.0, 0.0)             # board left of the opening
+            return (wj[0], wj[1], 0.0, 0.0)                  # board left of the opening
         if nx < -0.9 and abs(a[0] - u1) < TOL and abs(b[0] - u1) < TOL and inside_v:
-            return (-(face - pull), 1.0, 0.0, 0.0)           # board right of it
+            return (-wj[0], -wj[1], 0.0, 0.0)                # board right of it: mirrored
         if ny < -0.9 and abs(a[1] - v1) < TOL and abs(b[1] - v1) < TOL and \
                 min(a[0], b[0]) >= u0 - TOL and max(a[0], b[0]) <= u1 + TOL:
-            return (0.0, 0.0, -(face - pull) - air, 1.0)     # board over the head
+            return (0.0, 0.0, -(wh[0] + air), -wh[1])        # board over the head
     return None
 
 
@@ -185,13 +237,14 @@ def _split(ring, holes):
     return out
 
 
-def _ring_shifts(ring, holes, face, pull, air):
+def _ring_shifts(ring, holes, treatments, air):
     """(ring, shifts) with a shift per vertex. A vertex between two mitred edges takes
     both (the corner of an opening); one between a mitred edge and a plain one is
     doubled, one copy for each edge, so the end steps rather than slopes."""
     ring = _split([list(p) for p in ring], holes)
     n = len(ring)
-    edge = [_opening_shift(ring[i], ring[(i + 1) % n], holes, face, pull, air) for i in range(n)]
+    edge = [_opening_shift(ring[i], ring[(i + 1) % n], treatments, air) for i in range(n)]
+    edge = [e if e and any(e) else None for e in edge]      # a square end is no shift at all
     pts, shifts = [], []
     for i in range(n):
         before, after = edge[i - 1], edge[i]
@@ -209,25 +262,30 @@ def _ring_shifts(ring, holes, face, pull, air):
 
 
 def mitre_to_linings(meshes, p, infos):
-    """Mitre every board edge that runs along a window or door jamb or head, holes left
-    by trimming included, to the reveal linings. Runs on the finished boards, after
-    trimming, and records the result as a shift per ring vertex ("vshift")."""
+    """Meet every board edge that runs along a window or door jamb or head, holes left
+    by trimming included, to the reveal linings with that opening's corner detail
+    (mitred by default). Runs on the finished boards, after trimming, and records the
+    result as a shift per ring vertex ("vshift")."""
     if not p.get("reveals", True):
         return meshes
     face_by = {i["elevation"]: i.get("total_depth", 0.0) for i in infos}
+    board = p["panel_t"] if p.get("cladding_type") == "panel" else p["plank_t"]
     per = {}
     for elev in p.get("elevations", []):
-        holes = openings(elev)
-        if holes:
+        details = opening_details(elev, p)
+        if details:
             s = settings(elev)
-            per[elev.get("name", "")] = (holes, face_by.get(elev.get("name", ""), 0.0),
-                                        mitre_pullback(s["gap"], 1.0), s["air"] if s["vent"] == "back" else 0.0)
+            face, pull = face_by.get(elev.get("name", ""), 0.0), mitre_pullback(s["gap"], 1.0)
+            treat = [(rect, reveal_treatment(d["jamb"], d["jamb_master"], face, pull, board, p["panel_gap"])[0],
+                      reveal_treatment(d["head"], d["head_master"], face, pull, board, p["panel_gap"])[0])
+                     for rect, d in details]
+            per[elev.get("name", "")] = ([r for r, _d in details], treat, s["air"] if s["vent"] == "back" else 0.0)
     for m in meshes:
         if m.get("ifc_type") not in ("panel", "plank") or m.get("elevation") not in per:
             continue
-        holes, face, pull, air = per[m["elevation"]]
+        holes, treat, air = per[m["elevation"]]
         rings = [m["profile"]] + list(m.get("holes") or [])
-        done = [_ring_shifts(r, holes, face, pull, air) for r in rings]
+        done = [_ring_shifts(r, holes, treat, air) for r in rings]
         if not any(any(sh) for _p, shifts in done for sh in shifts):
             continue
         m["profile"] = [[round(u, 3), round(v, 3)] for u, v in done[0][0]]
