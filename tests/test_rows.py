@@ -83,7 +83,7 @@ def test_noggins_at_every_row_joint_with_counter_battens(elevation):
 
 
 def test_rows_are_clamped_and_flagged(elevation):
-    assert panel_rows([100, 5000], 1200, 0, 0, 10000)[0][:2] == [(0.0, 150.0), (150.0, 3000.0)]
+    assert [r[:2] for r in panel_rows([100, 5000], 1200, 0, 0, 10000)[0][:2]] == [(0.0, 150.0), (150.0, 3000.0)]
     out, params = _build(elevation, [100])
     assert _rows_drawn(out)[0] == (150.0, 150.0)
     checks = [c for c in check_rules(params, out["info"]) if c["name"] == "Panel rows"]
@@ -117,3 +117,22 @@ def test_dxf_dimensions_every_row(elevation):
     for label in ("R1 600", "R2 1200", "R3 300", "Cut 720"):
         assert label in dxf, label
     assert "Rows bottom up: 600, 1200, 300, 720" in dxf
+
+
+def test_rows_start_from_the_chain_datum():
+    """Rows set for a chain line up round its corners: the list starts at the chain's
+    datum, and a face that starts higher cuts the row at its base, read-only there."""
+    a, b = extract_elevation(payload()), extract_elevation(corner_payload())
+    common = dict(chain="Chain 1", chain_reversed=False, offset=0, panel_rows=[600, 900])
+    ra = dict(a, chain_start=0, **common)
+    rb = dict(b, chain_start=a["width"], clip_v_lo=437.0, **common)       # its base is higher
+    out = generate_preview({"elevations": [ra, rb], "cladding_type": "panel", "panel_h": 1200,
+                            "panel_gap": GAP, "trim": False})
+    rows = {n: _rows_drawn(out, n) for n in ("Elevation A", "Elevation B")}
+    assert rows["Elevation A"][:2] == [(150.0, 600.0), (760.0, 900.0)]
+    assert rows["Elevation B"][:2] == [(437.0, 313.0), (760.0, 900.0)]      # row 1 cut at B's base
+    assert [v for v, _h in rows["Elevation B"][1:]] == [v for v, _h in rows["Elevation A"][1:]]
+    dims_b = [d for d in out["dimensions"] if d["elevation"] == "Elevation B" and d["p1"][0] > 3000]
+    assert [(d.get("kind"), d.get("row"), d["label"]) for d in dims_b][:2] == [(None, None, "Cut 313"), ("row", 1, "R2 900")]
+    info_b = next(i for i in out["info"] if i["elevation"] == "Elevation B")
+    assert info_b["rows"][:2] == [600.0, 900.0]          # by list index, what an edit pads with

@@ -42,14 +42,23 @@ def stacked_positions(start, end, pitch):
 ROW_MIN, ROW_MAX = 150.0, 3000.0     # mm – a listed panel row; short rows are deliberate tiers
 
 
-def panel_rows(heights, default_h, gap, start, end):
-    """Panel rows up a face as [(v, h)], bottom first, and the indices of rows asked
-    for below ROW_MIN. *heights* lists the rows in order; once it runs out the rows
-    carry on at *default_h*. Rows stack from *start* with *gap* between them, and the
-    top row is the closing cut, taking whatever height is left below *end*: a listed
-    row that does not fit is cut, and rows listed above the top are dropped."""
-    out, short = [], []
+def panel_rows(heights, default_h, gap, start, end, base=None):
+    """Panel rows up a face as [(v, h, index, full h)], bottom first, and the indices of
+    rows asked for below ROW_MIN.
+
+    *heights* lists the rows in order from *start*; once it runs out the rows carry on
+    at *default_h*. Rows stack with *gap* between them, and the top row is the closing
+    cut, taking whatever height is left below *end*: a listed row that does not fit is
+    cut, and rows listed above the top are dropped.
+
+    *start* is where the list begins — the chain's course datum, so rows line up round
+    its corners — and *base* is where this face starts cladding (*start* when omitted).
+    Below the datum the rows carry on down at *default_h* with no index; the row that
+    crosses the base is cut there, and one wholly below it is dropped. Each row is
+    returned as drawn, with its list index (None below the datum) and its full height."""
+    base = start if base is None else base
     heights = [float(h) for h in (heights or []) if h]
+    seq, short = [], []
     v, i = float(start), 0
     while v < end - 1e-6:
         if i < len(heights):
@@ -58,11 +67,17 @@ def panel_rows(heights, default_h, gap, start, end):
             h = min(ROW_MAX, max(ROW_MIN, heights[i]))
         else:
             h = default_h
-        if v + h + gap >= end - 1e-6:          # nothing starts above this one
-            out.append((v, min(h, end - v)))
-            break
-        out.append((v, h))
+        seq.append((v, h, i))
         v, i = v + h + gap, i + 1
+    v = float(start)
+    while v - gap > base + 1e-6:              # under the datum, on a face that starts lower
+        v -= default_h + gap
+        seq.insert(0, (v, default_h, None))
+    out = []
+    for v, h, idx in seq:
+        lo, hi = max(v, base), min(v + h, end)
+        if hi - lo >= 1.0:
+            out.append((lo, hi - lo, idx, h))
     return out, short
 
 

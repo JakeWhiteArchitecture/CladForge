@@ -141,6 +141,24 @@ def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None, **extra):
     return d
 
 
+def _datum(elev):
+    """The chain's course datum in this elevation's v, or None outside a chain."""
+    datum = elev.get("course_datum_z")
+    return None if datum is None else float(datum) - float(elev["frame"]["origin"][2])
+
+
+def _courses(elev, v0, H, pitch):
+    """Course starts up the face. Within a chain every face is set out from one level —
+    the lowest clad start in the chain — so horizontal joints line up round the corners
+    even where the faces' bottoms differ, as on a dormer sitting on a sloping roof. The
+    first course may start below this face's own base and is cut there."""
+    local = _datum(elev)
+    if local is None:
+        return stacked_positions(v0, H, pitch)
+    start = local + math.floor((v0 - local) / pitch + 1e-9) * pitch
+    return stacked_positions(start, H, pitch)
+
+
 LOCK_CENTRES = "The panel bay sets the batten centres: change the panel width"
 LOCK_OPENING = "The structural opening sets this width"
 LOCK_BAYS = "Set out from the structural openings: the bays follow the jambs"
@@ -195,25 +213,29 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
-    courses = stacked_positions(v0, H, cover)
+    courses = _courses(elev, v0, H, cover)
     for j, v in enumerate(courses):
         # Set each course out along the part of the face it actually crosses, so a run
         # broken by a gable or an opening gets no seam it does not need.
-        runs = strip_intervals(region, v, v + face) if region is not None else [(0.0, W)]
+        lo = max(v, v0)          # a course set out from the chain datum is cut at the base
+        if v + face - lo < 1.0:
+            continue
+        runs = strip_intervals(region, lo, v + face) if region is not None else [(0.0, W)]
         piece = 0
         for a, b in runs:
             segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap)
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1
-                meshes.append(_prism(_rect(s, v, e, v + face), depth, p["plank_t"], frame, "plank",
+                meshes.append(_prism(_rect(s, lo, e, v + face), depth, p["plank_t"], frame, "plank",
                                      "%s Plank C%d-%d" % (name, j + 1, piece), name))
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
     dims += _batten_dims(name, battens, p["batten_centres"], True, W)
-    if courses:
-        dims.append(_dim(name, [W, courses[0]], [W, courses[0] + cover], "Course %.0f" % cover, 300, [1, 0],
+    full = [v for v in courses if v >= v0 - 0.5]
+    if full:
+        dims.append(_dim(name, [W, full[0]], [W, full[0] + cover], "Course %.0f" % cover, 300, [1, 0],
                          "course", cover))
         dims.append(_dim(name, [W, courses[-1]], [W, H], "Cut %.0f" % (H - courses[-1]), 600, [1, 0]))
     return depth + p["plank_t"]
@@ -294,19 +316,22 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     battens = [u for u in supports if all(abs(u - j) > bw / 2 for j in jambs)]
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cavity_t = depth - cavity_start
-    rows, short = panel_rows(elev.get("panel_rows"), p["panel_h"], gap, v0, H)
+    # The row list starts at the chain's datum, so rows line up round its corners; a face
+    # that starts higher cuts the row at its base, one that starts lower carries on down.
+    datum = _datum(elev)
+    rows, short = panel_rows(elev.get("panel_rows"), p["panel_h"], gap, v0 if datum is None else datum, H, v0)
     # A noggin between vertical battens sits on the drainage plane and dams it, so the
     # horizontal seams are left unsupported unless a counter-batten layer holds the
     # battens off the wall and the water can run down behind them. With one, every row
     # joint gets its noggin, whatever the rows' heights.
-    for j, (v, h) in enumerate(rows[:-1] if p["has_cb"] else []):
+    for j, (v, h, _i, _f) in enumerate(rows[:-1] if p["has_cb"] else []):
         vj = v + h + gap / 2
         for k, (a, b) in enumerate(zip(battens, battens[1:])):
             if b - a > bw + 1:
                 meshes.append(_prism(_rect(a + bw / 2, vj - bw / 2, b - bw / 2, vj + bw / 2), depth - p["batten_d"],
                                      p["batten_d"], frame, "cross_batten", "%s Cross Batten R%d-%d" % (name, j + 1, k + 1), name))
     info["seam_noggins"] = bool(p["has_cb"]) and len(rows) > 1
-    for j, (v, h) in enumerate(rows):
+    for j, (v, h, _i, _f) in enumerate(rows):
         for k, (s, e, _full) in enumerate(panels):
             meshes.append(_prism(_rect(s, v, e, v + h), depth, p["panel_t"], frame, "panel",
                                  "%s Panel R%d-%d" % (name, j + 1, k + 1), name))
@@ -314,7 +339,9 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     fulls = [pn for pn in panels if pn[2]]
     widths = sorted({round(e - s, 1) for s, e, _f in panels})
     info.update(n_courses=len(rows), cover=p["panel_w"] + gap, batten_centres=p["batten_centres"],
-                rows=[round(h, 1) for _v, h in rows], short_rows=short,
+                # by list index, full height (the closing row as cut): what an edit pads with
+                rows=[round(h if k == len(rows) - 1 else f, 1) for k, (_v, h, i, f) in enumerate(rows) if i is not None],
+                short_rows=short,
                 closing_cut_left=(fulls[0][0] if fulls else W), closing_cut_right=(W - fulls[-1][1]) if fulls else 0.0,
                 closing_cut_top=rows[-1][1] if rows else 0.0, n_full=len(fulls) * len(rows),
                 set_out_from_openings=bool(jambs),
@@ -335,11 +362,14 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
                          "opening", o[1] - o[0], lock=LOCK_OPENING))
     # One dimension per row up the right-hand side, each naming the row it edits; the
     # top row is the closing cut, which is whatever is left, so it is read-only.
-    for j, (v, h) in enumerate(rows):
-        if j < len(rows) - 1:
-            dims.append(_dim(name, [W, v], [W, v + h], "R%d %.0f" % (j + 1, h), 300, [1, 0], "row", h, row=j))
+    # A row cut at the base, or one under the chain's datum, is read-only here: it is set
+    # on the face the datum comes from.
+    for j, (v, h, i, full) in enumerate(rows):
+        if j < len(rows) - 1 and i is not None and h >= full - 0.5:
+            dims.append(_dim(name, [W, v], [W, v + h], "R%d %.0f" % (i + 1, h), 300, [1, 0], "row", h, row=i))
         else:
-            dims.append(_dim(name, [W, v], [W, v + h], "Cut %.0f" % h, 300, [1, 0]))
+            dims.append(_dim(name, [W, v], [W, v + h], ("Cut %.0f" if h < full - 0.5 or j == len(rows) - 1 else "%.0f") % h,
+                             300, [1, 0]))
     return face
 
 
