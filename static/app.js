@@ -44,6 +44,9 @@ function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' ·
 
 function setActive(i) {
     state.active = i;
+    // Courses round a built chain are set out from the base of the elevation last clicked.
+    const picked = state.elevations[i];
+    if (picked && picked.chain.built && picked.result && picked.result.ok) picked.chain.datumFrom = picked;
     renderElevationList();
     const sel = document.getElementById('active-elev');
     sel.innerHTML = state.elevations.map((e, k) => `<option value="${k}" ${k === i ? 'selected' : ''}>${chainLabel(e)}</option>`).join('');
@@ -278,6 +281,8 @@ function openEditWidget(e) {
     state.editing = e;
     document.getElementById('edit-widget').style.display = '';
     document.getElementById('edit-title').textContent = chainLabel(e);
+    document.getElementById('edit-datum').textContent = e.chain.members.length > 1
+        ? 'Courses round ' + e.chain.name + ' now start from the base of ' + e.name + '.' : '';
     updateSliderRange();
     setStatus('Editing ' + chainLabel(e) + ' — shift this elevation\'s setting-out', 'ready');
 }
@@ -454,7 +459,8 @@ function elevationRecords() {
                                                    clip_hi: e.clipHi,
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
                                                    clip_v_hi: vLocal(e, chain.topZ),
-                                                   cover: e.cover || null, panel_h: e.panelH || null }));
+                                                   cover: e.cover || null, panel_h: e.panelH || null,
+                                                   course_datum_from: chain.datumFrom ? chain.datumFrom.name : null }));
         }
     }
     return out;
