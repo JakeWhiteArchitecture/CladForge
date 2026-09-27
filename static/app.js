@@ -22,7 +22,8 @@ function newElevation(chain) {
     const e = { name, picks: [], result: null, manual: [], disabled: {},
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
                 offset: 0,
-                cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, clipLo: 0, clipHi: null };
+                cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, detailLo: null, detailHi: null,
+                clipLo: 0, clipHi: null };
     e.chain.members.push(e);
     state.elevations.push(e);
     setActive(n);
@@ -47,6 +48,8 @@ function setActive(i) {
     // Courses round a built chain are set out from the base of the elevation last clicked.
     const picked = state.elevations[i];
     if (picked && picked.chain.built && picked.result && picked.result.ok) picked.chain.datumFrom = picked;
+    // Flat on an elevation, choosing another swings the view across to it.
+    if (in2D() && picked && picked.result && picked.result.ok) enter2D(picked.result.name, picked.result.frame, cladBox(picked));
     renderElevationList();
     const sel = document.getElementById('active-elev');
     sel.innerHTML = state.elevations.map((e, k) => `<option value="${k}" ${k === i ? 'selected' : ''}>${chainLabel(e)}</option>`).join('');
@@ -107,7 +110,8 @@ function elevationCard(e, i) {
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
-        + (e.cover || e.panelH ? ` · course ${Math.round(e.cover || e.panelH)}` : '')
+        + (e.cover ? ` · course ${Math.round(e.cover)}` : '')
+        + (e.panelRows && e.panelRows.length ? ` · rows ${e.panelRows.map(Math.round).join('/')}` : '')
         + (ok && (e.chain.topZ !== null || e.chain.bottomZ !== null)
             ? ` · levels ${Math.round(Math.max(0, vLocal(e, e.chain.bottomZ) || 0))}–${Math.round(Math.min(r.height, vLocal(e, e.chain.topZ) === null ? r.height : vLocal(e, e.chain.topZ)))}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
@@ -119,6 +123,7 @@ function elevationCard(e, i) {
 }
 
 function renderElevationList() {
+    update2DButton();
     const box = document.getElementById('elevation-list');
     if (!state.elevations.length) {
         box.innerHTML = '<p class="hint">No elevations yet. Load a model, then click a wall face.</p>';
@@ -154,22 +159,47 @@ function chainCorners(chain) {
     return out;
 }
 
+// Each corner can override the job's corner detail. The two faces meeting there hold the
+// same value (lo member's detailHi, hi member's detailLo), set together as the master is.
+const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master-lap, open joint', butt: 'Square' };
+
+function cornerDetailInForce(c) {
+    const job = toggleValue('corner-type') || 'mitre';
+    const d = c.lo.detailHi || job;
+    return (d === 'lap' && toggleValue('cladding-type') !== 'panel') ? 'mitre' : d;
+}
+
 function cornerRows(chain, members) {
-    const detail = toggleValue('corner-type') || 'mitre';
     const rows = chainCorners(chain);
     if (!rows.length) return '';
+    const panel = toggleValue('cladding-type') === 'panel';
     return rows.map((c, i) => {
         const angle = c.hi.link ? Math.abs(c.hi.link.angle).toFixed(0) : '';
         const kind = c.k > 0 ? 'external' : 're-entrant';
+        const detail = cornerDetailInForce(c);
         const master = c.lo.masterHi ? c.lo.name : c.hi.name;
-        const label = { mitre: 'Mitred', lap: 'Master-lap, open joint', butt: 'Square' }[detail];
+        const own = c.lo.detailHi || '';
+        const pick = `<select class="corner-detail" title="Corner detail for this corner" onclick="event.stopPropagation()"
+            onchange="setCornerDetail('${chain.name}', ${i}, this.value)">`
+            + [['', 'Job default'], ['mitre', 'Mitred'], ['lap', 'Master lap'], ['butt', 'Square']]
+                .map(([v, t]) => `<option value="${v}" ${v === own ? 'selected' : ''} ${v === 'lap' && !panel ? 'disabled' : ''}>${t}</option>`).join('')
+            + '</select>';
         const swap = detail === 'lap'
             ? ` · <b>${master.replace('Elevation ', '')}</b> masters <button class="mini" onclick="event.stopPropagation(); swapCorner('${chain.name}', ${i})">Swap</button>`
             : '';
-        return `<div class="corner-row" onclick="selectCorner('${chain.name}', ${i})">`
+        return `<div class="corner-row" data-detail="${detail}" onclick="selectCorner('${chain.name}', ${i})">`
             + `${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner`
-            + ` · ${angle}° ${kind} · ${label}${swap}</div>`;
+            + ` · ${angle}° ${kind} · <span class="corner-in-force">${CORNER_LABEL[detail]}${own ? '' : ' (job)'}</span>${swap} ${pick}</div>`;
     }).join('');
+}
+
+function setCornerDetail(chainName, index, value) {
+    const chain = state.chains.find(c => c.name === chainName);
+    const corner = chain && chainCorners(chain)[index];
+    if (!corner) return;
+    corner.lo.detailHi = corner.hi.detailLo = value || null;
+    renderElevationList();
+    updatePreview();
 }
 
 function swapCorner(chainName, index) {
@@ -226,8 +256,8 @@ function placeInChain(e, other, link) {
     // The corner's slope belongs to the touching end of both members. The face that
     // was already in the chain masters the lap by default; the corner row swaps it.
     const k = link.k || 0;
-    if (after) { other.cornerHi = k; e.cornerLo = k; other.masterHi = true; e.masterLo = false; }
-    else { other.cornerLo = k; e.cornerHi = k; other.masterLo = true; e.masterHi = false; }
+    if (after) { other.cornerHi = k; e.cornerLo = k; other.masterHi = true; e.masterLo = false; other.detailHi = e.detailLo = null; }
+    else { other.cornerLo = k; e.cornerHi = k; other.masterLo = true; e.masterHi = false; other.detailLo = e.detailHi = null; }
     e.link = link;
 }
 
@@ -257,7 +287,7 @@ async function linkIntoChain(e) {
         chain.members = chain.members.filter(m => m !== e);
         e.chain = newChain(); e.chain.members.push(e);
     }
-    e.start = 0; e.rev = false; e.link = null; e.cornerLo = 0; e.cornerHi = 0;
+    e.start = 0; e.rev = false; e.link = null; e.cornerLo = 0; e.cornerHi = 0; e.detailLo = e.detailHi = null;
     e.clipLo = 0; e.clipHi = null;
     relayoutChain(e.chain);
     return false;
@@ -266,11 +296,46 @@ async function linkIntoChain(e) {
 async function relinkChain(chain) {
     const members = chain.members.slice().sort((a, b) => a.start - b.start);
     chain.members = [];
-    members.forEach(m => { m.cornerLo = 0; m.cornerHi = 0; m.masterLo = false; m.masterHi = false;
+    members.forEach(m => { m.cornerLo = 0; m.cornerHi = 0; m.masterLo = false; m.masterHi = false; m.detailLo = m.detailHi = null;
                            m.link = null; m.clipLo = 0; m.clipHi = null; });
     for (const m of members) { m.chain = chain; chain.members.push(m); if (m.result && m.result.ok) await linkIntoChain(m); }
     renderElevationList();
     updatePreview();
+}
+
+// ─── 2D ELEVATION ───
+// The clad part of an elevation in its own (u, v): cut back at corners, and between the
+// chain's picked top and bottom where they are set.
+function cladBox(e) {
+    const r = e.result, lo = vLocal(e, e.chain.bottomZ), hi = vLocal(e, e.chain.topZ);
+    const u0 = e.clipLo || 0, u1 = (e.clipHi === null || e.clipHi === undefined) ? r.width : e.clipHi;
+    return { u0, u1: u1 - u0 > 1 ? u1 : r.width,
+             v0: Math.max(0, lo || 0), v1: Math.min(r.height, hi === null ? r.height : hi) };
+}
+
+function can2D() {
+    const e = state.elevations[state.active];
+    return !!(e && e.result && e.result.ok);
+}
+
+function toggle2D() {
+    if (in2D()) { exit2D(); update2DButton(); renderDims2D(); return; }
+    if (!can2D()) { setStatus('Pick and extract an elevation first — the 2D view looks at the active one', 'busy'); return; }
+    const e = state.elevations[state.active];
+    enter2D(e.result.name, e.result.frame, cladBox(e));
+    update2DButton();
+    renderDims2D();
+    setStatus('2D elevation: click a dimension to type over it · E or Esc for 3D', 'ready');
+}
+
+function update2DButton() {
+    for (const id of ['view-2d', 'edit-2d']) {
+        const b = document.getElementById(id);
+        if (!b) continue;
+        b.textContent = in2D() ? '3D' : '2D elevation';
+        b.disabled = !in2D() && !can2D();
+        b.title = in2D() ? 'Back to the 3D view (Esc)' : 'Look at the active elevation flat and square-on (E)';
+    }
 }
 
 // ─── EDIT MODE ───
@@ -455,11 +520,12 @@ function elevationRecords() {
                                                    chain: members.length > 1 ? chain.name : null, chain_start: e.start,
                                                    chain_reversed: e.rev, corner_lo: e.cornerLo || 0,
                                                    corner_hi: e.cornerHi || 0, master_lo: !!e.masterLo,
-                                                   master_hi: !!e.masterHi, clip_lo: e.clipLo || 0,
+                                                   master_hi: !!e.masterHi, detail_lo: e.detailLo || null,
+                                                   detail_hi: e.detailHi || null, clip_lo: e.clipLo || 0,
                                                    clip_hi: e.clipHi,
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
                                                    clip_v_hi: vLocal(e, chain.topZ),
-                                                   cover: e.cover || null, panel_h: e.panelH || null,
+                                                   cover: e.cover || null, panel_rows: e.panelRows || null,
                                                    course_datum_from: chain.datumFrom ? chain.datumFrom.name : null }));
         }
     }
@@ -497,6 +563,7 @@ function onTypeChange() {
     document.getElementById('panel-section').style.display = panel ? '' : 'none';
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
     document.getElementById('batten_centres').readOnly = panel;
+    renderElevationList();              // the corner rows say which detail is in force
     updateSliderRange();
     updatePreview();
 }
@@ -538,6 +605,7 @@ async function updatePreview() {
     updateDerivedStatic(params);
     if (!pyReady || !params.elevations.length) {
         renderGeometry([]); renderOutlines([], 0); renderDimensions([], {}); renderChecks([]); renderInfo([]);
+        renderDims2D();
         return;
     }
     const seq = ++_seq;
@@ -559,6 +627,7 @@ _json.dumps(_o)`);
         renderOutlines(params.elevations, params.splash);
         const act = state.elevations[state.active];
         renderDimensions(result.dimensions, byName, act && act.result ? act.result.name : null);
+        renderDims2D();
         renderChecks(result.checks);
         renderInfo(result.info);
     } catch (err) {
@@ -807,6 +876,7 @@ function initApp() {
     initWebIfc();
     initPyodide();
     initWizard();
+    initDims2D();
     renderElevationList();
     onTypeChange();
     const vp = document.getElementById('viewport');
@@ -831,10 +901,15 @@ function initApp() {
         slider.addEventListener('change', release);
     }
     document.addEventListener('keydown', e => {
+        const el = document.activeElement, typing = el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
+        const modal = ['chain-wizard', 'course-dialog', 'download-reminder'].some(id => document.getElementById(id).classList.contains('open'));
+        if ((e.key === 'e' || e.key === 'E') && !typing && !modal && !e.ctrlKey && !e.metaKey && !e.altKey) { toggle2D(); return; }
         if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
         if (document.getElementById('course-dialog').classList.contains('open')) { closeCourseDialog(); return; }
         if (state.levels) { dismissLevels(); return; }
-        closeEditWidget();
+        // Escape unwinds one thing at a time: the edit widget first, then the flat view.
+        if (state.editing) { closeEditWidget(); return; }
+        if (in2D()) { exit2D(); update2DButton(); renderDims2D(); }
     });
     document.getElementById('download-reminder').addEventListener('click', e => { if (e.target.id === 'download-reminder') e.currentTarget.classList.remove('open'); });
 }

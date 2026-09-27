@@ -250,21 +250,37 @@ function openCourseDialog(dim) {
     if (!e) return;
     COURSE.dim = dim;
     COURSE.elev = e;
-    const panel = toggleValue('cladding-type') === 'panel';
-    document.getElementById('course-title').textContent = panel ? 'Panel course height' : 'Course height';
+    const panel = dim.kind === 'row';
+    document.getElementById('course-title').textContent = panel ? `Panel row ${dim.row + 1} height` : 'Course height';
     document.getElementById('course-where').textContent =
         `${chainLabel(e)} — currently ${Math.round(dim.value)} mm`;
     const input = document.getElementById('course-value');
     input.value = Math.round(dim.value);
-    input.min = panel ? 200 : 50;
+    input.min = panel ? 150 : 50;
     input.max = panel ? 3000 : 1000;
     const single = e.chain.members.length < 2;
     document.getElementById('course-chain').style.display = single ? 'none' : '';
     document.getElementById('course-one').textContent = single ? 'Apply' : 'This elevation only';
-    document.getElementById('course-reset').style.display = (e.cover || e.panelH) ? '' : 'none';
+    document.getElementById('course-reset').style.display = (e.cover || (e.panelRows || []).length) ? '' : 'none';
     document.getElementById('course-dialog').classList.add('open');
     input.focus();
     input.select();
+}
+
+// The row list for elevation *e* with row *j* set to *h*. Rows under j that were not
+// listed are pinned at the heights they are drawn at now, so editing row 3 keeps rows 1
+// and 2 where they are; rows above j are left to carry on at the panel height.
+function rowsDrawn(e) {
+    const info = ((window._lastPreview || {}).info || []).find(i => i.elevation === e.result.name);
+    return (info && info.rows) || [];
+}
+
+function withRow(e, j, h) {
+    const rows = (e.panelRows || []).slice(), drawn = rowsDrawn(e);
+    const fallback = parseFloat(document.getElementById('panel_h').value) || 2400;
+    for (let k = rows.length; k < j; k++) rows.push(drawn[k] || fallback);
+    rows[j] = h;
+    return rows;
 }
 
 function closeCourseDialog() {
@@ -274,19 +290,22 @@ function closeCourseDialog() {
 
 function applyCourse(scope) {
     const v = parseFloat(document.getElementById('course-value').value);
-    const e = COURSE.elev, panel = toggleValue('cladding-type') === 'panel';
-    if (!e || !isFinite(v) || v <= 0) return closeCourseDialog();
+    const e = COURSE.elev, dim = COURSE.dim;
+    if (!e || !dim || !isFinite(v) || v <= 0) return closeCourseDialog();
     const targets = scope === 'chain' ? e.chain.members : [e];
-    targets.forEach(m => { if (panel) m.panelH = v; else m.cover = v; });
+    if (dim.kind === 'row') {
+        const rows = withRow(e, dim.row, v);
+        targets.forEach(m => { m.panelRows = rows.slice(); });
+    } else targets.forEach(m => { m.cover = v; });
     closeCourseDialog();
-    setStatus(`Course height ${Math.round(v)} mm on ${scope === 'chain' ? e.chain.name : e.name}`, 'ready');
+    setStatus(`${dim.kind === 'row' ? 'Row ' + (dim.row + 1) : 'Course'} height ${Math.round(v)} mm on ${scope === 'chain' ? e.chain.name : e.name}`, 'ready');
     renderElevationList();
     updatePreview();
 }
 
 function resetCourse() {
     const e = COURSE.elev;
-    if (e) e.chain.members.forEach(m => { m.cover = null; m.panelH = null; });
+    if (e) e.chain.members.forEach(m => { m.cover = null; m.panelRows = null; });
     closeCourseDialog();
     setStatus('Course height back to the panel setting', 'ready');
     renderElevationList();

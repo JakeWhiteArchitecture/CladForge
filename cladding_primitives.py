@@ -39,6 +39,48 @@ def stacked_positions(start, end, pitch):
     return out
 
 
+ROW_MIN, ROW_MAX = 150.0, 3000.0     # mm – a listed panel row; short rows are deliberate tiers
+
+
+def panel_rows(heights, default_h, gap, start, end, base=None):
+    """Panel rows up a face as [(v, h, index, full h)], bottom first, and the indices of
+    rows asked for below ROW_MIN.
+
+    *heights* lists the rows in order from *start*; once it runs out the rows carry on
+    at *default_h*. Rows stack with *gap* between them, and the top row is the closing
+    cut, taking whatever height is left below *end*: a listed row that does not fit is
+    cut, and rows listed above the top are dropped.
+
+    *start* is where the list begins — the chain's course datum, so rows line up round
+    its corners — and *base* is where this face starts cladding (*start* when omitted).
+    Below the datum the rows carry on down at *default_h* with no index; the row that
+    crosses the base is cut there, and one wholly below it is dropped. Each row is
+    returned as drawn, with its list index (None below the datum) and its full height."""
+    base = start if base is None else base
+    heights = [float(h) for h in (heights or []) if h]
+    seq, short = [], []
+    v, i = float(start), 0
+    while v < end - 1e-6:
+        if i < len(heights):
+            if heights[i] < ROW_MIN:
+                short.append(i)
+            h = min(ROW_MAX, max(ROW_MIN, heights[i]))
+        else:
+            h = default_h
+        seq.append((v, h, i))
+        v, i = v + h + gap, i + 1
+    v = float(start)
+    while v - gap > base + 1e-6:              # under the datum, on a face that starts lower
+        v -= default_h + gap
+        seq.insert(0, (v, default_h, None))
+    out = []
+    for v, h, idx in seq:
+        lo, hi = max(v, base), min(v + h, end)
+        if hi - lo >= 1.0:
+            out.append((lo, hi - lo, idx, h))
+    return out, short
+
+
 def batten_positions(length, width, centres, offset, edges=True):
     """Batten centrelines across *length*: arrayed at *centres* about the middle
     (shifted by *offset*), plus an edge batten at each end. Battens closer than
@@ -216,29 +258,31 @@ def buildup_depth(p):
     return d + (p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"])
 
 
-def corner_detail(p):
-    """The corner detail in force. The master-lap is a panel detail: one board runs
-    past the corner and the other butts behind it, leaving the joint gap exposed.
-    Plank cladding has no master board to lap, so it falls back to a mitre."""
-    detail = p.get("corner", "mitre")
+CORNER_DETAILS = ("mitre", "lap", "butt")
+
+
+def corner_detail(p, override=None):
+    """The corner detail in force: *override* when a corner sets its own, else the job
+    setting. The master-lap is a panel detail: one board runs past the corner and the
+    other butts behind it, leaving the joint gap exposed. Plank cladding has no master
+    board to lap, so it falls back to a mitre."""
+    detail = override if override in CORNER_DETAILS else p.get("corner", "mitre")
     if detail == "lap" and p["cladding_type"] != "panel":
         return "mitre"
-    return detail if detail in ("mitre", "lap", "butt") else "mitre"
+    return detail if detail in CORNER_DETAILS else "mitre"
 
 
 def corner_ends(elev, p):
-    """((k, ext) left, (k, ext) right, detail). The end face of an element sits at
-    u_end -/+ (ext + k x depth): k shears it onto the corner's bisector (a mitre),
-    ext moves it square past the corner (a lap). Ends with no corner get (0, 0)."""
-    detail = corner_detail(p)
+    """((k, ext) left, (k, ext) right, (detail left, detail right)). The end face of an
+    element sits at u_end -/+ (ext + k x depth): k shears it onto the corner's bisector
+    (a mitre), ext moves it square past the corner (a lap). Ends with no corner get
+    (0, 0). Each end takes its own corner's detail (detail_lo / detail_hi, None for the
+    job setting); like the master flags they are held in run order, lo first."""
     lo, hi = float(elev.get("corner_lo") or 0.0), float(elev.get("corner_hi") or 0.0)
     master_lo, master_hi = bool(elev.get("master_lo")), bool(elev.get("master_hi"))
+    over_lo, over_hi = elev.get("detail_lo"), elev.get("detail_hi")
     if elev.get("chain_reversed"):
-        lo, hi, master_lo, master_hi = hi, lo, master_hi, master_lo
-    if detail == "butt":
-        return (0.0, 0.0), (0.0, 0.0), detail
-    if detail == "mitre":
-        return (lo, 0.0), (hi, 0.0), detail
+        lo, hi, master_lo, master_hi, over_lo, over_hi = hi, lo, master_hi, master_lo, over_hi, over_lo
     depth, board, gap = buildup_depth(p), p["panel_t"], p["panel_gap"]
 
     def lap(k, master):
@@ -258,7 +302,14 @@ def corner_ends(elev, p):
             return (-cot, depth / sin_b) if master else (-cot, (depth - board) / sin_b - gap)
         return (0.0, 0.0) if master else (cot, -(depth / sin_b + gap))
 
-    return lap(lo, master_lo), lap(hi, master_hi), detail
+    def end(k, master, override):
+        detail = corner_detail(p, override)
+        if detail == "butt":
+            return (0.0, 0.0), detail
+        return ((k, 0.0) if detail == "mitre" else lap(k, master)), detail
+
+    (left, d_left), (right, d_right) = end(lo, master_lo, over_lo), end(hi, master_hi, over_hi)
+    return left, right, (d_left, d_right)
 
 
 def corner_shift(u, corner, s, tol=0.6):
@@ -311,7 +362,8 @@ def chain_layout(elevations, face_depth, detail):
             lo, hi = clip_bounds(e)
             width = hi - lo
             spans.append((e.get("name"), run))
-            k = float(e.get("corner_hi") or 0.0) if detail != "butt" else 0.0
+            here = e.get("detail_hi") if e.get("detail_hi") in CORNER_DETAILS else detail
+            k = float(e.get("corner_hi") or 0.0) if here != "butt" else 0.0
             run += width + 2.0 * k * face_depth
         for name, start in spans:
             out[name] = (start, run)

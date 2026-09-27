@@ -46,9 +46,19 @@ function initThree() {
     window.addEventListener('resize', () => {
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();
+        if (orthoCamera) {         // keep the flat view's height, widen or narrow it
+            const h = orthoCamera.top - orthoCamera.bottom;
+            orthoCamera.left = -h * camera.aspect / 2; orthoCamera.right = h * camera.aspect / 2;
+            orthoCamera.updateProjectionMatrix();
+        }
         renderer.setSize(container.clientWidth, container.clientHeight);
     });
-    (function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); })();
+    (function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        if (view2d.on && view2d.onFrame) view2d.onFrame();     // the 2D labels follow the view
+        renderer.render(scene, activeCamera());
+    })();
 }
 
 function clearGroup(group) {
@@ -268,6 +278,7 @@ async function loadIFC(file, onStatus, force) {
 }
 
 function fitCameraTo(obj) {
+    reset2D();
     const bb = new THREE.Box3().setFromObject(obj);
     if (bb.isEmpty()) return;
     const c = bb.getCenter(new THREE.Vector3());
@@ -281,12 +292,12 @@ function setModelVisible(on) { layerVisible.model = on; modelGroup.visible = on;
 
 // ─── PICKING ───
 function pickDim(event) {
-    if (!dimLabels.length || !dimGroup.visible) return null;
+    if (!dimLabels.length || !dimGroup.visible || view2d.on) return null;    // flat, labels are HTML
     const rect = renderer.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1,
                                     -((event.clientY - rect.top) / rect.height) * 2 + 1);
     const rc = new THREE.Raycaster();
-    rc.setFromCamera(mouse, camera);
+    rc.setFromCamera(mouse, activeCamera());
     const hits = rc.intersectObjects(dimLabels, false);
     return hits.length ? hits[0].object.userData.dim : null;
 }
@@ -318,7 +329,7 @@ function snapPick(event) {
     for (const k of ['a', 'b', 'c']) {
         const vi = hit.face[k];
         const v = new THREE.Vector3(pos.getX(vi), pos.getY(vi), pos.getZ(vi)).applyMatrix4(hit.mesh.matrixWorld);
-        const sp = v.clone().project(camera);
+        const sp = v.clone().project(activeCamera());
         const d = Math.hypot((sp.x + 1) / 2 * rect.width - mx, (1 - sp.y) / 2 * rect.height - my);
         if (d < bestD) { bestD = d; best = v; }
     }
@@ -338,12 +349,12 @@ function pickAt(event) {
     const mouse = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1,
                                     -((event.clientY - rect.top) / rect.height) * 2 + 1);
     const rc = new THREE.Raycaster();
-    rc.setFromCamera(mouse, camera);
+    rc.setFromCamera(mouse, activeCamera());
     const hits = rc.intersectObjects(allMeshes, false);
     if (!hits.length) return null;
     const hit = hits[0];
     const normal = hit.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize();
-    if (normal.dot(camera.position.clone().sub(hit.point)) < 0) normal.negate();   // face the viewer
+    if (normal.dot(activeCamera().position.clone().sub(hit.point)) < 0) normal.negate();   // face the viewer
     return { mesh: hit.object, faceIndex: hit.faceIndex, face: hit.face, point: hit.point, normal };
 }
 
@@ -508,6 +519,7 @@ function highlightCorner(frame, u, height) {
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
                                 new THREE.LineBasicMaterial({ color: 0xffd166, depthTest: false, linewidth: 2 }));
     cornerGroup.add(line);
+    if (view2d.on) return;            // flat, the view stays square-on; the line is enough
     const mid = pts[0].clone().lerp(pts[1], 0.5);
     controls.target.copy(mid);
     controls.update();
@@ -529,14 +541,17 @@ function renderGeometry(meshes) {
         mesh.matrixAutoUpdate = false;
         mesh.matrix.copy(frameMatrix(m.frame, m.depth));
         mesh.userData.name = m.name;
+        mesh.userData.elevation = m.elevation;
         byLayer[layer].add(mesh);
         if (m.opacity >= 1 || m.ifc_type === 'panel' || m.ifc_type === 'plank') {
             const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), new THREE.LineBasicMaterial({ color: 0x1b2a3a, transparent: true, opacity: 0.6 }));
             edges.matrixAutoUpdate = false; edges.matrix.copy(mesh.matrix);
+            edges.userData.elevation = m.elevation;
             byLayer[layer].add(edges);
         }
     }
     for (const key of Object.keys(byLayer)) byLayer[key].visible = layerVisible[key] !== false;
+    filter2D();          // flat, only the elevation being looked at is drawn
 }
 
 function ringLine(ring, frame, depth, color, dashed) {
@@ -601,18 +616,21 @@ function renderDimensions(dims, elevByName, only) {
         const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),
                                             new THREE.LineBasicMaterial({ color: 0x00ccff, depthTest: false }));
         dimGroup.add(line);
-        const label = makeLabel(d.label, !!d.kind);
+        // In 3D only the courses and rows open the course dialog; the rest are edited flat.
+        const editable = d.kind === 'course' || d.kind === 'row';
+        const label = makeLabel(d.label, editable);
         label.position.copy(new THREE.Vector3((d.p1[0] + d.p2[0]) / 2 + nx * (off + 120), (d.p1[1] + d.p2[1]) / 2 + ny * (off + 120), 0).applyMatrix4(M));
+        label.visible = !view2d.on;        // flat, HTML labels take over (dims2d.js)
         dimGroup.add(label);
-        if (d.kind) { label.userData.dim = d; dimLabels.push(label); }
+        if (editable) { label.userData.dim = d; dimLabels.push(label); }
     }
-    dimGroup.visible = layerVisible.dims;
+    dimGroup.visible = layerVisible.dims || view2d.on;    // flat, the dimensions are the point
 }
 
 function setLayerVisible(key, on) {
     layerVisible[key] = on;
     if (key === 'model') { modelGroup.visible = on; return; }
-    if (key === 'dims') { dimGroup.visible = on; return; }
+    if (key === 'dims') { dimGroup.visible = on || view2d.on; return; }
     if (key === 'faces') { highlightGroup.visible = on; return; }     // the picked wall surface
     if (key === 'outline') { outlineGroup.visible = on; return; }     // outline, openings, splash
     for (const g of cladGroup.children) if (g.name === key) g.visible = on;
@@ -622,6 +640,7 @@ function setLayerVisible(key, on) {
 // viewer utility, used by the browser test to put a known elevation on screen.
 function frameElevation(e) {
     // Three-quarter view of one elevation, looking at the face from outside.
+    reset2D();
     const M = frameMatrix(e.frame, 0);
     const c = new THREE.Vector3(e.width / 2, e.height / 2, 0).applyMatrix4(M);
     const dist = Math.max(e.width, e.height) * 1.2;

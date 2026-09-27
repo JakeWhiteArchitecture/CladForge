@@ -75,6 +75,8 @@ body {
 .corner-row { font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 4px; padding: 5px 8px; margin-bottom: 6px; cursor: pointer; }
 .corner-row:hover { border-color: var(--accent); }
 .corner-row b { color: var(--accent); }
+.corner-row .corner-detail { font-size: 10px; padding: 1px 2px; margin-left: 4px; background: var(--bg); color: var(--text, inherit); border: 1px solid var(--border); border-radius: 3px; }
+.corner-row .corner-in-force { color: var(--text, inherit); }
 .elev-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
 .elev-card.active { border-color: var(--accent); }
 .elev-head { display: flex; align-items: center; gap: 8px; }
@@ -122,7 +124,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .reminder-text { font-size: 13px; line-height: 1.6; color: var(--text); }
 
 /* Make chain: nothing is generated until the picked chain is built. */
-#make-chain { position: absolute; top: 34px; right: 10px; z-index: 6; padding: 9px 16px; border: none;
+.view-actions { position: absolute; top: 34px; right: 10px; z-index: 6; display: flex; gap: 8px; }
+#view-2d { padding: 9px 16px; border: 1px solid var(--accent); border-radius: 20px; background: rgba(22,33,62,0.92);
+    color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+#view-2d:hover:not(:disabled) { background: #1a4a80; }
+#view-2d:disabled { opacity: 0.4; cursor: default; }
+#make-chain { padding: 9px 16px; border: none;
     border-radius: 20px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
     cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
 #make-chain:hover { background: var(--accent-hover); }
@@ -158,3 +165,22 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
     .panel { width: 100%; min-width: 0; height: 55vh; border-right: none; border-bottom: 1px solid var(--border); }
     .legend, .dim-overlay { font-size: 10px; }
 }
+
+/* 2D elevation: dimension labels over the flat view, typed over where they sit. */
+.dim2d-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 4; }
+.dim2d { position: absolute; transform: translate(-50%, -50%); pointer-events: auto; white-space: nowrap;
+    font: 600 12px sans-serif; padding: 2px 7px; border-radius: 3px; color: #00ccff;
+    background: rgba(10,10,26,0.85); border: 1px solid transparent; cursor: default; }
+.dim2d.editable { background: rgba(0,80,110,0.92); border-color: #00ccff; cursor: text; }
+.dim2d.editable:hover { background: #006d8f; }
+.dim2d.locked { color: #6b7a8c; border: 1px dashed #3a4a5c; cursor: help; }
+.dim2d.corner-badge { color: #111; background: #ffd166; border-color: #ffd166; border-radius: 10px; cursor: pointer; }
+.dim2d-editor { position: absolute; transform: translate(-50%, 16px); z-index: 7; background: rgba(22,33,62,0.98);
+    border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    font-size: 12px; color: var(--text); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 280px; }
+.dim2d-editor .d2-title { width: 100%; font-weight: 600; color: var(--accent); }
+.dim2d-editor input { width: 90px; padding: 4px 6px; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 4px; }
+.dim2d-editor .d2-scope, .dim2d-editor .d2-actions { width: 100%; display: flex; gap: 4px; }
+.dim2d-editor .d2-scope .turn-btn { flex: 1; padding: 4px 6px; font-size: 11px; }
+.dim2d-editor .d2-hint { width: 100%; font-size: 10px; color: var(--hint); }
+.dim2d-editor select { font-size: 11px; background: var(--bg); color: var(--text); border: 1px solid var(--border); }

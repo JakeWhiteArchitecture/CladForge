@@ -262,6 +262,126 @@ async function main() {
     await page.waitForTimeout(1500);
     await page.screenshot({ path: path.join(__dirname, 'smoke_panel.png') });
     console.log('panel overlay:', await page.evaluate(() => document.getElementById('dim-overlay').innerText.replace(/\n/g, ' | ')));
+    // Panel rows: each row has its own dimension, and typing over one sets that row only.
+    const rowEdit = await page.evaluate(async () => {
+        const rows = () => window._lastPreview.info[0].rows.join('/');
+        const panels = () => window._lastPreview.geometry.filter(m => m.ifc_type === 'panel').length;
+        const d = window._lastPreview.dimensions.find(x => x.kind === 'row' && x.row === 0);
+        const before = { rows: rows(), panels: panels(), labels: window._lastPreview.dimensions
+            .filter(x => x.kind === 'row' || /^Cut/.test(x.label)).map(x => x.label).join(' ') };
+        if (!d) return { before };
+        openCourseDialog(d);
+        const title = document.getElementById('course-title').textContent;
+        document.getElementById('course-value').value = 900;
+        applyCourse('one');
+        await new Promise(r => setTimeout(r, 1500));
+        const after = { rows: rows(), panels: panels(), stored: state.elevations[0].panelRows.join('/') };
+        openCourseDialog(window._lastPreview.dimensions.find(x => x.kind === 'row'));
+        resetCourse();
+        await new Promise(r => setTimeout(r, 1500));
+        return { title, before, after, reset: rows() };
+    });
+    console.log('panel rows:', JSON.stringify(rowEdit));
+    if (!rowEdit.after || !rowEdit.after.rows.startsWith('900/') || rowEdit.reset !== rowEdit.before.rows)
+        throw new Error('row edit did not apply or reset: ' + JSON.stringify(rowEdit));
+
+    // 2D elevation: E swings the camera round to face the active elevation, then hands
+    // over to an orthographic camera; Escape brings the 3D pose back.
+    await page.evaluate(() => { setActive(0); document.activeElement && document.activeElement.blur(); });
+    await page.waitForTimeout(800);
+    const pose3d = await page.evaluate(() => [camera.position.toArray(), controls.target.toArray()].map(v => v.map(Math.round).join(',')).join(' → '));
+    await page.keyboard.press('e');
+    await page.waitForTimeout(1200);
+    const flat = await page.evaluate(() => {
+        const cam = activeCamera(), f = state.elevations[0].result.frame;
+        const look = cam.position.clone().sub(controls.target).normalize();
+        const n = new THREE.Vector3(f.n[0], 0, -f.n[1]).normalize();
+        const faded = modelGroup.children.every(m => Math.abs(m.material.opacity - VIEW2D_FADE) < 1e-6);
+        return { ortho: !!cam.isOrthographicCamera, square: +look.dot(n).toFixed(6), up: cam.up.toArray().join(','),
+                 zoom: +cam.zoom.toFixed(3), rotate: controls.enableRotate, faded, dims: dimGroup.visible,
+                 button: document.getElementById('view-2d').textContent };
+    });
+    console.log('2D view:', JSON.stringify(flat));
+    await page.screenshot({ path: path.join(__dirname, 'smoke_2d.png') });
+    if (!flat.ortho || flat.square < 0.99999 || flat.rotate || !flat.faded || flat.button !== '3D')
+        throw new Error('2D view is not flat and square-on: ' + JSON.stringify(flat));
+
+    // Flat, the dimensions are HTML labels: editable ones type over, the rest say why not.
+    console.log('2D labels:', await page.evaluate(() => JSON.stringify({
+        editable: Array.from(document.querySelectorAll('.dim2d.editable')).map(b => b.textContent),
+        locked: Array.from(document.querySelectorAll('.dim2d.locked')).map(b => `${b.textContent} (${b.title})`) })));
+    const panelsBefore = await page.evaluate(() => window._lastPreview.geometry.filter(m => m.ifc_type === 'panel').length);
+    await page.click('.dim2d[data-key="row:0"]');
+    await page.waitForSelector('#d2-input', { timeout: 5000 });
+    await page.fill('#d2-input', '900');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1800);        // 300 ms debounce, then the preview
+    const typed = await page.evaluate(() => {
+        pyodide.globals.set('_dxf_params', JSON.stringify(getParams()));
+        const dxf = pyodide.runPython(`
+import json as _json
+from cladding_preview import generate_preview as _gp
+from dxf_generator import meshes_to_dxf_string as _dxf
+_p = _json.loads(_dxf_params)
+_o = _gp(_p)
+_dxf(_o["geometry"], _p, _o["info"])`);
+        return { rows: window._lastPreview.info[0].rows.join('/'), editorOpen: !!document.getElementById('d2-input'),
+                 panels: window._lastPreview.geometry.filter(m => m.ifc_type === 'panel').length,
+                 label: (document.querySelector('.dim2d[data-key="row:0"]') || {}).textContent,
+                 dxfRow: dxf.indexOf('R1 900') >= 0, still2D: in2D() };
+    });
+    console.log('2D row edit:', JSON.stringify(typed), '| panels were', panelsBefore);
+    if (!typed.rows.startsWith('900/') || typed.panels === panelsBefore || !typed.dxfRow || typed.editorOpen || !typed.still2D)
+        throw new Error('typing a row height in 2D did not apply: ' + JSON.stringify(typed));
+    // Tab moves to the next editable dimension; Escape cancels without leaving 2D.
+    await page.click('.dim2d[data-key="row:0"]');
+    await page.waitForSelector('#d2-input');
+    const first = await page.evaluate(() => document.querySelector('#dim2d-editor .d2-title').textContent);
+    await page.keyboard.press('Tab');
+    const second = await page.evaluate(() => document.querySelector('#dim2d-editor .d2-title').textContent);
+    await page.keyboard.press('Escape');
+    const afterEsc = await page.evaluate(() => ({ editor: !!document.getElementById('d2-input'), flat: in2D() }));
+    console.log('2D tab/escape:', first, '→', second, JSON.stringify(afterEsc));
+    if (first === second || afterEsc.editor || !afterEsc.flat) throw new Error('Tab/Escape in the 2D editor misbehaved');
+    // Split row halves it with the joint gap between.
+    await page.click('.dim2d[data-key="row:0"]');
+    await page.click('#d2-split');
+    await page.waitForTimeout(1800);
+    const split = await page.evaluate(() => window._lastPreview.info[0].rows.join('/'));
+    console.log('2D split row:', split);
+    if (!split.startsWith('445/445/')) throw new Error('split row: ' + split);
+    await page.evaluate(async () => { state.elevations[0].panelRows = null; await updatePreview(); });
+    // Centred instead of set out from the openings, the left cut is typed and the offset
+    // solved for it; the top level is typed straight onto the chain.
+    const solved = await page.evaluate(async () => {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
+        document.getElementById('set_out_from_openings').checked = false;
+        await updatePreview();
+        const cut = () => window._lastPreview.dimensions.find(d => d.kind === 'cut_left' && d.elevation === 'Elevation A');
+        const was = cut() && { value: cut().value, locked: !!cut().lock,
+                               html: (document.querySelector('.dim2d[data-key^="cut_left"]') || {}).className };
+        applyDim(cut(), 300, 'one');
+        await wait(1500);
+        const now = { cut: Math.round(cut().value), offset: state.elevations[0].offset };
+        applyDim(window._lastPreview.dimensions.find(d => d.kind === 'level_top' && d.elevation === 'Elevation A'), 5000, 'one');
+        await wait(1500);
+        const top = window._lastPreview.info[0].clad_top;
+        state.elevations[0].offset = 0; state.elevations[0].chain.topZ = null;
+        document.getElementById('set_out_from_openings').checked = true;
+        await updatePreview();
+        return { was, now, top };
+    });
+    console.log('2D cut and level:', JSON.stringify(solved));
+    if (!solved.was || solved.was.locked || solved.now.cut !== 300 || Math.round(solved.top) !== 5000)
+        throw new Error('cut/level write-back failed: ' + JSON.stringify(solved));
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(1200);
+    const back = await page.evaluate(() => ({ ortho: !!activeCamera().isOrthographicCamera, rotate: controls.enableRotate,
+        pose: [camera.position.toArray(), controls.target.toArray()].map(v => v.map(Math.round).join(',')).join(' → '),
+        opacity: modelGroup.children[0].material.opacity }));
+    console.log('back to 3D:', JSON.stringify(back), '| was', pose3d);
+    if (back.ortho || !back.rotate || back.pose !== pose3d)
+        throw new Error('3D pose not restored: ' + JSON.stringify(back) + ' vs ' + pose3d);
 
     // The wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
     await lookAt('Wing south wall', [0, 0.3, 1]);
@@ -328,6 +448,48 @@ async function main() {
     console.log('after swap:', await page.evaluate(() => (document.querySelector('.corner-row') || {}).textContent));
     console.log('lap check:', await page.evaluate(() => (Array.from(document.querySelectorAll('.check-item span'))
         .map(s => s.textContent).find(t => t.indexOf('corner end') >= 0) || 'none')));
+    // Corner detail per corner: add the wing's north wall to the wing chain so it turns
+    // two corners, then lap one and check the other stays mitred.
+    await page.click('#corner-type .turn-btn[data-value="mitre"]');
+    await page.evaluate(() => setActive(state.elevations.findIndex(e => e.result && e.result.name === 'Elevation C')));
+    await lookAt('Wing north wall', [0, 0.3, -1]);
+    await page.waitForFunction(() => state.elevations.length === 5 && state.elevations[4].result && state.elevations[4].result.ok && state.elevations[4].link, null, { timeout: 60000 });
+    await page.waitForTimeout(1500);
+    const perCorner = await page.evaluate(async () => {
+        const chain = state.elevations[4].chain;
+        const rows = () => Array.from(document.querySelectorAll('.corner-row')).map(r => r.dataset.detail);
+        const before = rows();
+        setCornerDetail(chain.name, 1, 'lap');
+        await updatePreview();
+        const details = window._lastPreview.info.filter(i => chain.members.some(m => m.name === i.elevation))
+            .map(i => `${i.elevation.replace('Elevation ', '')}:${i.corner.details.join('/')}`).join(' ');
+        const text = Array.from(document.querySelectorAll('.corner-row')).map(r => r.textContent.replace(/\s+/g, ' ')).join(' || ');
+        const after = rows();
+        setCornerDetail(chain.name, 1, '');
+        await updatePreview();
+        return { chain: chain.name, members: chain.members.map(m => m.name).join(','), before, after, details, text, reset: rows() };
+    });
+    console.log('per-corner detail:', JSON.stringify(perCorner));
+    if (perCorner.after.join() !== 'mitre,lap' || perCorner.reset.join() !== 'mitre,mitre' || perCorner.details.indexOf('lap') < 0)
+        throw new Error('per-corner detail did not apply: ' + JSON.stringify(perCorner));
+    // The same from the 2D view: C turns both corners, so it gets a badge at each end.
+    await page.evaluate(() => { setActive(state.elevations.findIndex(e => e.name === 'Elevation C')); toggle2D(); });
+    await page.waitForTimeout(1500);
+    const badges = await page.evaluate(() => Array.from(document.querySelectorAll('.corner-badge')).map(b => b.textContent));
+    await page.click('.corner-badge >> nth=1');
+    await page.selectOption('#d2-corner', 'lap');
+    await page.waitForTimeout(1500);
+    const viaBadge = await page.evaluate(() => ({
+        badges: Array.from(document.querySelectorAll('.corner-badge')).map(b => b.textContent),
+        rows: Array.from(document.querySelectorAll('.corner-row')).map(r => r.dataset.detail) }));
+    console.log('2D corner badges:', JSON.stringify(badges), '→', JSON.stringify(viaBadge));
+    if (badges.join() !== 'M,M' || viaBadge.rows.filter(d => d === 'lap').length !== 1 || viaBadge.rows.filter(d => d === 'mitre').length !== 1)
+        throw new Error('corner badge did not set one corner: ' + JSON.stringify(viaBadge));
+    await page.evaluate(async () => { const ch = state.elevations[4].chain; setCornerDetail(ch.name, 0, ''); setCornerDetail(ch.name, 1, ''); toggle2D(); await updatePreview(); });
+    await page.waitForTimeout(1200);
+    await page.evaluate(async () => { setActive(4); deleteElevation(); await new Promise(r => setTimeout(r, 1500)); });
+    await page.click('#corner-type .turn-btn[data-value="lap"]');
+    await page.waitForTimeout(1200);
     // Vertical planks need counter-battens, so the wizard grows a step for them.
     await buildChain('plank', 'vertical');
     console.log('counter-battens built:', await page.evaluate(() =>

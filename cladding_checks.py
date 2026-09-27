@@ -2,6 +2,7 @@
 
 from cladding_constants import (_parse, PLANK_SPAN_TABLE, MIN_CAVITY, FIXING_EMBEDMENT,
                                 MAX_BATTEN_SPAN)
+from cladding_primitives import ROW_MIN
 
 MIN_CLOSING_CUT = 100.0   # mm – narrower closing pieces are hard to fix and look wrong
 
@@ -61,17 +62,28 @@ def check_rules(params, infos=None):
                                                         max(i.get("panel_widths") or [0])))
         cuts = [c for c in (i.get("closing_cut_left", 0), i.get("closing_cut_right", 0),
                             i.get("min_panel", 0)) if 0 < c < MIN_CLOSING_CUT]
+        if i.get("short_rows"):
+            add("Panel rows", "warn", "%s: row %s asked for less than %.0fmm — raised to %.0fmm, the "
+                "shortest row that can be fixed" % (i["elevation"], ", ".join(str(r + 1) for r in i["short_rows"]),
+                                                    ROW_MIN, ROW_MIN), len(i["short_rows"]))
+        top = i.get("closing_cut_top", 0) if i.get("rows") else 0
+        if 0 < top < MIN_CLOSING_CUT:
+            add("Panel rows", "warn", "%s: the closing row at the top is only %.0fmm — change a row height "
+                "so it is at least %.0fmm" % (i["elevation"], top, MIN_CLOSING_CUT), top)
         if cuts:
             add("Closing cut", "warn", "%s: a panel only %.0fmm wide is narrower than %.0fmm — shift the "
                 "setting-out or move a joint" % (i["elevation"], min(cuts), MIN_CLOSING_CUT), min(cuts))
-    corners = [i.get("corner") or {} for i in infos]
-    ends = sum(1 for c in corners for side in ("left", "right") if any(c.get(side) or ()))
-    if ends:
-        detail = next((c.get("detail") for c in corners if c.get("detail")), "mitre")
-        add("Corners", "pass", "%d corner end(s), %s" % (ends, {
+    # Each corner end carries its own detail, so count the ends per detail.
+    per = {}
+    for c in (i.get("corner") or {} for i in infos):
+        for side, detail in zip(("left", "right"), c.get("details") or (c.get("detail"),) * 2):
+            if any(c.get(side) or ()):
+                per[detail] = per.get(detail, 0) + 1
+    if per:
+        add("Corners", "pass", "; ".join("%d corner end(s), %s" % (n, {
             "mitre": "mitred: the whole buildup wraps on the bisector plane",
             "lap": "master-lap: one board masters the corner and the other butts behind it, joint gap exposed",
-            "butt": "square: both boards stop at the wall corner"}[detail]))
+            "butt": "square: both boards stop at the wall corner"}[d]) for d, n in sorted(per.items())))
     bad = sum(i.get("unsupported_joints", 0) for i in infos)
     if bad:
         add("End joints", "warn", "%d board end joints fall between battens — shorten max length or adjust centres" % bad, bad)

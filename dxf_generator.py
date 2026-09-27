@@ -167,9 +167,10 @@ def _schedule(p, info, meshes):
                      "openings, so panel edges land on the jambs" if info.get("set_out_from_openings")
                      else "is centred on the elevation"))
     if p["cladding_type"] == "panel":
-        lines.append("Panels: %d pieces (%d full %.0fx%.0f) in %d courses, joint gap %.0f" % (
-            counts.get("panel", 0), info.get("n_full", 0), p["panel_w"], p["panel_h"],
-            info.get("n_courses", 0), p["panel_gap"]))
+        rows = info.get("rows") or []
+        lines.append("Panels: %d pieces in %d rows, joint gap %.0f. Rows bottom up: %s (top row is the "
+                     "closing cut); every row is dimensioned on the right." % (
+                         counts.get("panel", 0), len(rows), p["panel_gap"], ", ".join("%.0f" % h for h in rows)))
     else:
         lines.append("Planks: %d pieces %.0fx%.0f, %d courses @ %.0f cover (%s)" % (
             counts.get("plank", 0), p["plank_w"], p["plank_t"], info.get("n_courses", 0), info.get("cover", 0),
@@ -179,10 +180,12 @@ def _schedule(p, info, meshes):
     corner = info.get("corner") or {}
     ends = [(side, corner.get(side) or (0.0, 0.0)) for side in ("left", "right")]
     if any(any(v) for _s, v in ends):
-        detail = {"mitre": "mitred", "lap": "master-lap, open joint"}.get(corner.get("detail"), corner.get("detail"))
-        lines.append("Corners (%s): %s. Boards are drawn to their outer face, which is the cut length." % (
-            detail, ", ".join("%s end %s %.0fmm at the cladding face" % (
-                side, "wraps" if (k + ext) > 0 else "is cut back", abs(k * buildup_depth(p) + ext))
+        names = {"mitre": "mitred", "lap": "master-lap, open joint", "butt": "square"}
+        details = dict(zip(("left", "right"), corner.get("details") or (corner.get("detail"),) * 2))
+        lines.append("Corners: %s. Boards are drawn to their outer face, which is the cut length." % (
+            ", ".join("%s end %s, %s %.0fmm at the cladding face" % (
+                side, names.get(details[side], details[side]), "wraps" if (k + ext) > 0 else "is cut back",
+                abs(k * buildup_depth(p) + ext))
                 for side, (k, ext) in ends if k or ext)))
     return lines
 

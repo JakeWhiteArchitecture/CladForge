@@ -157,7 +157,7 @@
     </div>
 
     <div class="viewport" id="viewport">
-        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall face to pick</div>
+        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall face to pick · E: 2D elevation</div>
         <div class="legend">
             <label><input type="checkbox" checked onchange="setLayerVisible('sheathing', this.checked)"><i style="background:#d9c9a3"></i> Sheathing</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('insulation', this.checked)"><i style="background:#e8d86a"></i> Insulation</label>
@@ -177,7 +177,12 @@
             <div><span class="dim-label">Boards:</span> <span class="dim-value" id="dim-boards">--</span></div>
         </div>
         <div class="status-chip busy" id="status-chip">Loading…</div>
-        <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
+        <div class="dim2d-layer" id="dim2d-layer"></div>
+        <div class="dim2d-editor" id="dim2d-editor" style="display:none"></div>
+        <div class="view-actions">
+            <button id="view-2d" onclick="toggle2D()" disabled title="Look at the active elevation flat and square-on (E)">2D elevation</button>
+            <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
+        </div>
         <div class="edit-widget" id="level-picker" style="display:none">
             <div class="edit-head"><span id="level-title">Click a point for the TOP of the cladding</span>
                 <span class="wiz-step" id="level-step">Level 1 of 2</span></div>
@@ -188,7 +193,8 @@
         </div>
         <div class="edit-widget" id="edit-widget" style="display:none">
             <div class="edit-head"><span id="edit-title">Chain 1</span>
-                <button class="mini" onclick="closeEditWidget()" title="Close (Esc)">✕</button></div>
+                <span><button class="mini" id="edit-2d" onclick="toggle2D()">2D elevation</button>
+                <button class="mini" onclick="closeEditWidget()" title="Close (Esc)">✕</button></span></div>
             <div class="slider-row">
                 <button class="mini" onclick="nudgeOffset(-5)" title="Shift left 5 mm">◀</button>
                 <input type="range" id="edit-offset" min="-300" max="300" step="5" value="0" oninput="onEditSlide(this.value)">
@@ -243,8 +249,10 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/web-ifc@0.0.77/web-ifc-api-iife.js" crossorigin="anonymous"></script>
     <script src="static/viewer.js"></script>
+    <script src="static/view2d.js"></script>
     <script src="static/app.js"></script>
     <script src="static/wizard.js"></script>
+    <script src="static/dims2d.js"></script>
     <script>initApp();</script>
 </body>
 </html>
