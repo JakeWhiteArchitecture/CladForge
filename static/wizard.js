@@ -275,8 +275,19 @@ function rowsDrawn(e) {
     return (info && info.rows) || [];
 }
 
-function withRow(e, j, h) {
-    const rows = (e.panelRows || []).slice(), drawn = rowsDrawn(e);
+// A row edit on e locks the chain's datum there if nothing has yet (lockDatum). If this
+// edit is the one that locks it, the list restarts at e's base, so the row clicked (list
+// row j from the old datum) becomes the row at the same place on e: the p-th row drawn on
+// e is list row p. Before the lock nothing was typed, so every row was the panel height.
+function lockForRow(e, j) {
+    if (!lockDatum(e)) return { j, drawn: rowsDrawn(e) };
+    const info = ((window._lastPreview || {}).info || []).find(i => i.elevation === e.result.name);
+    const p = info && info.row_index ? info.row_index.indexOf(j) : -1;
+    return { j: p < 0 ? j : p, drawn: [] };
+}
+
+function withRow(e, j, h, drawn = rowsDrawn(e)) {
+    const rows = (e.panelRows || []).slice();
     const fallback = parseFloat(document.getElementById('panel_h').value) || 2400;
     for (let k = rows.length; k < j; k++) rows.push(drawn[k] || fallback);
     rows[j] = h;
@@ -293,10 +304,10 @@ function applyCourse(scope) {
     const e = COURSE.elev, dim = COURSE.dim;
     if (!e || !dim || !isFinite(v) || v <= 0) return closeCourseDialog();
     const targets = scope === 'chain' ? e.chain.members : [e];
-    if (dim.kind === 'row') {
-        const rows = withRow(e, dim.row, v);
+    if (dim.kind === 'row') {     // the 3D dialog types a row or course height too: both lock
+        const r = lockForRow(e, dim.row), rows = withRow(e, r.j, v, r.drawn);
         targets.forEach(m => { m.panelRows = rows.slice(); });
-    } else targets.forEach(m => { m.cover = v; });
+    } else { lockDatum(e); targets.forEach(m => { m.cover = v; }); }
     closeCourseDialog();
     setStatus(`${dim.kind === 'row' ? 'Row ' + (dim.row + 1) : 'Course'} height ${Math.round(v)} mm on ${scope === 'chain' ? e.chain.name : e.name}`, 'ready');
     renderElevationList();

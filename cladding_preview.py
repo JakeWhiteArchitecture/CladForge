@@ -28,6 +28,7 @@ def _build_all(p):
     for elev in live:
         if elev.get("chain") in datums:
             elev["course_datum_z"] = datums[elev["chain"]]
+            elev["course_datum_locked"] = elev["chain"] in chosen
     for elev in live:
         m, d, i = build_elevation(p, elev, layout.get(elev.get("name")))
         meshes, dims = meshes + m, dims + d

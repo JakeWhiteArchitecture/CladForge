@@ -35,19 +35,29 @@ function deleteElevation() {
     closeEditWidget();
     const e = state.elevations.splice(state.active, 1)[0];
     e.highlights.forEach(h => highlightGroup.remove(h));
+    if (e.chain.datumFrom === e) e.chain.datumFrom = null;     // back to the lowest start
     e.chain.members = e.chain.members.filter(m => m !== e);
     if (!e.chain.members.length) state.chains = state.chains.filter(c => c !== e.chain);
     else relinkChain(e.chain);
     setActive(Math.min(state.active, state.elevations.length - 1));
 }
 
+// The chain's course datum locks to the elevation where its first custom vertical input
+// is made — a typed row or course height, a split or a merge — and later edits on other
+// faces leave it there. Until then the engine falls back to the lowest start in the chain.
+function lockDatum(e) {
+    if (!e || !e.chain || e.chain.datumFrom) return false;
+    e.chain.datumFrom = e;
+    return true;
+}
+
 function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' · ' + e.name : e.name; }
 
 function setActive(i) {
     state.active = i;
-    // Courses round a built chain are set out from the base of the elevation last clicked.
+    // Selecting never moves the chain's course datum: that locks on the first row or
+    // course edit (lockDatum), so choosing a face with a different base moves nothing.
     const picked = state.elevations[i];
-    if (picked && picked.chain.built && picked.result && picked.result.ok) picked.chain.datumFrom = picked;
     // Flat on an elevation, choosing another swings the view across to it.
     if (in2D() && picked && picked.result && picked.result.ok) enter2D(picked.result.name, picked.result.frame, cladBox(picked));
     renderElevationList();
@@ -346,8 +356,6 @@ function openEditWidget(e) {
     state.editing = e;
     document.getElementById('edit-widget').style.display = '';
     document.getElementById('edit-title').textContent = chainLabel(e);
-    document.getElementById('edit-datum').textContent = e.chain.members.length > 1
-        ? 'Courses round ' + e.chain.name + ' now start from the base of ' + e.name + '.' : '';
     updateSliderRange();
     setStatus('Editing ' + chainLabel(e) + ' — shift this elevation\'s setting-out', 'ready');
 }

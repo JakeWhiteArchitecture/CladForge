@@ -575,22 +575,60 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     });
     console.log('offset scope:', JSON.stringify(offsetScope));
 
-    // Clicking a member of a built chain makes its base the chain's course datum.
+    // The course datum locks on the first row edit in a chain and never moves on a select.
+    // B and C share a chain; give B a splash zone at its foot so it starts 150 higher than
+    // C, type a row on B, then select C and B again: no row on either face may move.
+    await page.click('#cladding-type .turn-btn[data-value="panel"]');
+    await page.waitForTimeout(1500);
     const datum = await page.evaluate(async () => {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
         const b = state.elevations.find(e => e.chain.members.length > 1);
         const c = b.chain.members.find(m => m !== b);
-        const sent = () => [...new Set(getParams().elevations.filter(r => r.chain === b.chain.name)
-                                                             .map(r => r.course_datum_from))].join(',');
-        setActive(state.elevations.indexOf(c)); openEditWidget(c);
+        const saved = [b.disabled['base|0|0'], c.disabled['base|0|0']];
+        b.disabled['base|0|0'] = false; c.disabled['base|0|0'] = true;
+        b.chain.datumFrom = null;
+        b.chain.members.forEach(m => { m.panelRows = null; m.cover = null; });
+        const rows = () => b.chain.members.map(m => {
+            const z0 = m.result.frame.origin[2];
+            return m.name.replace('Elevation ', '') + ':' + [...new Set(window._lastPreview.geometry
+                .filter(g => g.ifc_type === 'panel' && g.elevation === m.result.name)
+                .map(g => Math.round(Math.min(...g.profile.map(q => q[1])) + z0)))].sort((x, y) => x - y).join('/');
+        }).join(' ');
+        setActive(state.elevations.indexOf(b)); await updatePreview();
+        const fallback = rows();
+        setActive(state.elevations.indexOf(c)); await updatePreview();
+        const unlockedSelect = rows();
+        setActive(state.elevations.indexOf(b)); await updatePreview();
+        const row = window._lastPreview.dimensions.find(d => d.kind === 'row' && d.elevation === b.result.name);
+        if (!row) return { error: 'no row dimension on ' + b.name, type: toggleValue('cladding-type'), fallback,
+                           dims: window._lastPreview.dimensions.filter(d => d.elevation === b.result.name).map(d => d.label + ':' + (d.kind || '-')),
+                           info: window._lastPreview.info.map(i => `${i.elevation}:${(i.rows || []).join('/')}`) };
+        applyDim(row, 700, 'chain');
+        await wait(1500);
+        const typed = rows(), locked = b.chain.datumFrom && b.chain.datumFrom.name;
+        setActive(state.elevations.indexOf(c)); await updatePreview();
+        const selectC = rows();
+        setActive(state.elevations.indexOf(b)); await updatePreview();
+        const selectB = rows();
+        // a later edit on C changes C's rows but leaves the datum on B
+        applyDim(window._lastPreview.dimensions.find(d => d.kind === 'row' && d.elevation === c.result.name) ||
+                 { kind: 'course', value: 0, elevation: c.result.name }, 650, 'one');
+        await wait(1500);
+        const stillB = b.chain.datumFrom && b.chain.datumFrom.name;
+        const hint = !!document.getElementById('edit-datum');
+        b.chain.members.forEach(m => { m.panelRows = null; });
+        b.chain.datumFrom = null;
+        [b.disabled['base|0|0'], c.disabled['base|0|0']] = saved;
         await updatePreview();
-        const afterC = sent(), note = document.getElementById('edit-datum').textContent;
-        setActive(state.elevations.indexOf(b)); closeEditWidget();
-        await updatePreview();
-        return { b: b.name, c: c.name, afterC, afterB: sent(), note };
+        return { b: b.name, fallback, unlockedSelect, typed, locked, selectC, selectB, stillB, hint,
+                 bRows: (window._lastPreview.info.find(i => i.elevation === b.result.name) || {}).rows };
     });
     console.log('course datum:', JSON.stringify(datum));
-    if (datum.afterC !== datum.c || datum.afterB !== datum.b || !datum.note.includes(datum.c))
-        throw new Error('clicking an elevation did not move the chain datum: ' + JSON.stringify(datum));
+    if (datum.unlockedSelect !== datum.fallback || datum.selectC !== datum.typed || datum.selectB !== datum.typed
+        || datum.locked !== datum.b || datum.stillB !== datum.b || datum.hint || datum.typed === datum.fallback)
+        throw new Error('selecting an elevation moved the rows, or the datum did not lock: ' + JSON.stringify(datum));
+    await page.click('#cladding-type .turn-btn[data-value="plank"]');
+    await page.waitForTimeout(1200);
 
     // The level picker's dot: red on a surface, green when it snaps to a corner.
     await page.evaluate(() => frameElevation(state.elevations[0].result));

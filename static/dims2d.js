@@ -164,9 +164,13 @@ function applyDim(d, v, scope) {
     if (!e) return;
     const members = scope === 'chain' ? e.chain.members.filter(m => m.result && m.result.ok) : [e];
     const z0 = e.result.frame.origin[2];
-    switch (d.kind) {
-        case 'row': { const rows = withRow(e, d.row, v); members.forEach(m => { m.panelRows = rows.slice(); }); break; }
-        case 'course': members.forEach(m => { m.cover = v; }); break;
+    switch (d.kind) {      // a row or course height is a vertical input: it locks the datum
+        case 'row': {
+            const r = lockForRow(e, d.row), rows = withRow(e, r.j, v, r.drawn);
+            members.forEach(m => { m.panelRows = rows.slice(); });
+            break;
+        }
+        case 'course': lockDatum(e); members.forEach(m => { m.cover = v; }); break;
         case 'cut_left': {
             // The left cut moves one for one with the offset (against it on a reversed
             // face), so the offset that gives the typed cut is found directly, then
@@ -194,8 +198,8 @@ function splitRow(e, j) {
     const gap = parseFloat(document.getElementById('panel_gap').value) || 0;
     const h = rowsDrawn(e)[j];
     if (!h) return;
-    const rows = withRow(e, j, h), half = Math.max(1, (h - gap) / 2);
-    rows.splice(j, 1, half, half);
+    const r = lockForRow(e, j), rows = withRow(e, r.j, h, r.drawn), half = Math.max(1, (h - gap) / 2);
+    rows.splice(r.j, 1, half, half);
     d2SetRows(e, rows);
 }
 
@@ -204,12 +208,12 @@ function mergeRow(e, j) {
     const gap = parseFloat(document.getElementById('panel_gap').value) || 0;
     const drawn = rowsDrawn(e);
     if (j + 1 >= drawn.length) { setStatus('That is the top row: there is no row above to merge with', 'busy'); return; }
-    const rows = withRow(e, j + 1, drawn[j + 1]);
-    rows.splice(j, 2, drawn[j] + gap + drawn[j + 1]);
+    const r = lockForRow(e, j), rows = withRow(e, r.j + 1, drawn[j + 1], r.drawn);
+    rows.splice(r.j, 2, drawn[j] + gap + drawn[j + 1]);
     d2SetRows(e, rows);
 }
 
-function d2SetRows(e, rows) {
+function d2SetRows(e, rows) {      // Split row and Merge row come through here, locked already
     const multi = e.chain.members.filter(m => m.result && m.result.ok).length > 1;
     const members = D2.scope === 'chain' && multi ? e.chain.members.filter(m => m.result && m.result.ok) : [e];
     members.forEach(m => { m.panelRows = rows.slice(); });

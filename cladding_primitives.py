@@ -42,6 +42,12 @@ def stacked_positions(start, end, pitch):
 ROW_MIN, ROW_MAX = 150.0, 3000.0     # mm – a listed panel row; short rows are deliberate tiers
 
 
+def row_height(heights, i, default_h):
+    """Height of list row *i*: as listed, held to ROW_MIN–ROW_MAX, or *default_h* past the list."""
+    heights = [float(h) for h in (heights or []) if h]
+    return min(ROW_MAX, max(ROW_MIN, heights[i])) if i < len(heights) else float(default_h)
+
+
 def panel_rows(heights, default_h, gap, start, end, base=None):
     """Panel rows up a face as [(v, h, index, full h)], bottom first, and the indices of
     rows asked for below ROW_MIN.
@@ -61,12 +67,9 @@ def panel_rows(heights, default_h, gap, start, end, base=None):
     seq, short = [], []
     v, i = float(start), 0
     while v < end - 1e-6:
-        if i < len(heights):
-            if heights[i] < ROW_MIN:
-                short.append(i)
-            h = min(ROW_MAX, max(ROW_MIN, heights[i]))
-        else:
-            h = default_h
+        if i < len(heights) and heights[i] < ROW_MIN:
+            short.append(i)
+        h = row_height(heights, i, default_h)
         seq.append((v, h, i))
         v, i = v + h + gap, i + 1
     v = float(start)

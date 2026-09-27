@@ -14,7 +14,7 @@ from cladding_constants import frame_to_world
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
                                  base_level, corner_ends, openings, buildup_depth, clip_bounds,
-                                 clip_bounds_v, panel_rows)
+                                 clip_bounds_v, panel_rows, row_height)
 
 
 def build_elevation(p, elev, layout=None):
@@ -339,8 +339,11 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     fulls = [pn for pn in panels if pn[2]]
     widths = sorted({round(e - s, 1) for s, e, _f in panels})
     info.update(n_courses=len(rows), cover=p["panel_w"] + gap, batten_centres=p["batten_centres"],
-                # by list index, full height (the closing row as cut): what an edit pads with
-                rows=[round(h if k == len(rows) - 1 else f, 1) for k, (_v, h, i, f) in enumerate(rows) if i is not None],
+                # By list index from the datum, full height (the closing row as cut): what an
+                # edit pads with. A row wholly under this face's base still holds its place.
+                rows=_row_list(elev, p, rows),
+                # and which list row each drawn row is, bottom up (None under the datum)
+                row_index=[i for _v, _h, i, _f in rows],
                 short_rows=short,
                 closing_cut_left=(fulls[0][0] if fulls else W), closing_cut_right=(W - fulls[-1][1]) if fulls else 0.0,
                 closing_cut_top=rows[-1][1] if rows else 0.0, n_full=len(fulls) * len(rows),
@@ -362,15 +365,27 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
                          "opening", o[1] - o[0], lock=LOCK_OPENING))
     # One dimension per row up the right-hand side, each naming the row it edits; the
     # top row is the closing cut, which is whatever is left, so it is read-only.
-    # A row cut at the base, or one under the chain's datum, is read-only here: it is set
-    # on the face the datum comes from.
+    # Once the chain's datum is locked, a row cut at the base or under the datum is read-only
+    # here: it is set on the face the datum comes from. Until then a cut bottom row can be
+    # typed over, since that first edit is what locks the datum to this face's base.
+    open_datum = not elev.get("course_datum_locked")
     for j, (v, h, i, full) in enumerate(rows):
-        if j < len(rows) - 1 and i is not None and h >= full - 0.5:
+        if j < len(rows) - 1 and i is not None and (h >= full - 0.5 or open_datum):
             dims.append(_dim(name, [W, v], [W, v + h], "R%d %.0f" % (i + 1, h), 300, [1, 0], "row", h, row=i))
         else:
             dims.append(_dim(name, [W, v], [W, v + h], ("Cut %.0f" if h < full - 0.5 or j == len(rows) - 1 else "%.0f") % h,
                              300, [1, 0]))
     return face
+
+
+def _row_list(elev, p, rows):
+    idxs = [i for _v, _h, i, _f in rows if i is not None]
+    if not idxs:
+        return []
+    out = [round(row_height(elev.get("panel_rows"), k, p["panel_h"]), 1) for k in range(max(idxs) + 1)]
+    if rows[-1][2] is not None:
+        out[rows[-1][2]] = round(rows[-1][1], 1)            # the closing row, as cut
+    return out
 
 
 def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board):
