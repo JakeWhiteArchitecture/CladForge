@@ -184,3 +184,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .dim2d-editor .d2-scope .turn-btn { flex: 1; padding: 4px 6px; font-size: 11px; }
 .dim2d-editor .d2-hint { width: 100%; font-size: 10px; color: var(--hint); }
 .dim2d-editor select { font-size: 11px; background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+
+/* Edge settings: one colour per kind of edge, as drawn in the 2D view. */
+.edge-row { display: flex; gap: 10px; }
+.edge-row .field { flex: 1; }
+.edge-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.edge2d-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.edge2d-svg line { stroke-width: 4; stroke-linecap: round; pointer-events: stroke; cursor: pointer; opacity: 0.9; }
+.edge2d-svg line:hover { stroke-width: 7; opacity: 1; }

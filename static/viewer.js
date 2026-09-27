@@ -478,11 +478,15 @@ function highlightFaces(mesh, faceIndices, color = PICK_COLOR) {
 }
 
 // ─── PRISM RENDERING ───
+// IFC (x, y, z) Z-up → Three.js (x, z, -y) Y-up.
+function v3(a) { return new THREE.Vector3(a[0], a[2] || 0, -a[1]); }
+
 function frameMatrix(frame, depth) {
-    const u = new THREE.Vector3(frame.u[0], 0, -frame.u[1]);
-    const n = new THREE.Vector3(frame.n[0], 0, -frame.n[1]);
-    const o = new THREE.Vector3(frame.origin[0], frame.origin[2], -frame.origin[1]).addScaledVector(n, depth || 0);
-    return new THREE.Matrix4().makeBasis(u, new THREE.Vector3(0, 1, 0), n).setPosition(o);
+    // Basis from the frame's own u, v, n: a wall stands (v is world Z, the default for old
+    // data), a roof lies flat (n is world Z), a trim runs along an edge (n along it).
+    const u = v3(frame.u), n = v3(frame.n), v = v3(frame.v || [0, 0, 1]);
+    const o = v3(frame.origin).addScaledVector(n, depth || 0);
+    return new THREE.Matrix4().makeBasis(u, v, n).setPosition(o);
 }
 
 function shapeFromRings(profile, holes) {
@@ -511,6 +515,38 @@ function applyCorner(geo, m, tol = 0.6) {
     geo.computeVertexNormals();
 }
 
+// A prism whose ring vertices each carry a shift with depth: a board mitred to a window
+// or door lining (m.vshift, one [a, b, c, d] per ring vertex: u += a + b·s, v += c + d·s).
+// ExtrudeGeometry cannot say which of its vertices is which ring vertex, and a mitre that
+// steps at the end of an opening doubles a vertex, so the caps and sides are built from
+// the rings here. Local z runs 0..thickness along the normal, as ExtrudeGeometry's does.
+function prismGeometry(m) {
+    const rings = [m.profile].concat(m.holes || []), t = m.thickness, pos = [], idx = [];
+    const at = (k, i, z) => {
+        const q = rings[k][i], sh = (m.vshift[k] || [])[i] || [0, 0, 0, 0], s = m.depth + z;
+        return [q[0] + sh[0] + sh[1] * s, q[1] + sh[2] + sh[3] * s, z];
+    };
+    const tris = THREE.ShapeUtils.triangulateShape(rings[0].map(q => new THREE.Vector2(q[0], q[1])),
+                                                   rings.slice(1).map(r => r.map(q => new THREE.Vector2(q[0], q[1]))));
+    const flat = [];
+    rings.forEach((r, k) => r.forEach((_q, i) => flat.push([k, i])));
+    for (const z of [0, t]) {                         // the two caps, triangulated flat
+        const base = pos.length / 3;
+        flat.forEach(([k, i]) => pos.push(...at(k, i, z)));
+        tris.forEach(f => idx.push(base + f[0], base + (z ? f[1] : f[2]), base + (z ? f[2] : f[1])));
+    }
+    rings.forEach((r, k) => r.forEach((_q, i) => {    // one quad per ring edge
+        const j = (i + 1) % r.length, b = pos.length / 3;
+        pos.push(...at(k, i, 0), ...at(k, j, 0), ...at(k, j, t), ...at(k, i, t));
+        idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    }));
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    return geo;
+}
+
 function highlightCorner(frame, u, height) {
     // Flash the corner edge so a row in the panel points at something in the model.
     clearGroup(cornerGroup);
@@ -532,7 +568,7 @@ function renderGeometry(meshes) {
         const layer = _layerOf[m.ifc_type] || 'cladding';
         if (!byLayer[layer]) { byLayer[layer] = new THREE.Group(); byLayer[layer].name = layer; cladGroup.add(byLayer[layer]); }
         let geo;
-        try { geo = new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false }); }
+        try { geo = m.vshift ? prismGeometry(m) : new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false }); }
         catch (e) { continue; }
         applyCorner(geo, m);
         const mat = new THREE.MeshPhongMaterial({ color: new THREE.Color(m.color), flatShading: true, transparent: m.opacity < 1,

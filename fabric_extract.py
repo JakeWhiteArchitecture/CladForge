@@ -79,9 +79,18 @@ def _dedupe(tris, quant=10.0):
 
 # ── plane and frame ───────────────────────────────────────────────────────
 
-def fit_plane(faces, outward=None):
-    """Area-weighted plane through the picked triangles.
-    Returns (n, d, warnings) with n horizontal and pointing outward, n·p = d on the plane."""
+ROOF_TOL = math.cos(math.radians(5.0))   # a roof face's normal is within 5 deg of world Z
+
+
+def fit_plane(faces, outward=None, mode="wall"):
+    """Area-weighted plane through the picked triangles. Returns (n, d, warnings) with
+    n·p = d on the plane.
+
+    "wall" flattens n to horizontal, pointing outward, and rejects a horizontal pick.
+    "roof" needs n within 5 deg of vertical and facing up, and snaps it to world Z, so
+    the roof datum is a level plane at the picked face's mean height."""
+    if mode == "roof":
+        return _fit_roof_plane(faces, outward)
     warnings = []
     acc = [0.0, 0.0, 0.0]
     ref = None
@@ -109,15 +118,52 @@ def fit_plane(faces, outward=None):
     return n, (dsum / tot if tot else 0.0), warnings
 
 
-def make_frame(n, d, umin, vmin):
-    """Frame dict: origin at local (0, 0), u along the wall (viewer's right), n outward."""
+def _fit_roof_plane(faces, outward=None):
+    acc = [0.0, 0.0, 0.0]
+    for a, b, c in faces:
+        n = _cross(_sub(b, a), _sub(c, a))      # length = 2 x area
+        if n[2] < 0:
+            n = (-n[0], -n[1], -n[2])            # inverted twin — flip to face up
+        acc[0] += n[0]; acc[1] += n[1]; acc[2] += n[2]
+    n = _norm(acc)
+    if outward and outward[2] < 0:
+        return None, 0.0, ["That face points down — pick the top of the roof structure"]
+    if n[2] < ROOF_TOL:
+        return None, 0.0, ["Face is %.1f deg off level — pick the top of the roof structure (a level face)"
+                           % math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))]
+    warnings = []
+    if n[2] < math.cos(math.radians(0.5)):
+        warnings.append("Face is %.1f deg off level; treated as level" % math.degrees(math.acos(n[2])))
+    tot, zsum = 0.0, 0.0
+    for a, b, c in faces:
+        cr = _cross(_sub(b, a), _sub(c, a))
+        area = math.sqrt(_dot(cr, cr)) / 2
+        zsum += (a[2] + b[2] + c[2]) / 3 * area
+        tot += area
+    return (0.0, 0.0, 1.0), (zsum / tot if tot else 0.0), warnings
+
+
+def make_frame(n, d, umin, vmin, mode="wall", u=None):
+    """Frame dict {"origin", "u", "v", "n"} with origin at local (0, 0) and v = n × u.
+    "wall": u along the wall (viewer's right), n outward, v is world Z.
+    "roof": n is world Z, u the given horizontal axis (FallWright's roof_axis), v = n × u."""
+    if mode == "roof":
+        u = u or (1.0, 0.0, 0.0)
+        v = (-u[1], u[0], 0.0)                   # z × u
+        origin = (u[0] * umin + v[0] * vmin, u[1] * umin + v[1] * vmin, d)
+        return {"origin": [round(c, 3) for c in origin], "u": [round(c, 9) for c in u],
+                "v": [round(c, 9) for c in v], "n": [0.0, 0.0, 1.0]}
     u = (-n[1], n[0], 0.0)                       # z × n
     origin = (n[0] * d + u[0] * umin, n[1] * d + u[1] * umin, vmin)
     return {"origin": [round(c, 3) for c in origin], "u": [round(c, 6) for c in u],
-            "n": [round(c, 6) for c in n]}
+            "v": [0.0, 0.0, 1.0], "n": [round(c, 6) for c in n]}
 
 
-def _to_local(p, n, u):
+def _to_local(p, n, u, mode="wall"):
+    """World point → (u, v) in the frame's plane: up the wall is world Z, across a roof it
+    is n × u."""
+    if mode == "roof":
+        return (_dot(p, u), -p[0] * u[1] + p[1] * u[0])
     return (_dot(p, u), p[2])
 
 
@@ -144,8 +190,8 @@ def _union_faces(faces, n, u):
         return unary_union([pg.buffer(0) for pg in polys])
 
 
-def _section(tris, n, d, u):
-    """Intersection of an element with the wall plane, in local (u, v).
+def _section(tris, n, d, u, mode="wall"):
+    """Intersection of an element with the face plane, in local (u, v).
 
     Returns (straddles, touches, section polygon or None, points). The polygon is
     assembled from the plane-crossing segments plus any triangles lying in the
@@ -155,16 +201,16 @@ def _section(tris, n, d, u):
         s = [_dot(v, n) - d for v in tri]
         smin, smax = min(smin, *s), max(smax, *s)
         if all(abs(x) <= PLANE_TOL for x in s):
-            inplane.append(Polygon([_to_local(v, n, u) for v in tri]))
+            inplane.append(Polygon([_to_local(v, n, u, mode) for v in tri]))
         cut = []
         for i in range(3):
             a, b = tri[i], tri[(i + 1) % 3]
             sa, sb = s[i], s[(i + 1) % 3]
             if abs(sa) <= PLANE_TOL:
-                pts.append(_to_local(a, n, u))
+                pts.append(_to_local(a, n, u, mode))
             if (sa < -PLANE_TOL and sb > PLANE_TOL) or (sa > PLANE_TOL and sb < -PLANE_TOL):
                 t = sa / (sa - sb)
-                q = _to_local((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t), n, u)
+                q = _to_local((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t), n, u, mode)
                 pts.append(q)
                 cut.append(q)
         if len(cut) == 2 and cut[0] != cut[1]:

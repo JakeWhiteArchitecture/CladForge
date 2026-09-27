@@ -11,6 +11,7 @@ import math
 from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN
 from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
+from cladding_edges import classify_edges, mitre_pullback, offset_region, settings as edge_settings
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
                                  base_level, corner_ends, openings, buildup_depth, clip_bounds,
@@ -64,7 +65,9 @@ def build_elevation(p, elev, layout=None):
     info["clad_top"] = H                  # "height" stays the face, as "width" does
     bw, bd = p["batten_w"], p["batten_d"]
 
-    region = clip_region(elev, p["splash"])
+    outline = clip_region(elev, p["splash"])
+    # Runs are set out on the area the boards are trimmed to: stood back from the edges.
+    region = offset_region(elev, outline)
     layers = depth                       # depth of the face the cavity starts from
     if p["cladding_type"] == "panel":
         depth = _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset)
@@ -84,6 +87,16 @@ def build_elevation(p, elev, layout=None):
     left, right, (d_left, d_right) = corner_ends(elev, p)
     _apply_corner(meshes, {lo: left}, d_left, skip=("reveal", "closer"))
     _apply_corner(meshes, {hi: right}, d_right, skip=("reveal", "closer"))
+    # A mitre leaves the chain's mitre gap between the two boards, straight across the
+    # joint: each board's end is pulled back half of it. The layers behind still meet.
+    gap = edge_settings(elev)["gap"]
+    for u_end, (k, _ext), detail, side in ((lo, left, d_left, "l"), (hi, right, d_right, "r")):
+        if detail != "mitre" or not k or gap <= 0:
+            continue
+        for m in meshes:
+            c = m.get("corner") or {}
+            if m["ifc_type"] in ("panel", "plank") and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
+                m["corner"] = dict(c, **{"ext_" + side: c.get("ext_" + side, 0.0) - mitre_pullback(gap, k)})
     k_run = (elev.get("corner_lo"), elev.get("corner_hi"))          # run order, like the details
     k_left, k_right = k_run[::-1] if elev.get("chain_reversed") else k_run
     used = {d for d, k in ((d_left, k_left), (d_right, k_right)) if k}
@@ -98,6 +111,7 @@ def build_elevation(p, elev, layout=None):
                          "splash" if splash else "level_base", p["splash"] if splash else v0))
     dims.append(_dim(name, [0, 0], [0, H], "Top %.0f" % H, 900, [-1, 0], "level_top", H))
     info["total_depth"] = depth
+    info["edges"] = classify_edges(elev, outline)     # coloured in the 2D view
     info["n_boards"] = sum(1 for m in meshes if m["ifc_type"] in ("plank", "panel"))
     return meshes, dims, info
 
@@ -390,12 +404,18 @@ def _row_list(elev, p, rows):
 
 def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board):
     """Solid timber cavity closers at both vertical sides of every opening, and the
-    reveal linings, which the face board is always mitred to whatever the corner
-    detail is. Heads and sills are not lined: a frame whose v is world Z cannot
-    describe a surface that faces up or down."""
+    reveal linings: one up each jamb and one under the head. The face boards are mitred
+    to them whatever the corner detail is (cladding_edges.mitre_to_linings, after
+    trimming), with the chain's mitre gap in each joint. Sills are not lined."""
     name, frame = elev["name"], elev["frame"]
     cw = p["closer_w"]
-    jamb_cut = (-1.0, face)                    # bisector of the arris at the reveal
+    s = edge_settings(elev)
+    pull = mitre_pullback(s["gap"], 1.0)
+    # Vented at the back, the head lining drops by the air space and stops the same
+    # distance short of the window frame (taken as the wall face), so air runs over it
+    # and out at the frame. Vented at the front it is tight to the head and the open
+    # mitre joint at the front edge is the vent.
+    air = s["air"] if s["vent"] == "back" else 0.0
     for i, (u0, u1, v0, v1) in enumerate(holes):
         for side, u in ((-1.0, u0), (1.0, u1)):
             # The closer sits in the wall side of the jamb and fills the cavity.
@@ -407,13 +427,24 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
             lining = _prism(_rect(0.0, v0, face, v1), 0.0, board,
                             _reveal_frame(frame, u, face, -side), "reveal",
                             "%s Reveal %d%s" % (name, i + 1, "L" if side < 0 else "R"), name)
-            lining["corner"] = {"k_l": -1.0, "ext_l": 0.0, "u_l": 0.0}
+            lining["corner"] = {"k_l": -1.0, "ext_l": -pull, "u_l": 0.0}
             meshes.append(lining)
-    if holes and p["reveals"]:
-        # The face panel is always mitred to the reveal lining, whatever detail the
-        # corners use. With no lining there is nothing to mitre to, so it stays square.
-        jambs = {u: jamb_cut for o in holes for u in (o[0], o[1])}
-        _apply_corner(meshes, jambs, "reveal", types=("panel", "plank"))
+        ua, ub = u0 + board, u1 - board                      # between the jamb linings
+        if p["reveals"] and ub - ua > 1.0:
+            head = _prism(_rect(0.0, 0.0, face - air, ub - ua), 0.0, board,
+                          _head_frame(frame, ua, v1 - air, face), "reveal", "%s Reveal %dH" % (name, i + 1), name)
+            head["corner"] = {"k_l": -1.0, "ext_l": -pull, "u_l": 0.0}
+            meshes.append(head)
+
+
+def _head_frame(frame, u_start, v_head, face_depth):
+    """Frame of a head lining, in the general frame: it lies flat under the head facing
+    down (n = -Z), u runs inward from the cladding face like a jamb lining's, and
+    v = n × u runs along the wall. The mitre at its front end is then the same end
+    shear as a jamb lining's."""
+    n, uw = frame["n"], frame["u"]
+    return {"origin": frame_to_world(frame, u_start, v_head, face_depth),
+            "u": [-n[0], -n[1], 0.0], "v": [uw[0], uw[1], 0.0], "n": [0.0, 0.0, -1.0]}
 
 
 def _reveal_frame(frame, u_jamb, face_depth, sign):

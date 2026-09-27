@@ -64,27 +64,37 @@ def test_cavity_closer_on_both_vertical_sides(elevation):
 
 
 def test_reveal_linings_are_mitred_to_the_face_panel(elevation):
+    """Both jambs and the head are lined, and every face board edge along them is mitred
+    to the lining, holes left by trimming included, with the mitre gap in the joint."""
+    import math
     p = _parse(_params(elevation))
     depth = buildup_depth(p)
-    out = generate_preview(_params(elevation))
+    pull = 10.0 / 2 * math.sqrt(2)                     # the default 10 mm gap, straight across
+    out = generate_preview(_params(elevation, trim=True))  # the head edge exists once trimmed
     reveals = [m for m in out["geometry"] if m["ifc_type"] == "reveal"]
-    assert len(reveals) == 2
+    assert len(reveals) == 3
     for m in reveals:
-        assert m["corner"]["k_l"] == -1.0 and m["corner"]["ext_l"] == 0.0
+        assert m["corner"]["k_l"] == -1.0 and abs(m["corner"]["ext_l"] + pull) < 1e-9
         assert abs(m["thickness"] - p["panel_t"]) < 1e-6
         # the lining runs from the cladding face back to the wall face
         assert [q[0] for q in m["profile"][:2]] == [0.0, depth]
-    # the face panels meeting the jambs are mitred to them, whatever the corner detail
-    face = [m for m in out["geometry"] if m["ifc_type"] == "panel" and m.get("corner")]
-    assert face, "no face panel mitred at the reveal"
-    for m in face:
-        for side in ("l", "r"):
-            if m["corner"].get("ext_" + side) is not None:
-                assert m["corner"]["k_" + side] == -1.0
-                assert abs(m["corner"]["ext_" + side] - depth) < 1e-6
+    # the face boards along the jambs and head carry the mitre on those vertices
+    shifted = [m for m in out["geometry"] if m["ifc_type"] == "panel" and m.get("vshift")]
+    assert shifted, "no face panel mitred at the reveal"
+    kinds = set()
+    for m in shifted:
+        for ring, shifts in zip([m["profile"]] + m["holes"], m["vshift"]):
+            for (u, v), (du, duk, dv, dvk) in zip(ring, shifts):
+                if duk:
+                    assert abs(abs(du) - (depth - pull)) < 1e-6 and abs(duk) == 1.0 and u in (2000.0, 3200.0)
+                    kinds.add("jamb")
+                if dvk:
+                    assert abs(dv + (depth - pull)) < 1e-6 and dvk == 1.0 and v == 2100.0
+                    kinds.add("head")
+    assert kinds == {"jamb", "head"}, kinds
     # with no lining there is nothing to mitre to, so the panel stays square
-    bare = generate_preview(_params(elevation, reveals=False))
-    assert not [m for m in bare["geometry"] if m["ifc_type"] in ("panel", "reveal") and m.get("corner")]
+    bare = generate_preview(_params(elevation, reveals=False, trim=True))
+    assert not [m for m in bare["geometry"] if m["ifc_type"] == "reveal" or m.get("vshift")]
 
 
 def test_reveal_lining_turns_into_the_opening(elevation):
@@ -116,7 +126,7 @@ def test_openings_export_as_their_own_ifc_types(elevation):
     closers = [e for n, e in names.items() if "Cavity Closer" in n]
     linings = [e for n, e in names.items() if "Reveal" in n]
     assert len(closers) == 2 and all(e.is_a("IfcMember") for e in closers)
-    assert len(linings) == 2 and all(e.is_a("IfcCovering") for e in linings)
+    assert len(linings) == 3 and all(e.is_a("IfcCovering") for e in linings)     # both jambs and the head
     assert {e.ObjectType for e in closers} == {"Cavity closer"}
     assert {e.ObjectType for e in linings} == {"Reveal lining"}
     assert ifc.by_type("IfcFacetedBrep"), "the mitred reveal and panel need explicit solids"
@@ -231,6 +241,8 @@ def test_top_and_bottom_levels_cut_the_cladding(elevation):
                              "cladding_type": "plank", "sheathing": True, "trim": True})
     assert band["geometry"] and len(band["geometry"]) < len(full["geometry"])
     for m in band["geometry"]:
+        if m["frame"].get("v", [0, 0, 1]) != [0, 0, 1]:
+            continue            # the head lining lies flat in its own frame; its v runs along the wall
         vs = [q[1] for q in m["profile"]]
         assert min(vs) >= 800.0 - 1.0 and max(vs) <= 2200.0 + 1.0, (m["ifc_type"], min(vs), max(vs))
     assert band["info"][0]["base_level"] >= 800.0

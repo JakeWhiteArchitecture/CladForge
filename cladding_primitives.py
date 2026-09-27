@@ -330,6 +330,20 @@ def corner_ring(ring, corner, s):
     return [(corner_shift(float(u), corner, s), float(v)) for u, v in ring]
 
 
+def ring_at(mesh, k, s):
+    """Ring *k* of a prism (0 the profile, then its holes) where it is *s* deep: the
+    chain-corner shear found by position, then the shift each vertex carries where the
+    board is mitred to a window or door lining ("vshift", one per ring vertex:
+    u += a + b·s, v += c + d·s). Shared by the IFC and DXF writers."""
+    rings = [mesh["profile"]] + list(mesh.get("holes") or [])
+    corner = mesh.get("corner")
+    pts = corner_ring(rings[k], corner, s) if corner else [(float(u), float(v)) for u, v in rings[k]]
+    shifts = mesh.get("vshift") or []
+    if k < len(shifts) and shifts[k]:
+        pts = [(u + a + b * s, v + c + d * s) for (u, v), (a, b, c, d) in zip(pts, shifts[k])]
+    return pts
+
+
 def clip_bounds(elev):
     """(lo, hi) in this elevation's u: the part of the face that is actually clad.
     A wall that runs past a corner is cut back to it, so nothing projects through."""

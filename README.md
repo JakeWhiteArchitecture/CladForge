@@ -151,7 +151,10 @@ default. Each is one place in the code, so any of them can be flipped.
 | Cavity closer | A solid timber closer goes to both vertical sides of every opening whatever the cladding is, the full height of the opening, filling the cavity from the sheathing or insulation face out to the back of the boards. In panel mode it also backs the board edge at the jamb, so no batten is placed there and it counts as support when spans are checked. Width is set in the Openings section. | `cladding_geometry._openings_extras` |
 | Corners trim the face | A wall face that runs past a corner is clad only up to it. Both faces are cut back to the corner line when they chain, so nothing projects through into the other face, and the chain run is measured on the clad part. | `cladding_primitives.clip_bounds`, `cladding_booleans.clip_elevation` |
 | Plank seams | A course is set out along the part of the face it actually crosses, found by intersecting the course band with the region, so a run broken by a gable, a splash zone or an opening is treated as separate runs. A run one board or shorter is a single piece with no seam; the staggered half-length start only applies where a run genuinely needs more than one board. | `cladding_booleans.strip_intervals`, `cladding_primitives.split_run` |
-| Reveals | The face board is always mitred to the reveal lining, whatever detail the corners use, cut on the bisector of the arris so the outer face stops at the opening edge and the back runs into the reveal by the board thickness. The lining runs from the cladding face back to the wall face in its own frame. Heads and sills are not lined: a frame whose v is world Z cannot describe a surface that faces up or down. With *Reveal linings* off there is nothing to mitre to, so the panel stays square. | `cladding_geometry._reveal_frame`, `_openings_extras` |
+| Reveals | Both jambs and the **head** are lined, and every face board edge that runs along a jamb or head is mitred to its lining, cut on the bisector of the arris so the outer face stops at the opening edge and the back runs into the reveal by the board thickness. That includes the edges of holes left where a board spanning the opening is trimmed round it, not only board ends that land on a jamb; along an edge that carries on past the opening the mitre steps at the opening's end rather than sloping. The mitre is recorded as a shift on each outline vertex (`vshift`) and read by the IFC writer, the DXF and the viewer. The jamb linings run from the cladding face back to the wall face in their own frames; the head lining lies flat under the head in a **general frame** (n facing down, u inward, v = n × u along the wall) and runs between the jamb linings. With *Reveal linings* off there is nothing to mitre to, so the boards stay square. Sills are not lined. | `cladding_edges.mitre_to_linings`, `cladding_geometry._openings_extras`, `_head_frame`, `cladding_primitives.ring_at` |
+| Edge offsets | Every boundary edge of the clad area is classified and drawn in its own colour in the 2D view: **orange** chain corners and window or door jambs, **purple** tops (sloped gables and roof lines too, and the top of the cladding under a cill), **green** free ends of a run, **blue** bottoms (and the top of a splash zone over a roof or slab), **red** window or door heads. An offset pulls the whole trimmable buildup (battens, counter-battens, noggins and boards; not sheathing or insulation) back from its edges: top 10, bottom 10 and free ends 0 by default; corners and jambs take none. It is applied as a strip taken off the trimming region along each edge, so it follows a sloped top, and plank runs are set out on the same reduced area. Values are **per chain**: click an edge in 2D to type one, or use the Edges section of the panel, which shows the active chain. A pipe penetration is not an opening and has no edges of its own. | `cladding_edges.classify_edges`, `offset_region`, `dims2d.openEdgeEditor`, `app.onEdgeField` |
+| Mitre gap | One value for every mitre in a chain, 10 mm by default: at a mitred chain corner between the two faces' boards, and between a face board and a jamb or head lining. It is measured straight across the joint, so each of the two boards is pulled back half of it along its own length (x / √(1 + k²) square to a cut at slope k). At a chain corner only the boards open up; the layers behind still meet on the bisector. | `cladding_edges.mitre_pullback`, `cladding_geometry.build_elevation` |
+| Head ventilation | A chain setting. **At front** (the default): the head lining is tight to the lintel or window head, and the open mitre joint at its front edge is the vent. **At back**: the lining drops by an air space (10 mm by default) and stops the same distance short of the window frame, taken as the wall face, so air runs over it and out on the face of the frame; the face board comes down to the lowered lining, closing the front. Click a red head edge in 2D, or use the panel. | `cladding_geometry._openings_extras`, `cladding_edges.settings` |
 | Splash zone applies to battens and cladding only [ASSUMED] | Yes. Sheathing and insulation follow the full outline. | `cladding_booleans.TRIMMABLE` |
 | Ground splash zone [OPEN] | Same rule. The elevation base is always an abutment ("Elevation base"); untick it to start boards at the base. | `fabric_extract._merge_abutments` |
 | Panel centres dependency [OPEN] | Width drives centres. Batten centres = (panel width + gap) / n, with n chosen so no span exceeds 600 mm. The centres field is locked in panel mode. Closing cuts are reported at both ends and the top. | `cladding_constants._parse` |
@@ -201,11 +204,18 @@ is dragged and trims them with Shapely otherwise; export always trims.
 
 ```
 {"type": "prism", "profile": [[u,v],...], "holes": [...], "depth": d, "thickness": t,
- "frame": {"origin": [x,y,z], "u": [ux,uy,0], "n": [nx,ny,0]},
+ "frame": {"origin": [x,y,z], "u": [ux,uy,uz], "v": [vx,vy,vz], "n": [nx,ny,nz]},
  "color": "#..", "opacity": 1.0, "name": "...", "ifc_type": "batten", "elevation": "Elevation A"}
 ```
 
 Coordinates are IFC millimetres, Z-up. The viewer swaps to Three.js Y-up.
+
+The frame is general, as in FallWright: a local point is origin + u·U + v·V + d·N with
+v = n × u. For a wall frame that is world Z exactly, so walls are unchanged, and a frame
+with no v reads as world Z. A frame can also lie flat (a head lining faces down). The
+extractor's `fit_plane`, `make_frame` and `_to_local` take a mode; "wall" is the
+default and behaves as before. The IFC placement (axis n, reference u) gives the profile
+y = n × u = v, so it needs no change.
 
 ## Exports
 
@@ -234,20 +244,22 @@ the title area.
 
 | File | Lines | Budget |
 |---|---|---|
-| fabric_extract.py | 514 | 400 |
+| fabric_extract.py | 566 | 400 |
 | cladding_constants.py | 82 | 80 |
-| cladding_geometry.py | 314 | 400 |
-| cladding_primitives.py | 327 | 300 |
-| cladding_booleans.py | 208 | 200 |
+| cladding_geometry.py | 456 | 400 |
+| cladding_primitives.py | 396 | 300 |
+| cladding_edges.py | 236 | 300 |
+| cladding_booleans.py | 210 | 200 |
 | cladding_preview.py | 45 | 100 |
 | ifc_generator.py | 396 | 400 |
 | dxf_generator.py | 248 | 500 |
 | app.py | 78 | 150 |
 | templates/index.html | 248 | 500 |
 
-`fabric_extract.py` and `cladding_booleans.py` are over their budgets (by 114 and
-6 lines); splitting the region clean-up — notches, seeded patches — into its own
-module would bring both back inside.
+`fabric_extract.py`, `cladding_geometry.py`, `cladding_primitives.py` and `cladding_booleans.py`
+are over their budgets. Splitting the region clean-up (notches, seeded patches) out of the
+extractor, and the opening extras (closers, linings) out of the geometry, would bring the
+worst back inside; the edge rules already live in their own module, `cladding_edges.py`.
 
 The frontend logic lives beside the template in `static/viewer.js` (Three.js,
 web-ifc, picking, rendering), `static/app.js` (state, Pyodide, downloads) and
@@ -297,8 +309,9 @@ two PyPI deps that are not in the Pyodide distribution from local copies
   are not chained.
 - Corner beads and profiles are not modelled, and nothing supports the boards
   that overhang a corner: a corner batten or angle is the designer's to add.
-- Opening heads and sills get a cavity closer only at the jambs; head and sill
-  linings, cills and flashings are not modelled.
+- Openings get a cavity closer only at the jambs, and linings at the jambs and head;
+  sill linings, cills and flashings are not modelled. The window frame is taken to sit at
+  the wall face, since only the structural opening is known.
 - An opening that breaks the face outline rather than leaving a hole — a door to
   the ground, a window at a wall end — is recovered as a notch: a rectangular
   bite out of the patch's bounding box, open on exactly one side. A gable is

@@ -4,6 +4,10 @@ const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDr
                model: null, seq: 0, editing: null, levels: null };
 let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null, _restarting = false;
 
+// Edge settings, per chain: offsets (mm) pulling the buildup back from its top, bottom and
+// free-end edges, the gap in every mitre, and how a window or door head is ventilated.
+const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10 };
+
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
 // meet at corners; coursing is set out along the whole run so joints carry round.
@@ -11,7 +15,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // turns it into cladding. See static/wizard.js.
 function newChain() {
     const chain = { name: 'Chain ' + (++state.seq), members: [], length: 0, built: false,
-                    topZ: null, bottomZ: null };
+                    topZ: null, bottomZ: null, edges: Object.assign({}, EDGE_DEFAULTS) };
     state.chains.push(chain);
     return chain;
 }
@@ -53,11 +57,40 @@ function lockDatum(e) {
 
 function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' · ' + e.name : e.name; }
 
+// The panel's edge fields show the active elevation's chain and write to all of it.
+function syncEdgeFields() {
+    const e = state.elevations[state.active], ed = e ? e.chain.edges : EDGE_DEFAULTS;
+    for (const k of ['top', 'side', 'bottom', 'gap', 'air']) {
+        const el = document.getElementById('edge-' + k);
+        if (el && document.activeElement !== el) el.value = ed[k];
+    }
+    selectToggle('head-vent', ed.vent);
+    document.getElementById('edge-air').disabled = ed.vent !== 'back';
+    document.getElementById('edge-chain').textContent = e ? 'for ' + e.chain.name : 'for the active chain';
+}
+
+function setEdge(e, key, value) {
+    if (!e) return false;
+    if (key === 'vent') e.chain.edges.vent = value === 'back' ? 'back' : 'front';
+    else {
+        const v = parseFloat(value);
+        if (!isFinite(v)) return false;
+        e.chain.edges[key] = Math.max(0, Math.min(100, v));
+    }
+    syncEdgeFields();
+    return true;
+}
+
+function onEdgeField(key, value) {
+    if (setEdge(state.elevations[state.active], key, value)) onNumeric();
+}
+
 function setActive(i) {
     state.active = i;
     // Selecting never moves the chain's course datum: that locks on the first row or
     // course edit (lockDatum), so choosing a face with a different base moves nothing.
     const picked = state.elevations[i];
+    syncEdgeFields();
     // Flat on an elevation, choosing another swings the view across to it.
     if (in2D() && picked && picked.result && picked.result.ok) enter2D(picked.result.name, picked.result.frame, cladBox(picked));
     renderElevationList();
@@ -534,7 +567,10 @@ function elevationRecords() {
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
                                                    clip_v_hi: vLocal(e, chain.topZ),
                                                    cover: e.cover || null, panel_rows: e.panelRows || null,
-                                                   course_datum_from: chain.datumFrom ? chain.datumFrom.name : null }));
+                                                   course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
+                                                   edge_top: chain.edges.top, edge_side: chain.edges.side,
+                                                   edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
+                                                   head_vent: chain.edges.vent, head_air: chain.edges.air }));
         }
     }
     return out;
@@ -856,7 +892,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_geometry', 'cladding_booleans',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_geometry', 'cladding_booleans',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

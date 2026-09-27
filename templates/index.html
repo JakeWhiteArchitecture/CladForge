@@ -94,10 +94,30 @@
             <div class="section">
                 <h2>Openings</h2>
                 <label class="chk"><input type="checkbox" id="set_out_from_openings" checked onchange="updatePreview()"> Set out from the structural openings</label>
-                <label class="chk"><input type="checkbox" id="reveals" checked onchange="updatePreview()"> Reveal linings, mitred to the face panel</label>
+                <label class="chk"><input type="checkbox" id="reveals" checked onchange="updatePreview()"> Reveal linings at jambs and heads, mitred to the face panel</label>
                 <div class="field"><label>Cavity closer width <span class="unit">solid timber, both jambs</span></label>
                     <input type="number" id="closer_w" value="50" min="25" max="150" step="5" oninput="onNumeric()"></div>
-                <p class="hint">Panel edges land on the window jambs and each span between them is split into equal bays no wider than the maximum panel, so a window that does not suit the panel centres still sets the joints. A solid timber cavity closer goes to both vertical sides of every opening. Heads and sills are not lined.</p>
+                <p class="hint">Panel edges land on the window jambs and each span between them is split into equal bays no wider than the maximum panel, so a window that does not suit the panel centres still sets the joints. A solid timber cavity closer goes to both vertical sides of every opening. Jambs and heads are lined; sills are not.</p>
+            </div>
+
+            <div class="section" id="edge-section">
+                <h2>Edges <span class="unit" id="edge-chain">for the active chain</span></h2>
+                <div class="row edge-row">
+                    <div class="field"><label><i class="edge-key" style="background:#a855f7"></i>Top offset <span class="unit">mm</span></label><input type="number" id="edge-top" value="10" min="0" max="100" step="5" oninput="onEdgeField('top', this.value)"></div>
+                    <div class="field"><label><i class="edge-key" style="background:#3b82f6"></i>Bottom offset <span class="unit">mm</span></label><input type="number" id="edge-bottom" value="10" min="0" max="100" step="5" oninput="onEdgeField('bottom', this.value)"></div>
+                </div>
+                <div class="row edge-row">
+                    <div class="field"><label><i class="edge-key" style="background:#22c55e"></i>Free-end offset <span class="unit">mm</span></label><input type="number" id="edge-side" value="0" min="0" max="100" step="5" oninput="onEdgeField('side', this.value)"></div>
+                    <div class="field"><label><i class="edge-key" style="background:#ff9800"></i>Mitre gap <span class="unit">mm</span></label><input type="number" id="edge-gap" value="10" min="0" max="100" step="1" oninput="onEdgeField('gap', this.value)"></div>
+                </div>
+                <div class="field"><label><i class="edge-key" style="background:#ef4444"></i>Head ventilation</label>
+                    <div id="head-vent" class="turn-toggle">
+                        <button class="turn-btn active" data-value="front" onclick="onEdgeField('vent', 'front')">At front</button>
+                        <button class="turn-btn" data-value="back" onclick="onEdgeField('vent', 'back')">At back</button>
+                    </div></div>
+                <div class="field"><label>Air space <span class="unit">over the head lining and off the frame, vented at back</span></label>
+                    <input type="number" id="edge-air" value="10" min="0" max="100" step="1" oninput="onEdgeField('air', this.value)"></div>
+                <p class="hint">Offsets pull the battens, counter-battens and boards back from the top, bottom and free-end edges. Chain corners and window or door jambs take no offset; where boards are mitred the mitre gap opens between them. In the 2D view the edges are drawn in these colours: click one to type its value. Every value applies to the whole chain.</p>
             </div>
 
             <div class="section" id="panel-section">

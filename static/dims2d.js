@@ -25,6 +25,7 @@ function renderDims2D() {
     const layer = document.getElementById('dim2d-layer');
     layer.innerHTML = '';
     D2.items = [];
+    D2.edges = [];
     if (!in2D() || !window._lastPreview) { closeDimEditor(); return; }
     const e = d2Elev(view2d.name);
     if (!e) return;
@@ -45,9 +46,10 @@ function renderDims2D() {
         layer.appendChild(el);
         D2.items.push(item);
     }
+    edgeLines(e, layer);
     cornerBadges(e, layer);
     if (D2.editing) {            // the preview was rebuilt under an open editor: re-anchor it
-        const again = D2.items.find(i => i.el.dataset.key === D2.editing.key);
+        const again = D2.items.concat(D2.edges).find(i => i.el.dataset.key === D2.editing.key);
         if (again) D2.editing.item = again; else closeDimEditor();
     }
     position2D();
@@ -87,11 +89,86 @@ function position2D() {
         item.el.style.left = ((p.x + 1) / 2 * w) + 'px';
         item.el.style.top = ((1 - p.y) / 2 * h) + 'px';
     }
+    for (const item of D2.edges) {
+        const a = item.a.clone().project(cam), b = item.b.clone().project(cam);
+        const x1 = (a.x + 1) / 2 * w, y1 = (1 - a.y) / 2 * h, x2 = (b.x + 1) / 2 * w, y2 = (1 - b.y) / 2 * h;
+        item.el.setAttribute('x1', x1); item.el.setAttribute('y1', y1);
+        item.el.setAttribute('x2', x2); item.el.setAttribute('y2', y2);
+        item.mid = { left: (x1 + x2) / 2 + 'px', top: (y1 + y2) / 2 + 'px' };
+    }
     const ed = document.getElementById('dim2d-editor');
     if (D2.editing && D2.editing.item) {
-        ed.style.left = D2.editing.item.el.style.left;
-        ed.style.top = D2.editing.item.el.style.top;
+        const at = D2.editing.item.mid || D2.editing.item.el.style;
+        ed.style.left = at.left;
+        ed.style.top = at.top;
     }
+}
+
+// ─── EDGES ───
+// The cladding's edges, coloured by what happens at each (cladding_edges.py), over the
+// outline. Clicking one types its value; every value belongs to the chain.
+const EDGE_COLOUR = { corner: '#ff9800', jamb: '#ff9800', top: '#a855f7', side: '#22c55e',
+                      bottom: '#3b82f6', head: '#ef4444' };
+const EDGE_INFO = { corner: ['Chain corner', 'gap', 'Mitre gap'], jamb: ['Window or door jamb', 'gap', 'Mitre gap'],
+                    top: ['Top edge', 'top', 'Offset'], side: ['Free end', 'side', 'Offset'],
+                    bottom: ['Bottom edge', 'bottom', 'Offset'], head: ['Window or door head', 'air', 'Air space'] };
+D2.edges = [];
+
+function edgeLines(e, layer) {
+    D2.edges = [];
+    const info = (window._lastPreview.info || []).find(i => i.elevation === e.result.name);
+    if (!info || !info.edges) return;
+    const M = frameMatrix(e.result.frame, 60), ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'edge2d-svg');
+    info.edges.forEach((edge, i) => {
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('stroke', EDGE_COLOUR[edge.kind] || '#ffffff');
+        line.dataset.kind = edge.kind;
+        line.dataset.key = 'edge:' + i;
+        const title = document.createElementNS(ns, 'title');
+        title.textContent = EDGE_INFO[edge.kind][0] + ' — click to set its ' + EDGE_INFO[edge.kind][2].toLowerCase();
+        line.appendChild(title);
+        const item = { edge, el: line, a: new THREE.Vector3(edge.p1[0], edge.p1[1], 0).applyMatrix4(M),
+                       b: new THREE.Vector3(edge.p2[0], edge.p2[1], 0).applyMatrix4(M) };
+        line.addEventListener('click', ev => { ev.stopPropagation(); openEdgeEditor(item); });
+        svg.appendChild(line);
+        D2.edges.push(item);
+    });
+    layer.appendChild(svg);
+}
+
+function openEdgeEditor(item) {
+    const e = d2Elev(view2d.name);
+    if (!e) return;
+    const kind = item.edge.kind, [title, key, what] = EDGE_INFO[kind], ed = e.chain.edges;
+    D2.editing = { key: item.el.dataset.key, item };
+    const box = document.getElementById('dim2d-editor');
+    const vent = kind === 'head' ? `<div class="d2-scope turn-toggle" id="e2-vent">
+            <button class="turn-btn ${ed.vent === 'front' ? 'active' : ''}" data-vent="front">Vent at front</button>
+            <button class="turn-btn ${ed.vent === 'back' ? 'active' : ''}" data-vent="back">Vent at back</button></div>` : '';
+    box.innerHTML = `<div class="d2-title" style="color:${EDGE_COLOUR[kind]}">${title} · ${e.chain.name}</div>${vent}
+        <span>${what}</span> <input id="e2-input" type="number" step="1" min="0" max="100" value="${Math.round(ed[key])}"> <span class="unit">mm</span>
+        <div class="d2-hint">Applies to every elevation in ${e.chain.name} · Enter to apply · Esc to cancel</div>`;
+    box.style.display = '';
+    const input = document.getElementById('e2-input');
+    input.disabled = kind === 'head' && ed.vent !== 'back';
+    box.querySelectorAll('[data-vent]').forEach(b => b.onclick = () => {
+        setEdge(e, 'vent', b.dataset.vent);
+        onNumeric();
+        openEdgeEditor(item);
+    });
+    input.onkeydown = ev => {
+        ev.stopPropagation();                  // Escape here closes the box, not the 2D view
+        if (ev.key === 'Enter') {
+            ev.preventDefault();
+            const done = setEdge(e, key, input.value);
+            closeDimEditor();
+            if (done) { setStatus(`${what} ${Math.round(e.chain.edges[key])} mm on ${e.chain.name}`, 'ready'); onNumeric(); }
+        } else if (ev.key === 'Escape') { ev.preventDefault(); closeDimEditor(); }
+    };
+    position2D();
+    if (!input.disabled) { input.focus(); input.select(); }
 }
 
 // ─── THE EDITOR ───

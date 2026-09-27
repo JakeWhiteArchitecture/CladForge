@@ -23,7 +23,7 @@ import ifcopenshell.guid
 
 from cladding_constants import (_parse, TOOL_NAME, TOOL_URL, IFC_SCHEMA_LABEL, SCOPE_NOTE,
                                 QUANTITY_NOTE, DISCLAIMER, frame_to_world)
-from cladding_primitives import corner_ring
+from cladding_primitives import corner_ring, ring_at
 
 IFC_SCHEMA_VERSIONS = ("IFC4X3", "IFC4X3_ADD2", "IFC4")
 _GUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, TOOL_URL)
@@ -111,7 +111,7 @@ def _prism_solid(ifc, mesh):
     brep, because its end faces slope with depth; booleans against an infinite half
     space are not dependable enough to cut a joint people will build from."""
     corner = mesh.get("corner")
-    if corner and (corner.get("k_l") or corner.get("k_r")):
+    if (corner and (corner.get("k_l") or corner.get("k_r"))) or mesh.get("vshift"):
         return _corner_brep(ifc, mesh), "Brep"      # end faces slope with depth
     outer = _polyline(ifc, corner_ring(mesh["profile"], corner, 0.0))
     holes = [_polyline(ifc, h) for h in (mesh.get("holes") or []) if len(h) >= 3]
@@ -136,9 +136,19 @@ def _point(ifc, cache, xyz):
     return cache[key]
 
 
+def _loop(points):
+    """A ring without repeated neighbours: a mitre that steps at the end of an opening
+    doubles a vertex, and at a depth where the step closes the two copies coincide."""
+    out = [p for i, p in enumerate(points) if p is not points[i - 1]] if len(points) > 1 else list(points)
+    return out
+
+
 def _face(ifc, outer, inner=()):
+    outer = _loop(outer)
+    if len(outer) < 3:
+        return None
     bounds = [ifc.createIfcFaceOuterBound(ifc.createIfcPolyLoop(outer), True)]
-    bounds += [ifc.createIfcFaceBound(ifc.createIfcPolyLoop(ring), True) for ring in inner]
+    bounds += [ifc.createIfcFaceBound(ifc.createIfcPolyLoop(r), True) for r in map(_loop, inner) if len(r) >= 3]
     return ifc.createIfcFace(bounds)
 
 
@@ -146,15 +156,16 @@ def _corner_brep(ifc, mesh):
     """Closed shell of a prism whose ends slope with depth. Profile rings run
     anticlockwise in (u, v) and u x v = the outward normal, so the outer ring as given
     faces outwards on the far cap and is reversed on the near one."""
-    frame, corner = mesh["frame"], mesh["corner"]
+    frame = mesh["frame"]
     near = float(mesh["depth"])
     far = near + float(mesh["thickness"])
     cache, faces, layers = {}, [], []
-    for ring in [list(mesh["profile"])] + [list(h) for h in (mesh.get("holes") or [])]:
+    rings = [list(mesh["profile"])] + [list(h) for h in (mesh.get("holes") or [])]
+    for k, ring in enumerate(rings):
         if len(ring) < 3:
             continue
-        lo = [_point(ifc, cache, frame_to_world(frame, u, v, near)) for u, v in corner_ring(ring, corner, near)]
-        hi = [_point(ifc, cache, frame_to_world(frame, u, v, far)) for u, v in corner_ring(ring, corner, far)]
+        lo = [_point(ifc, cache, frame_to_world(frame, u, v, near)) for u, v in ring_at(mesh, k, near)]
+        hi = [_point(ifc, cache, frame_to_world(frame, u, v, far)) for u, v in ring_at(mesh, k, far)]
         layers.append((lo, hi))
         for i in range(len(lo)):                       # side faces, one quad per edge
             j = (i + 1) % len(lo)
@@ -163,7 +174,7 @@ def _corner_brep(ifc, mesh):
     outer_lo, outer_hi = layers[0]
     faces.append(_face(ifc, list(reversed(outer_lo)), [list(reversed(r)) for r, _h in layers[1:]]))
     faces.append(_face(ifc, outer_hi, [h for _l, h in layers[1:]]))
-    return ifc.createIfcFacetedBrep(ifc.createIfcClosedShell(faces))
+    return ifc.createIfcFacetedBrep(ifc.createIfcClosedShell([f for f in faces if f is not None]))
 
 
 def _make_element(ifc, body, ifc_class, name, solid, predefined=None, object_type=None):

@@ -76,7 +76,25 @@ def _rect(u0, v0, u1, v1):
     return [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]
 
 
+WORLD_UP = (0.0, 0.0, 1.0)
+
+
 def frame_to_world(frame, u, v, d=0.0):
-    """Elevation-local (u, v, depth) → IFC world [x, y, z] (mm, Z-up)."""
+    """Frame-local (u, v, depth) → IFC world [x, y, z] (mm, Z-up): origin + u·U + v·V + d·N.
+    A frame can stand (a wall: V is world Z), lie flat (a roof: N is world Z) or run along
+    an edge (a trim: N along the edge). A frame with no "v" is old data and reads as world
+    Z, which is exactly what n × u gives for a wall frame, so walls are unaffected."""
     o, U, N = frame["origin"], frame["u"], frame["n"]
-    return [o[0] + U[0] * u + N[0] * d, o[1] + U[1] * u + N[1] * d, o[2] + v]
+    V = frame.get("v") or WORLD_UP
+    return [o[0] + U[0] * u + V[0] * v + N[0] * d, o[1] + U[1] * u + V[1] * v + N[1] * d,
+            o[2] + U[2] * u + V[2] * v + N[2] * d]
+
+
+def world_to_frame(frame, p):
+    """IFC world [x, y, z] → frame-local (u, v, depth). The inverse of frame_to_world for
+    an orthonormal frame."""
+    o, U, N = frame["origin"], frame["u"], frame["n"]
+    V = frame.get("v") or WORLD_UP
+    q = [p[0] - o[0], p[1] - o[1], p[2] - o[2]]
+    dot = lambda a: a[0] * q[0] + a[1] * q[1] + a[2] * q[2]   # noqa: E731
+    return [dot(U), dot(V), dot(N)]

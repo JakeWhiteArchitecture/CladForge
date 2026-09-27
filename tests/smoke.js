@@ -374,6 +374,64 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('2D cut and level:', JSON.stringify(solved));
     if (!solved.was || solved.was.locked || solved.now.cut !== 300 || Math.round(solved.top) !== 5000)
         throw new Error('cut/level write-back failed: ' + JSON.stringify(solved));
+
+    // Coloured edges over the outline. Click a purple (top) edge and type an offset: the
+    // panels stand further back from the top, on the whole chain, and the panel field agrees.
+    await page.waitForTimeout(800);
+    const edgeKinds = await page.evaluate(() => {
+        const c = {};
+        document.querySelectorAll('.edge2d-svg line').forEach(l => { c[l.dataset.kind] = (c[l.dataset.kind] || 0) + 1; });
+        const lines = Array.from(document.querySelectorAll('.edge2d-svg line[data-kind="top"]'));
+        const len = l => Math.hypot(l.x2.baseVal.value - l.x1.baseVal.value, l.y2.baseVal.value - l.y1.baseVal.value);
+        lines.sort((a, b) => len(b) - len(a));
+        if (lines[0]) lines[0].id = 'smoke-top-edge';
+        return c;
+    });
+    console.log('2D edges:', JSON.stringify(edgeKinds));
+    const topOf = () => page.evaluate(() => Math.round(Math.max(...window._lastPreview.geometry
+        .filter(m => m.ifc_type === 'panel' && m.elevation === 'Elevation A').flatMap(m => m.profile.map(q => q[1])))));
+    // An SVG line's box has no height (Chromium leaves the stroke out), so click it as a person
+    // does: at a point on the line where the line is what is under the pointer.
+    const onLine = id => page.evaluate(id => {
+        const l = document.getElementById(id), r = l.ownerSVGElement.getBoundingClientRect();
+        const [x1, y1, x2, y2] = ['x1', 'y1', 'x2', 'y2'].map(a => l[a].baseVal.value);
+        for (const t of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+            const x = r.left + x1 + (x2 - x1) * t, y = r.top + y1 + (y2 - y1) * t;
+            if (document.elementFromPoint(x, y) === l) return { x, y };
+        }
+        return null;
+    }, id);
+    const topBefore = await topOf();
+    const topAt = await onLine('smoke-top-edge');
+    if (!topAt) throw new Error('the top edge is covered everywhere along it');
+    await page.mouse.click(topAt.x, topAt.y);
+    await page.waitForSelector('#e2-input', { timeout: 5000 });
+    await page.fill('#e2-input', '25');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1800);
+    const topEdit = await page.evaluate(() => ({ chain: state.elevations[0].chain.edges.top,
+        field: document.getElementById('edge-top').value, still2D: in2D() }));
+    const topAfter = await topOf();
+    console.log('2D top edge:', JSON.stringify(topEdit), 'panel top', topBefore, '→', topAfter);
+    if (topEdit.chain !== 25 || topEdit.field !== '25' || topBefore - topAfter !== 15 || !topEdit.still2D)
+        throw new Error('top edge offset did not apply: ' + JSON.stringify({ topEdit, topBefore, topAfter }));
+    // The red head edge: switch the ventilation to the back and the head lining drops by the air space.
+    const headZ = () => page.evaluate(() => {
+        const m = window._lastPreview.geometry.find(g => g.ifc_type === 'reveal' && / Reveal \dH$/.test(g.name) && g.elevation === 'Elevation A');
+        return m ? Math.round(m.frame.origin[2]) : null;
+    });
+    const zFront = await headZ();
+    await page.evaluate(() => { const l = document.querySelector('.edge2d-svg line[data-kind="head"]'); if (l) l.id = 'smoke-head-edge'; });
+    const headAt = await onLine('smoke-head-edge');
+    if (!headAt) throw new Error('the head edge is covered everywhere along it');
+    await page.mouse.click(headAt.x, headAt.y);
+    await page.click('#e2-vent [data-vent="back"]');
+    await page.waitForTimeout(1800);
+    const zBack = await headZ();
+    console.log('2D head edge: lining at', zFront, '→', zBack, JSON.stringify(await page.evaluate(() => state.elevations[0].chain.edges)));
+    if (zFront === null || zFront - zBack !== 10) throw new Error('head ventilation did not lower the lining: ' + zFront + ' → ' + zBack);
+    await page.keyboard.press('Escape');
+    await page.evaluate(async () => { Object.assign(state.elevations[0].chain.edges, EDGE_DEFAULTS); syncEdgeFields(); await updatePreview(); });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(1200);
     const back = await page.evaluate(() => ({ ortho: !!activeCamera().isOrthographicCamera, rotate: controls.enableRotate,
