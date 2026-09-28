@@ -47,6 +47,7 @@ function renderDims2D() {
         D2.items.push(item);
     }
     edgeLines(e, layer);
+    jointLines(e, layer);
     cornerBadges(e, layer);
     if (D2.editing) {            // the preview was rebuilt under an open editor: re-anchor it
         const again = D2.items.concat(D2.edges).find(i => i.el.dataset.key === D2.editing.key);
@@ -155,6 +156,60 @@ function edgeLines(e, layer) {
     layer.appendChild(svg);
 }
 
+// ─── PANEL JOINTS ───
+// Each horizontal joint between two panel rows, one segment per bay. Clicking one
+// dissolves it: the panels above and below in that bay become one. Clicking again puts
+// the joint back. A merge the stock board cannot take, either way round, is refused.
+function jointLines(e, layer) {
+    const info = (window._lastPreview.info || []).find(i => i.elevation === e.result.name);
+    if (!info || !info.hjoints || !info.hjoints.length) return;
+    const M = frameMatrix(e.result.frame, 60), ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'edge2d-svg');
+    for (const hj of info.hjoints) {
+        hj.spans.forEach(([u0, u1], n) => {
+            const line = document.createElementNS(ns, 'line');
+            line.setAttribute('stroke', hj.dissolved ? '#ffd166' : '#cfd8e3');
+            line.setAttribute('stroke-opacity', hj.dissolved ? '0.8' : '0.45');
+            if (hj.dissolved) line.setAttribute('stroke-dasharray', '6 6');
+            line.dataset.kind = 'joint';
+            line.dataset.key = `joint:${hj.row}:${hj.bay}:${n}`;
+            const title = document.createElementNS(ns, 'title');
+            title.textContent = hj.dissolved
+                ? `Dissolved joint, R${hj.row + 1}/R${hj.row + 2} bay ${hj.bay + 1} — click to put the joint back`
+                : `Joint R${hj.row + 1}/R${hj.row + 2} bay ${hj.bay + 1} — click to dissolve it (${Math.round(hj.size[0])} × ${Math.round(hj.size[1])} panel)`;
+            line.appendChild(title);
+            line.addEventListener('click', ev => { ev.stopPropagation(); toggleJoint(e, hj); });
+            svg.appendChild(line);
+            D2.edges.push({ joint: hj, el: line, a: new THREE.Vector3(u0, hj.v, 0).applyMatrix4(M),
+                            b: new THREE.Vector3(u1, hj.v, 0).applyMatrix4(M) });
+        });
+    }
+    layer.appendChild(svg);
+}
+
+function toggleJoint(e, hj) {
+    const list = (e.panelJoints || []).filter(q => !(q[0] === hj.row && q[1] === hj.bay));
+    const where = `R${hj.row + 1}/R${hj.row + 2} bay ${hj.bay + 1} on ${e.name}`;
+    if (hj.dissolved) {
+        setStatus(`Joint ${where} put back`, 'ready');
+    } else {
+        const bw = parseFloat(document.getElementById('board_w').value) || 1250;
+        const bh = parseFloat(document.getElementById('board_h').value) || 2500;
+        const [w, h] = hj.size;
+        if (!((w <= bw + 0.5 && h <= bh + 0.5) || (w <= bh + 0.5 && h <= bw + 0.5))) {
+            setStatus(`Not dissolved: the panel would be ${Math.round(w)} × ${Math.round(h)} mm, larger than the ${Math.round(bw)} × ${Math.round(bh)} board either way round`, 'busy');
+            return false;
+        }
+        list.push([hj.row, hj.bay, hj.u0, hj.u1, hj.v]);
+        setStatus(`Joint ${where} dissolved: one ${Math.round(w)} × ${Math.round(h)} panel`, 'ready');
+    }
+    e.panelJoints = list.length ? list : null;
+    renderElevationList();
+    onNumeric();
+    return true;
+}
+
 // The chain corner at the end of *e* that an orange corner edge sits on.
 function cornerAt(e, u) {
     const box = cladBox(e);
@@ -260,13 +315,14 @@ function openDimEditor(item) {
     const scoped = (d.kind === 'row' || d.kind === 'course') && multi;
     const ed = document.getElementById('dim2d-editor');
     ed.innerHTML = `<div class="d2-title">${DIM_NAMES[d.kind]}${d.kind === 'row' ? ' ' + (d.row + 1) : ''}</div>
-        <input id="d2-input" type="number" step="1" value="${Math.round(d.value)}"> <span class="unit">mm</span>
+        <input id="d2-input" type="number" step="1" value="${Math.round(d.value)}"${d.fixed ? ' disabled' : ''}> <span class="unit">mm</span>
+        ${d.fixed ? `<div class="d2-hint">${d.fixed}</div>` : ''}
         ${scoped ? `<div class="d2-scope turn-toggle">
             <button class="turn-btn ${D2.scope === 'chain' ? 'active' : ''}" data-scope="chain">${e.chain.name}</button>
             <button class="turn-btn ${D2.scope === 'one' ? 'active' : ''}" data-scope="one">This elevation</button></div>` : ''}
         ${d.kind === 'row' ? `<div class="d2-actions"><button class="mini" id="d2-split">Split row</button>
-            <button class="mini" id="d2-merge">Merge with row above</button></div>` : ''}
-        <div class="d2-hint">Enter to apply · Esc to cancel · Tab for the next</div>`;
+            <button class="mini" id="d2-merge"${d.fixed ? ' disabled title="The top row has no row above it"' : ''}>Merge with row above</button></div>` : ''}
+        <div class="d2-hint">${d.fixed ? 'Esc to close' : 'Enter to apply · Esc to cancel'} · Tab for the next</div>`;
     ed.style.display = '';
     ed.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => {
         D2.scope = b.dataset.scope;
@@ -278,7 +334,8 @@ function openDimEditor(item) {
         document.getElementById('d2-merge').onclick = () => { mergeRow(e, d.row); closeDimEditor(); };
     }
     const input = document.getElementById('d2-input');
-    input.onkeydown = ev => {
+    // A disabled input takes no keys: the box itself does, for Escape and Tab.
+    (d.fixed ? ed : input).onkeydown = ev => {
         ev.stopPropagation();                  // Escape here cancels the edit, not the 2D view
         if (ev.key === 'Enter') { ev.preventDefault(); commitDimEditor(); }
         else if (ev.key === 'Escape') { ev.preventDefault(); closeDimEditor(); }
@@ -292,6 +349,7 @@ function openDimEditor(item) {
         }
     };
     position2D();
+    if (d.fixed) { ed.tabIndex = -1; ed.focus(); return; }
     input.focus();
     input.select();
 }
@@ -305,7 +363,7 @@ function closeDimEditor() {
 function commitDimEditor() {
     const input = document.getElementById('d2-input');
     const item = D2.editing && D2.editing.item;
-    if (!input || !item) return closeDimEditor();
+    if (!input || !item || item.d.fixed) return closeDimEditor();
     const v = parseFloat(input.value);
     closeDimEditor();
     if (!isFinite(v) || v <= 0 || Math.abs(v - item.d.value) < 0.5) return;
@@ -350,13 +408,16 @@ function applyDim(d, v, scope) {
     onNumeric();
 }
 
-// Split a row into two halves with the joint gap between them.
+// Split a row into two halves with the joint gap between them. The top row is whatever is
+// left, so splitting it types a new row below and leaves the remainder on top: the list
+// ends at the new row.
 function splitRow(e, j) {
     const gap = parseFloat(document.getElementById('panel_gap').value) || 0;
-    const h = rowsDrawn(e)[j];
+    const drawn = rowsDrawn(e), h = drawn[j];
     if (!h) return;
     const r = lockForRow(e, j), rows = withRow(e, r.j, h, r.drawn), half = Math.max(1, (h - gap) / 2);
-    rows.splice(r.j, 1, half, half);
+    if (j === drawn.length - 1) rows.splice(r.j, rows.length, half);
+    else rows.splice(r.j, 1, half, half);
     d2SetRows(e, rows);
 }
 

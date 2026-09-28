@@ -99,7 +99,8 @@ def check_rules(params, infos=None):
         bw, bh = p["board_w"], p["board_h"]
         fits = lambda w, h: (w <= bw and h <= bh) or (p["rotate"] and w <= bh and h <= bw)  # noqa: E731
         big = sorted({(w, h) for i in infos for w in (i.get("panel_widths") or []) for h in (i.get("rows") or [])
-                      if not fits(w, h)})
+                      if not fits(w, h)}
+                     | {tuple(q["size"]) for i in infos for q in (i.get("panel_joints") or []) if not fits(*q["size"])})
         if big:
             add("Board size", "fail", "%d cut size(s) larger than the %.0f x %.0f board either way round, e.g. %.0f x %.0f"
                 % (len(big), bw, bh, big[0][0], big[0][1]), len(big))
