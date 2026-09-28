@@ -937,6 +937,53 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (!plankCorners.lap || !plankCorners.profile || !plankCorners.options || plankCorners.active !== 'mitre')
         throw new Error('Master or Profile offered for planks: ' + JSON.stringify(plankCorners));
 
+    // Save state: every chain, its surfaces and the settings to XML. Change things, load the
+    // file back, and the cladding is exactly what it was, from the surfaces in the file.
+    const snapshotOf = () => page.evaluate(() => ({
+        geometry: JSON.stringify(window._lastPreview.geometry.map(m => [m.name, m.profile, m.frame.origin])),
+        panel_w: document.getElementById('panel_w').value, type: toggleValue('cladding-type'),
+        elevations: state.elevations.map(e => `${e.name}@${e.chain.name}${e.chain.built ? '+' : ''}`).join(','),
+        offsets: state.elevations.map(e => e.offset).join(',') }));
+    const savedLook = await snapshotOf();
+    const [stateFile] = await Promise.all([page.waitForEvent('download'), page.click('#save-state')]);
+    const statePath = path.join(__dirname, 'smoke_out.state.xml');
+    await stateFile.saveAs(statePath);
+    const stateText = fs.readFileSync(statePath, 'utf8');
+    await page.evaluate(async () => {
+        document.getElementById('panel_w').value = 900;
+        selectToggle('cladding-type', 'panel'); onTypeChange();
+        state.elevations.forEach(e => { e.offset = 321; });
+        await updatePreview();
+    });
+    const changedLook = await snapshotOf();
+    await page.setInputFiles('#state-file', statePath);
+    await page.waitForFunction(() => /^Loaded /.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
+    const loadedLook = await snapshotOf();
+    const loaded = await page.evaluate(() => ({ status: document.getElementById('status-chip').textContent,
+        restored: state.elevations.every(e => e.restored && !e.picks.length && e.savedPicks.length && e.result.ok) }));
+    // A file that is not a state is refused with a reason, and leaves the session alone.
+    await page.setInputFiles('#state-file', { name: 'drawing.xml', mimeType: 'application/xml', buffer: Buffer.from('<svg/>') });
+    await page.waitForFunction(() => /^Not loaded/.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
+    const refusedState = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    // With no host model open the surfaces still load, onto the offset they were saved with.
+    const noModel = await page.evaluate(async xml => {
+        const meshes = allMeshes, offset = modelOffset.slice();
+        allMeshes = []; modelOffset = [0, 0, 0];
+        const ok = await loadState(xml, 'no-model.xml');
+        const back = modelOffset.join(',') === offset.join(',');
+        allMeshes = meshes;
+        return { ok, back, panels: window._lastPreview.geometry.length };
+    }, stateText);
+    const sameAgain = (await snapshotOf()).geometry === savedLook.geometry;
+    console.log('save state:', stateFile.suggestedFilename(), stateText.length, 'bytes |', loaded.status, '|', refusedState,
+                '| no model:', JSON.stringify(noModel), '| elevations', savedLook.elevations, '→', loadedLook.elevations);
+    if (!/^<\?xml[^>]*>\s*<CladForgeState format="cladforge-state" version="1">/.test(stateText) || !stateText.includes('<surface t="object">')
+        || changedLook.geometry === savedLook.geometry || loadedLook.geometry !== savedLook.geometry
+        || loadedLook.panel_w !== savedLook.panel_w || loadedLook.type !== savedLook.type
+        || loadedLook.elevations !== savedLook.elevations || loadedLook.offsets !== savedLook.offsets
+        || !loaded.restored || !/Not loaded: not a CladForge state file/.test(refusedState) || !noModel.ok || !noModel.back || !sameAgain)
+        throw new Error('save and load state did not round-trip: ' + JSON.stringify({ savedLook: savedLook.elevations, loadedLook, loaded, refusedState, noModel, sameAgain }));
+
     // The server importer, the fallback for models web-ifc cannot build.
     await page.evaluate(() => loadModel(state.file, 'server'));
     await page.waitForFunction(() => state.model && state.model.reader.indexOf('server') >= 0, null, { timeout: 180000 });

@@ -24,6 +24,11 @@
                 </label>
                 <div class="derived" id="model-info" style="margin-top:8px">No model loaded. Nothing is uploaded: the file is parsed in your browser.</div>
                 <label class="chk"><input type="checkbox" id="show-model" checked onchange="setLayerVisible('model', this.checked)"> Show host model</label>
+                <div class="row" style="margin-top:6px">
+                    <button class="btn btn-secondary btn-sm" id="save-state" onclick="saveState()">Save state (XML)</button>
+                    <label class="btn btn-secondary btn-sm" style="text-align:center">Load state<input type="file" id="state-file" accept=".xml" style="display:none" onchange="onStateChosen(this)"></label>
+                </div>
+                <p class="hint">A state file holds every chain, the wall surfaces it is attached to, and every setting. It loads without the IFC; open the IFC first to see the host model, since opening a model starts afresh.</p>
             </div>
 
             <div class="section">

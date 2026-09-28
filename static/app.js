@@ -22,7 +22,10 @@ function newChain() {
 
 function newElevation(chain) {
     const n = state.elevations.length;
-    const name = 'Elevation ' + String.fromCharCode(65 + (n % 26)) + (n >= 26 ? Math.floor(n / 26) : '');
+    const label = k => 'Elevation ' + String.fromCharCode(65 + (k % 26)) + (k >= 26 ? Math.floor(k / 26) : '');
+    let k = n;           // the next free name: a loaded state or a deletion can leave gaps
+    while (state.elevations.some(m => m.name === label(k))) k++;
+    const name = label(k);
     const e = { name, picks: [], result: null, manual: [], disabled: {},
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
                 offset: 0,
@@ -480,6 +483,10 @@ function onViewportClick(event) {
     // Coplanar with an elevation anywhere: merge into it. Otherwise start a new elevation
     // in the active chain; after extraction it links at a corner or moves to its own chain.
     if (!samePlane(hit, e)) e = owner || newElevation(e.chain);
+    if (e.restored) {
+        setStatus(`${e.name} was loaded from a saved state, so faces cannot be added to it: delete it and pick its faces again to change its surface`, 'busy');
+        return;
+    }
     const existing = e.picks.findIndex(p => p.mesh === hit.mesh && p.faces.includes(hit.faceIndex));
     if (existing >= 0) e.picks.splice(existing, 1);
     else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal), point: toIfc(hit.point) });
@@ -490,6 +497,7 @@ function onViewportClick(event) {
 }
 
 async function runExtraction(e) {
+    if (e.restored && !e.picks.length) return;       // loaded from a saved state: its surface stays
     if (!e.picks.length) { e.result = null; renderElevationList(); updatePreview(); return; }
     if (!pyReady) {   // engine loading or rebuilding: queue it, initPyodide picks it up
         e.pending = true;
@@ -785,6 +793,142 @@ function setStatus(text, cls) {
     chip.textContent = text; chip.className = 'status-chip ' + (cls || '');
 }
 
+// ─── SAVED STATE ───
+// Save writes every chain, its elevations, the wall surfaces they are attached to (as
+// extracted: frame, outline, openings, abutments) and every setting to an XML file
+// (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
+// state loads without the IFC and without extracting again. Open the IFC first to see
+// the host model: opening a model starts afresh and clears the chains.
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations'];
+const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient'];
+
+function snapshotState() {
+    const settings = {};
+    for (const k of NUM) settings[k] = parseFloat(val(k));
+    for (const k of STATE_CHECKS) settings[k] = document.getElementById(k).checked;
+    for (const k of STATE_TOGGLES) settings[k] = toggleValue(k);
+    settings.counter_batten = val('counter_batten');
+    const elevation = e => ({
+        name: e.name, storey: e.storey || null, start: e.start || 0, rev: !!e.rev, link: e.link || null, offset: e.offset || 0,
+        cornerLo: e.cornerLo || 0, cornerHi: e.cornerHi || 0, masterLo: !!e.masterLo, masterHi: !!e.masterHi,
+        detailLo: e.detailLo || null, detailHi: e.detailHi || null, clipLo: e.clipLo || 0,
+        clipHi: e.clipHi === undefined ? null : e.clipHi, cover: e.cover || null,
+        panelRows: e.panelRows || null, panelJoints: e.panelJoints || null, openingDetails: e.openingDetails || {},
+        manual: e.manual || [], disabled: e.disabled || {},
+        // the faces it was picked from, for reference: the surface below is what loads
+        picks: e.picks.length ? e.picks.map(q => ({ element: (q.mesh && q.mesh.userData.name) || null, faces: q.faces.length,
+                                                    normal: q.normal, point: q.point }))
+                              : (e.savedPicks || []),
+        surface: e.result });
+    const chains = state.chains.map(c => ({
+        name: c.name, built: !!c.built, topZ: c.topZ, bottomZ: c.bottomZ, edges: Object.assign({}, c.edges),
+        datumFrom: c.datumFrom ? c.datumFrom.name : null,
+        members: c.members.filter(e => e.result && e.result.ok).map(elevation) }));
+    const act = state.elevations[state.active];
+    return { app: 'CladForge', saved: new Date().toISOString(),
+             model: { file: (state.file && state.file.name) || state.savedModelFile || null, offset: modelOffset.slice(),
+                      context: Object.assign({}, modelContext) },
+             seq: state.seq, active: act ? act.name : null, settings, chains };
+}
+
+async function saveState() {
+    if (!pyReady) { setStatus('The engine is still loading — try again in a moment', 'busy'); return; }
+    const snap = snapshotState();
+    if (!snap.chains.some(c => c.members.length)) { setStatus('Nothing to save yet: pick a wall face first', 'busy'); return; }
+    const skipped = state.elevations.filter(e => !(e.result && e.result.ok)).length;
+    try {
+        pyodide.globals.set('_state_json', JSON.stringify(snap));
+        const xml = await pyodide.runPythonAsync(`
+import json as _json
+from cladding_state import to_xml as _to_xml
+_to_xml(_json.loads(_state_json))`);
+        const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' })), a = document.createElement('a');
+        a.href = url; a.download = downloadName('state.xml'); document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+        const n = snap.chains.reduce((k, c) => k + c.members.length, 0);
+        setStatus(`State saved: ${snap.chains.filter(c => c.members.length).length} chain(s), ${n} elevation(s)`
+                  + (skipped ? ` · ${skipped} not yet extracted left out` : ''), 'ready');
+    } catch (err) {
+        console.error(err);
+        setStatus('Save failed: ' + err.message, 'busy');
+    }
+}
+
+async function onStateChosen(input) {
+    if (!input.files.length) return;
+    const file = input.files[0];
+    input.value = '';                        // choosing the same file again still loads it
+    await loadState(await file.text(), file.name);
+}
+
+async function loadState(xml, fileName) {
+    if (!pyReady) { setStatus('The engine is still loading — try again in a moment', 'busy'); return false; }
+    let res;
+    try {
+        pyodide.globals.set('_state_xml', xml);
+        res = JSON.parse(await pyodide.runPythonAsync(`
+import json as _json
+from cladding_state import load as _load
+_json.dumps(_load(_state_xml))`));
+    } catch (err) { res = { ok: false, error: err.message }; }
+    if (!res.ok) { setStatus('Not loaded: ' + res.error, 'busy'); return false; }
+    restoreState(res.state);
+    await updatePreview();
+    if (!allMeshes.length) fitCameraTo(cladGroup.children.length ? cladGroup : outlineGroup);
+    const n = state.elevations.length;
+    setStatus(`Loaded ${fileName || 'state'}: ${state.chains.length} chain(s), ${n} elevation(s)`
+              + (allMeshes.length ? '' : ' · no host model open'), 'ready');
+    return true;
+}
+
+function restoreState(st) {
+    closeEditWidget();
+    if (in2D()) { exit2D(); update2DButton(); }
+    state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
+    state.elevations = []; state.chains = []; state.active = -1;
+    // Surfaces are stored in scene coordinates, which sit on the model offset they were
+    // saved with. With no model open that offset comes back too, so exports land on the
+    // host model's coordinates; with one open, the surfaces move onto its offset.
+    const saved = (st.model && st.model.offset) || [0, 0, 0];
+    let d = [0, 0, 0];
+    if (allMeshes.length) d = saved.map((x, k) => x - modelOffset[k]);
+    else { modelOffset = saved.slice(); modelContext = (st.model && st.model.context) || {}; }
+    state.savedModelFile = st.model && st.model.file;
+    const s = st.settings || {};
+    for (const k of NUM) if (s[k] !== undefined && s[k] !== null) document.getElementById(k).value = s[k];
+    for (const k of STATE_CHECKS) if (typeof s[k] === 'boolean') document.getElementById(k).checked = s[k];
+    for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
+    if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
+    const byName = {};
+    for (const c of st.chains || []) {
+        const chain = { name: c.name, members: [], length: 0, built: !!c.built,
+                        topZ: c.topZ === null || c.topZ === undefined ? null : c.topZ + d[2],
+                        bottomZ: c.bottomZ === null || c.bottomZ === undefined ? null : c.bottomZ + d[2],
+                        edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}) };
+        for (const m of c.members || []) {
+            const surface = m.surface;
+            if (!surface || !surface.ok) continue;
+            surface.frame.origin = surface.frame.origin.map((x, k) => x + d[k]);
+            const e = { name: m.name, picks: [], savedPicks: m.picks || [], restored: true, result: surface,
+                        manual: m.manual || [], disabled: m.disabled || {}, storey: m.storey || null, highlights: [], chain,
+                        start: m.start || 0, rev: !!m.rev, link: m.link || null, offset: m.offset || 0,
+                        cornerLo: m.cornerLo || 0, cornerHi: m.cornerHi || 0, masterLo: !!m.masterLo, masterHi: !!m.masterHi,
+                        detailLo: m.detailLo || null, detailHi: m.detailHi || null, clipLo: m.clipLo || 0,
+                        clipHi: m.clipHi === undefined ? null : m.clipHi, cover: m.cover || null,
+                        panelRows: m.panelRows || null, panelJoints: m.panelJoints || null, openingDetails: m.openingDetails || {} };
+            chain.members.push(e);
+            state.elevations.push(e);
+            byName[e.name] = e;
+        }
+        chain.datumFrom = byName[c.datumFrom] && byName[c.datumFrom].chain === chain ? byName[c.datumFrom] : null;
+        if (chain.members.length) { relayoutChain(chain); state.chains.push(chain); }
+    }
+    state.seq = Math.max(st.seq || 0, state.chains.length);
+    onTypeChange();
+    const active = state.elevations.findIndex(e => e.name === st.active);
+    setActive(active >= 0 ? active : state.elevations.length ? 0 : -1);
+}
+
 // ─── MODEL LOADING ───
 async function onFileChosen(input) {
     if (!input.files.length) return;
@@ -1043,7 +1187,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_geometry', 'cladding_booleans',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();
