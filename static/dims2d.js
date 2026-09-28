@@ -25,6 +25,7 @@ function renderDims2D() {
     const layer = document.getElementById('dim2d-layer');
     layer.innerHTML = '';
     D2.items = [];
+    D2.edges = [];
     if (!in2D() || !window._lastPreview) { closeDimEditor(); return; }
     const e = d2Elev(view2d.name);
     if (!e) return;
@@ -45,9 +46,10 @@ function renderDims2D() {
         layer.appendChild(el);
         D2.items.push(item);
     }
+    edgeLines(e, layer);
     cornerBadges(e, layer);
     if (D2.editing) {            // the preview was rebuilt under an open editor: re-anchor it
-        const again = D2.items.find(i => i.el.dataset.key === D2.editing.key);
+        const again = D2.items.concat(D2.edges).find(i => i.el.dataset.key === D2.editing.key);
         if (again) D2.editing.item = again; else closeDimEditor();
     }
     position2D();
@@ -57,6 +59,7 @@ function renderDims2D() {
 // master for a lap. Clicking one offers the corner row's selector and Swap.
 function cornerBadges(e, layer) {
     const box = cladBox(e), M = frameMatrix(e.result.frame, 60);
+    // (the opening badges below use the same frame)
     chainCorners(e.chain).forEach((c, i) => {
         if (c.lo !== e && c.hi !== e) return;
         const runHi = c.lo === e;                         // the corner is at e's end of the run
@@ -66,7 +69,7 @@ function cornerBadges(e, layer) {
         const el = document.createElement('button');
         el.className = 'dim2d corner-badge';
         el.dataset.key = 'corner:' + i;
-        el.textContent = { mitre: 'M', lap: 'L', butt: 'S' }[detail] + (detail === 'lap' ? ' · ' + master : '');
+        el.textContent = CORNER_LETTER[detail] + (detail === 'lap' ? ' · ' + master : '');
         el.title = `${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner: ${CORNER_LABEL[detail]}`
             + (detail === 'lap' ? `, ${master} masters` : '');
         const item = { corner: { chain: e.chain.name, index: i }, el,
@@ -75,6 +78,22 @@ function cornerBadges(e, layer) {
         layer.appendChild(el);
         D2.items.push(item);
     });
+    // Each window and door: a badge on its left jamb (both jambs share it) and one on its head.
+    for (const o of openingsOf(e)) {
+        const [u0, u1, v0, v1] = o.rect;
+        for (const [part, u, v] of [['jamb', u0, (v0 + v1) / 2], ['head', (u0 + u1) / 2, v1]]) {
+            const el = document.createElement('button');
+            el.className = 'dim2d corner-badge opening-badge';
+            el.dataset.key = 'opening:' + o.key + ':' + part;
+            el.textContent = CORNER_LETTER[o[part]] + (o[part] === 'lap' ? (o[part + '_master'] === 'face' ? ' · face' : ' · lining') : '');
+            el.title = `${part === 'jamb' ? 'Jambs' : 'Head'}: ${CORNER_LABEL[o[part]]} — click to change`;
+            const item = { edge: { kind: part, p1: [u, v], p2: [u, v] }, el,
+                           at: new THREE.Vector3(u, v, 0).applyMatrix4(M) };
+            el.onclick = ev => { ev.stopPropagation(); openEdgeEditor(item); };
+            layer.appendChild(el);
+            D2.items.push(item);
+        }
+    }
 }
 
 // Every frame while flat: put each label where its point projects.
@@ -87,11 +106,149 @@ function position2D() {
         item.el.style.left = ((p.x + 1) / 2 * w) + 'px';
         item.el.style.top = ((1 - p.y) / 2 * h) + 'px';
     }
+    for (const item of D2.edges) {
+        const a = item.a.clone().project(cam), b = item.b.clone().project(cam);
+        const x1 = (a.x + 1) / 2 * w, y1 = (1 - a.y) / 2 * h, x2 = (b.x + 1) / 2 * w, y2 = (1 - b.y) / 2 * h;
+        item.el.setAttribute('x1', x1); item.el.setAttribute('y1', y1);
+        item.el.setAttribute('x2', x2); item.el.setAttribute('y2', y2);
+        item.mid = { left: (x1 + x2) / 2 + 'px', top: (y1 + y2) / 2 + 'px' };
+    }
     const ed = document.getElementById('dim2d-editor');
     if (D2.editing && D2.editing.item) {
-        ed.style.left = D2.editing.item.el.style.left;
-        ed.style.top = D2.editing.item.el.style.top;
+        const at = D2.editing.item.mid || D2.editing.item.el.style;
+        ed.style.left = at.left;
+        ed.style.top = at.top;
     }
+}
+
+// ─── EDGES ───
+// The cladding's edges, coloured by what happens at each (cladding_edges.py), over the
+// outline. Clicking one types its value; every value belongs to the chain.
+const EDGE_COLOUR = { corner: '#ff9800', jamb: '#ff9800', top: '#a855f7', side: '#22c55e',
+                      bottom: '#3b82f6', head: '#ef4444' };
+const EDGE_INFO = { corner: ['Chain corner', 'gap', 'Mitre gap'], jamb: ['Window or door jamb', 'gap', 'Mitre gap'],
+                    top: ['Top edge', 'top', 'Offset'], side: ['Free end', 'side', 'Offset'],
+                    bottom: ['Bottom edge', 'bottom', 'Offset'], head: ['Window or door head', 'air', 'Air space'] };
+D2.edges = [];
+
+function edgeLines(e, layer) {
+    D2.edges = [];
+    const info = (window._lastPreview.info || []).find(i => i.elevation === e.result.name);
+    if (!info || !info.edges) return;
+    const M = frameMatrix(e.result.frame, 60), ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'edge2d-svg');
+    info.edges.forEach((edge, i) => {
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('stroke', EDGE_COLOUR[edge.kind] || '#ffffff');
+        line.dataset.kind = edge.kind;
+        line.dataset.key = 'edge:' + i;
+        const title = document.createElementNS(ns, 'title');
+        title.textContent = EDGE_INFO[edge.kind][0] + ' — click to set its ' + EDGE_INFO[edge.kind][2].toLowerCase();
+        line.appendChild(title);
+        const item = { edge, el: line, a: new THREE.Vector3(edge.p1[0], edge.p1[1], 0).applyMatrix4(M),
+                       b: new THREE.Vector3(edge.p2[0], edge.p2[1], 0).applyMatrix4(M) };
+        line.addEventListener('click', ev => { ev.stopPropagation(); openEdgeEditor(item); });
+        svg.appendChild(line);
+        D2.edges.push(item);
+    });
+    layer.appendChild(svg);
+}
+
+// The chain corner at the end of *e* that an orange corner edge sits on.
+function cornerAt(e, u) {
+    const box = cladBox(e);
+    return chainCorners(e.chain).findIndex(c => (c.lo === e || c.hi === e)
+        && Math.abs(((c.lo === e) !== !!e.rev ? box.u1 : box.u0) - u) < 2);
+}
+
+// The window or door whose jamb or head an edge (or badge) lies on.
+function openingAt(e, part, p) {
+    return openingsOf(e).find(o => {
+        const [u0, u1, v0, v1] = o.rect;
+        return part === 'jamb' ? (Math.abs(p[0] - u0) < 2 || Math.abs(p[0] - u1) < 2) && p[1] >= v0 - 2 && p[1] <= v1 + 2
+                               : Math.abs(p[1] - v1) < 2 && p[0] >= u0 - 2 && p[0] <= u1 + 2;
+    });
+}
+
+// The detail part of the box: a chain corner's detail and master, or an opening's jambs
+// or head, whose change asks whether it goes to every window and door in the chain.
+function detailBlock(e, item, box) {
+    const kind = item.edge.kind;
+    if (kind === 'corner') {
+        const i = cornerAt(e, item.edge.p1[0]), c = chainCorners(e.chain)[i];
+        if (!c) return '';
+        selectCorner(e.chain.name, i);
+        const detail = cornerDetailInForce(c);
+        item.bind = () => {
+            document.getElementById('o2-detail').onchange = ev => { setCornerDetail(e.chain.name, i, ev.target.value); closeDimEditor(); };
+            const sw = document.getElementById('o2-swap');
+            if (sw) sw.onclick = () => { swapCorner(e.chain.name, i); closeDimEditor(); };
+        };
+        return `<div class="d2-row">Detail <select id="o2-detail">${cornerOptions(c.lo.detailHi || '', profileOffered(c.k), true)}</select>
+            ${detail === 'lap' ? '<button class="mini" id="o2-swap">Swap master</button>' : ''}</div>`;
+    }
+    if (kind !== 'jamb' && kind !== 'head') return '';
+    const o = openingAt(e, kind, item.edge.p1);
+    if (!o) return '';
+    const pending = { detail: o[kind], master: o[kind + '_master'] };
+    const ask = () => {
+        document.getElementById('o2-ask').style.display = '';
+        const arr = document.getElementById('o2-master');
+        if (arr) arr.style.display = pending.detail === 'lap' ? '' : 'none';
+    };
+    item.bind = () => {
+        document.getElementById('o2-detail').onchange = ev => { pending.detail = ev.target.value; ask(); };
+        box.querySelectorAll('[data-master]').forEach(b => b.onclick = () => {
+            pending.master = b.dataset.master;
+            box.querySelectorAll('[data-master]').forEach(x => x.classList.toggle('active', x === b));
+            ask();
+        });
+        document.getElementById('o2-yes').onclick = () => { setOpeningDetail(e, o.key, kind, pending.detail, pending.master, 'chain'); closeDimEditor(); };
+        document.getElementById('o2-no').onclick = () => { setOpeningDetail(e, o.key, kind, pending.detail, pending.master, 'one'); closeDimEditor(); };
+    };
+    return `<div class="d2-row">${kind === 'jamb' ? 'Both jambs' : 'Head'} <select id="o2-detail">${cornerOptions(o[kind], toggleValue('cladding-type') === 'panel', false)}</select></div>
+        <div class="d2-scope turn-toggle" id="o2-master" style="${o[kind] === 'lap' ? '' : 'display:none'}">
+            <button class="turn-btn ${o[kind + '_master'] === 'face' ? 'active' : ''}" data-master="face">Face board over</button>
+            <button class="turn-btn ${o[kind + '_master'] === 'reveal' ? 'active' : ''}" data-master="reveal">Lining over</button></div>
+        <div class="d2-ask" id="o2-ask" style="display:none">Apply this to every window and door in this chain?${kind === 'head' ? ' (heads only)' : ''}
+            <button class="mini" id="o2-yes">Yes</button> <button class="mini" id="o2-no">No, this one only</button></div>`;
+}
+
+function openEdgeEditor(item) {
+    const e = d2Elev(view2d.name);
+    if (!e) return;
+    const kind = item.edge.kind, [title, key, what] = EDGE_INFO[kind], ed = e.chain.edges;
+    D2.editing = { key: item.el.dataset.key, item };
+    const box = document.getElementById('dim2d-editor');
+    const vent = kind === 'head' ? `<div class="d2-scope turn-toggle" id="e2-vent">
+            <button class="turn-btn ${ed.vent === 'front' ? 'active' : ''}" data-vent="front">Vent at front</button>
+            <button class="turn-btn ${ed.vent === 'back' ? 'active' : ''}" data-vent="back">Vent at back</button></div>` : '';
+    item.bind = null;
+    const detail = detailBlock(e, item, box);
+    box.innerHTML = `<div class="d2-title" style="color:${EDGE_COLOUR[kind]}">${title} · ${e.chain.name}</div>${detail}${vent}
+        <span>${what}</span> <input id="e2-input" type="number" step="1" min="0" max="100" value="${Math.round(ed[key])}"> <span class="unit">mm</span>
+        <div class="d2-hint">${what} applies to every elevation in ${e.chain.name} · Enter to apply · Esc to cancel</div>`;
+    box.style.display = '';
+    if (item.bind) item.bind();
+    const input = document.getElementById('e2-input');
+    input.disabled = kind === 'head' && ed.vent !== 'back';
+    box.querySelectorAll('[data-vent]').forEach(b => b.onclick = () => {
+        setEdge(e, 'vent', b.dataset.vent);
+        onNumeric();
+        openEdgeEditor(item);
+    });
+    input.onkeydown = ev => {
+        ev.stopPropagation();                  // Escape here closes the box, not the 2D view
+        if (ev.key === 'Enter') {
+            ev.preventDefault();
+            const done = setEdge(e, key, input.value);
+            closeDimEditor();
+            if (done) { setStatus(`${what} ${Math.round(e.chain.edges[key])} mm on ${e.chain.name}`, 'ready'); onNumeric(); }
+        } else if (ev.key === 'Escape') { ev.preventDefault(); closeDimEditor(); }
+    };
+    position2D();
+    if (!input.disabled) { input.focus(); input.select(); }
 }
 
 // ─── THE EDITOR ───
@@ -164,9 +321,13 @@ function applyDim(d, v, scope) {
     if (!e) return;
     const members = scope === 'chain' ? e.chain.members.filter(m => m.result && m.result.ok) : [e];
     const z0 = e.result.frame.origin[2];
-    switch (d.kind) {
-        case 'row': { const rows = withRow(e, d.row, v); members.forEach(m => { m.panelRows = rows.slice(); }); break; }
-        case 'course': members.forEach(m => { m.cover = v; }); break;
+    switch (d.kind) {      // a row or course height is a vertical input: it locks the datum
+        case 'row': {
+            const r = lockForRow(e, d.row), rows = withRow(e, r.j, v, r.drawn);
+            members.forEach(m => { m.panelRows = rows.slice(); });
+            break;
+        }
+        case 'course': lockDatum(e); members.forEach(m => { m.cover = v; }); break;
         case 'cut_left': {
             // The left cut moves one for one with the offset (against it on a reversed
             // face), so the offset that gives the typed cut is found directly, then
@@ -194,8 +355,8 @@ function splitRow(e, j) {
     const gap = parseFloat(document.getElementById('panel_gap').value) || 0;
     const h = rowsDrawn(e)[j];
     if (!h) return;
-    const rows = withRow(e, j, h), half = Math.max(1, (h - gap) / 2);
-    rows.splice(j, 1, half, half);
+    const r = lockForRow(e, j), rows = withRow(e, r.j, h, r.drawn), half = Math.max(1, (h - gap) / 2);
+    rows.splice(r.j, 1, half, half);
     d2SetRows(e, rows);
 }
 
@@ -204,12 +365,12 @@ function mergeRow(e, j) {
     const gap = parseFloat(document.getElementById('panel_gap').value) || 0;
     const drawn = rowsDrawn(e);
     if (j + 1 >= drawn.length) { setStatus('That is the top row: there is no row above to merge with', 'busy'); return; }
-    const rows = withRow(e, j + 1, drawn[j + 1]);
-    rows.splice(j, 2, drawn[j] + gap + drawn[j + 1]);
+    const r = lockForRow(e, j), rows = withRow(e, r.j + 1, drawn[j + 1], r.drawn);
+    rows.splice(r.j, 2, drawn[j] + gap + drawn[j + 1]);
     d2SetRows(e, rows);
 }
 
-function d2SetRows(e, rows) {
+function d2SetRows(e, rows) {      // Split row and Merge row come through here, locked already
     const multi = e.chain.members.filter(m => m.result && m.result.ok).length > 1;
     const members = D2.scope === 'chain' && multi ? e.chain.members.filter(m => m.result && m.result.ok) : [e];
     members.forEach(m => { m.panelRows = rows.slice(); });
@@ -230,8 +391,7 @@ function openCornerEditor(item) {
     const panel = toggleValue('cladding-type') === 'panel';
     const ed = document.getElementById('dim2d-editor');
     ed.innerHTML = `<div class="d2-title">${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner · ${CORNER_LABEL[detail]}</div>
-        <select id="d2-corner">${[['', 'Job default'], ['mitre', 'Mitred'], ['lap', 'Master lap'], ['butt', 'Square']]
-            .map(([v, t]) => `<option value="${v}" ${v === own ? 'selected' : ''} ${v === 'lap' && !panel ? 'disabled' : ''}>${t}</option>`).join('')}</select>
+        <select id="d2-corner">${cornerOptions(own, profileOffered(c.k), true)}</select>
         ${detail === 'lap' ? `<button class="mini" id="d2-swap">Swap master</button>` : ''}
         <button class="mini" id="d2-close">Done</button>`;
     ed.style.display = '';

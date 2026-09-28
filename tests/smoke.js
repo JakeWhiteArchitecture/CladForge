@@ -374,6 +374,110 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('2D cut and level:', JSON.stringify(solved));
     if (!solved.was || solved.was.locked || solved.now.cut !== 300 || Math.round(solved.top) !== 5000)
         throw new Error('cut/level write-back failed: ' + JSON.stringify(solved));
+
+    // Coloured edges over the outline. Click a purple (top) edge and type an offset: the
+    // panels stand further back from the top, on the whole chain, and the panel field agrees.
+    await page.waitForTimeout(800);
+    const edgeKinds = await page.evaluate(() => {
+        const c = {};
+        document.querySelectorAll('.edge2d-svg line').forEach(l => { c[l.dataset.kind] = (c[l.dataset.kind] || 0) + 1; });
+        const lines = Array.from(document.querySelectorAll('.edge2d-svg line[data-kind="top"]'));
+        const len = l => Math.hypot(l.x2.baseVal.value - l.x1.baseVal.value, l.y2.baseVal.value - l.y1.baseVal.value);
+        lines.sort((a, b) => len(b) - len(a));
+        if (lines[0]) lines[0].id = 'smoke-top-edge';
+        return c;
+    });
+    console.log('2D edges:', JSON.stringify(edgeKinds));
+    const topOf = () => page.evaluate(() => Math.round(Math.max(...window._lastPreview.geometry
+        .filter(m => m.ifc_type === 'panel' && m.elevation === 'Elevation A').flatMap(m => m.profile.map(q => q[1])))));
+    // An SVG line's box has no height (Chromium leaves the stroke out), so click it as a person
+    // does: at a point on the line where the line is what is under the pointer.
+    const onLine = id => page.evaluate(id => {
+        const l = document.getElementById(id), r = l.ownerSVGElement.getBoundingClientRect();
+        const [x1, y1, x2, y2] = ['x1', 'y1', 'x2', 'y2'].map(a => l[a].baseVal.value);
+        for (const t of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+            const x = r.left + x1 + (x2 - x1) * t, y = r.top + y1 + (y2 - y1) * t;
+            if (document.elementFromPoint(x, y) === l) return { x, y };
+        }
+        return null;
+    }, id);
+    const topBefore = await topOf();
+    const topAt = await onLine('smoke-top-edge');
+    if (!topAt) throw new Error('the top edge is covered everywhere along it');
+    await page.mouse.click(topAt.x, topAt.y);
+    await page.waitForSelector('#e2-input', { timeout: 5000 });
+    await page.fill('#e2-input', '25');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1800);
+    const topEdit = await page.evaluate(() => ({ chain: state.elevations[0].chain.edges.top,
+        field: document.getElementById('edge-top').value, still2D: in2D() }));
+    const topAfter = await topOf();
+    console.log('2D top edge:', JSON.stringify(topEdit), 'panel top', topBefore, '→', topAfter);
+    if (topEdit.chain !== 25 || topEdit.field !== '25' || topBefore - topAfter !== 15 || !topEdit.still2D)
+        throw new Error('top edge offset did not apply: ' + JSON.stringify({ topEdit, topBefore, topAfter }));
+    // The red head edge: switch the ventilation to the back and the head lining drops by the air space.
+    const headZ = () => page.evaluate(() => {
+        const m = window._lastPreview.geometry.find(g => g.ifc_type === 'reveal' && / Reveal \dH$/.test(g.name) && g.elevation === 'Elevation A');
+        return m ? Math.round(m.frame.origin[2]) : null;
+    });
+    const zFront = await headZ();
+    await page.evaluate(() => { const l = document.querySelector('.edge2d-svg line[data-kind="head"]'); if (l) l.id = 'smoke-head-edge'; });
+    const headAt = await onLine('smoke-head-edge');
+    if (!headAt) throw new Error('the head edge is covered everywhere along it');
+    await page.mouse.click(headAt.x, headAt.y);
+    await page.click('#e2-vent [data-vent="back"]');
+    await page.waitForTimeout(1800);
+    const zBack = await headZ();
+    console.log('2D head edge: lining at', zFront, '→', zBack, JSON.stringify(await page.evaluate(() => state.elevations[0].chain.edges)));
+    if (zFront === null || zFront - zBack !== 10) throw new Error('head ventilation did not lower the lining: ' + zFront + ' → ' + zBack);
+    await page.keyboard.press('Escape');
+    await page.evaluate(async () => { Object.assign(state.elevations[0].chain.edges, EDGE_DEFAULTS); syncEdgeFields(); await updatePreview(); });
+
+    // Window and door corners. Changing a jamb asks whether it goes to every window and door
+    // in the chain: Yes sets both of A's openings; No sets just the one clicked.
+    await page.waitForTimeout(600);
+    const jambBadges = () => page.$$('.opening-badge[data-key$=":jamb"]');
+    await (await jambBadges())[0].click();
+    await page.selectOption('#o2-detail', 'lap');
+    const asked = await page.isVisible('#o2-ask');
+    await page.click('#o2-yes');
+    await page.waitForTimeout(1800);
+    const toAll = await page.evaluate(() => Object.values(state.elevations[0].openingDetails).map(d => d.jamb).join(','));
+    await (await jambBadges())[1].click();
+    await page.selectOption('#o2-detail', 'profile');
+    await page.click('#o2-no');
+    await page.waitForTimeout(1800);
+    const openingsNow = await page.evaluate(() => ({
+        jambs: openingsOf(state.elevations[0]).map(o => o.jamb).join(','),
+        profiles: window._lastPreview.geometry.filter(m => m.ifc_type === 'corner_profile').map(m => m.name.replace('Elevation ', '')).join(','),
+        badges: Array.from(document.querySelectorAll('.opening-badge')).map(b => b.textContent).join(','),
+        others: state.elevations.slice(1).map(e => Object.keys(e.openingDetails || {}).length).join(',') }));
+    console.log('2D openings:', JSON.stringify({ asked, toAll, ...openingsNow }));
+    if (!asked || toAll !== 'lap,lap' || openingsNow.jambs.split(',').sort().join() !== 'lap,profile'
+        || openingsNow.profiles.split(',').length !== 2 || /[1-9]/.test(openingsNow.others))
+        throw new Error('opening corner details did not apply as asked: ' + JSON.stringify({ asked, toAll, openingsNow }));
+    // "Every window and door in this chain" reaches every member of the chain and no other chain.
+    const scopeOnly = await page.evaluate(() => {
+        const saved = window._lastPreview;
+        window._lastPreview = { info: [{ elevation: 'X1', opening_details: [{ key: 'a' }, { key: 'b' }] },
+                                       { elevation: 'X2', opening_details: [{ key: 'c' }] },
+                                       { elevation: 'Y1', opening_details: [{ key: 'd' }] }] };
+        const cx = { members: [] }, cy = { members: [] };
+        const mk = (name, chain) => { const m = { result: { ok: true, name }, chain, openingDetails: {} }; chain.members.push(m); return m; };
+        const x1 = mk('X1', cx), x2 = mk('X2', cx), y1 = mk('Y1', cy);
+        const realNumeric = onNumeric, realList = renderElevationList;
+        onNumeric = () => {}; renderElevationList = () => {};
+        setOpeningDetail(x1, 'a', 'jamb', 'lap', 'reveal', 'chain');
+        setOpeningDetail(x2, 'c', 'head', 'profile', 'face', 'one');
+        onNumeric = realNumeric; renderElevationList = realList;
+        window._lastPreview = saved;
+        return JSON.stringify([x1.openingDetails, x2.openingDetails, y1.openingDetails]);
+    });
+    console.log('opening scope:', scopeOnly);
+    if (scopeOnly !== JSON.stringify([{ a: { jamb: 'lap', jamb_master: 'reveal' }, b: { jamb: 'lap', jamb_master: 'reveal' } },
+                                      { c: { jamb: 'lap', jamb_master: 'reveal', head: 'profile', head_master: 'face' } }, {}]))
+        throw new Error('apply-to-all reached the wrong openings: ' + scopeOnly);
+    await page.evaluate(async () => { state.elevations[0].openingDetails = {}; await updatePreview(); });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(1200);
     const back = await page.evaluate(() => ({ ortho: !!activeCamera().isOrthographicCamera, rotate: controls.enableRotate,
@@ -382,6 +486,51 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('back to 3D:', JSON.stringify(back), '| was', pose3d);
     if (back.ortho || !back.rotate || back.pose !== pose3d)
         throw new Error('3D pose not restored: ' + JSON.stringify(back) + ' vs ' + pose3d);
+
+    // Boards and waste: the active panel chain packed onto stock boards after a rebuild.
+    await page.evaluate(async () => { await updatePreview(); });
+    await page.waitForFunction(() => window._lastPlan && document.getElementById('waste-readout').style.display !== 'none', null, { timeout: 20000 });
+    const readout = await page.evaluate(() => {
+        const box = document.getElementById('waste-readout'), plan = window._lastPlan;
+        const red = () => getComputedStyle(document.getElementById('wr-waste')).color;
+        const real = { text: box.innerText.replace(/\n/g, ' | '), waste: +(100 * plan.waste).toFixed(1), over: box.classList.contains('over'),
+                       colour: red(), boards: plan.n_boards, lower: plan.lower_bound, pieces: plan.n_pieces, ms: plan.ms };
+        // the colour follows the 5% line either way
+        const chain = state.elevations[0].chain;
+        renderReadout(chain, Object.assign({}, plan, { waste: 0.04 }));
+        const at4 = { over: box.classList.contains('over'), colour: red() };
+        renderReadout(chain, Object.assign({}, plan, { waste: 0.06 }));
+        const at6 = { over: box.classList.contains('over'), colour: red() };
+        renderReadout(chain, plan);
+        return { real, at4, at6 };
+    });
+    console.log('waste readout:', JSON.stringify(readout));
+    if (readout.real.boards < readout.real.lower || readout.real.pieces < 1 || readout.at4.over || !readout.at6.over
+        || readout.at6.colour !== 'rgb(239, 68, 68)' || readout.at4.colour === readout.at6.colour
+        || readout.real.over !== (readout.real.waste > 5) || readout.real.ms > 1000)
+        throw new Error('waste readout wrong: ' + JSON.stringify(readout));
+    // A board as big as two panels side by side packs them two to a board.
+    const bigger = await page.evaluate(async () => {
+        document.getElementById('board_w').value = 2500; await updatePreview();
+        await new Promise(r => setTimeout(r, 900));
+        const n = window._lastPlan.n_boards;
+        document.getElementById('board_w').value = 1250; await updatePreview();
+        await new Promise(r => setTimeout(r, 900));
+        return { wide: n, normal: window._lastPlan.n_boards };
+    });
+    console.log('board size:', JSON.stringify(bigger));
+    if (!(bigger.wide < bigger.normal)) throw new Error('a wider board did not save boards: ' + JSON.stringify(bigger));
+    // The cutting plan, from the button beside the DXF one.
+    await page.click('#plan-btn');
+    await page.waitForSelector('#download-reminder.open', { timeout: 120000 });
+    const [planFile] = await Promise.all([page.waitForEvent('download'), page.click('#download-reminder .btn-primary')]);
+    const planPath = path.join(__dirname, 'smoke_out.plan.dxf');
+    await planFile.saveAs(planPath);
+    const planText = fs.readFileSync(planPath, 'utf8');
+    console.log('cutting plan:', planFile.suggestedFilename(), fs.statSync(planPath).size, 'bytes,',
+                (planText.match(/Board \d+  -  waste/g) || []).length, 'boards drawn');
+    if (!planText.includes('Cutting plan for setting-out. Not a quantity take-off for pricing.') || !/Panel R\d-\d/.test(planText))
+        throw new Error('cutting plan DXF is missing its header or pieces');
 
     // The wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
     await lookAt('Wing south wall', [0, 0.3, 1]);
@@ -487,6 +636,29 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         throw new Error('corner badge did not set one corner: ' + JSON.stringify(viaBadge));
     await page.evaluate(async () => { const ch = state.elevations[4].chain; setCornerDetail(ch.name, 0, ''); setCornerDetail(ch.name, 1, ''); toggle2D(); await updatePreview(); });
     await page.waitForTimeout(1200);
+    // Profile at the B–C chain corner (external, right-angled): a profile element and a P
+    // badge. Never offered at a re-entrant corner.
+    const profiled = await page.evaluate(async () => {
+        const ch = state.elevations[4].chain, c = chainCorners(ch)[0];
+        setCornerDetail(ch.name, 0, 'profile');
+        await updatePreview();
+        setActive(state.elevations.findIndex(e => e.name === 'Elevation C')); toggle2D();
+        await new Promise(r => setTimeout(r, 1500));
+        const out = { detail: cornerDetailInForce(c),
+                      meshes: window._lastPreview.geometry.filter(m => m.ifc_type === 'corner_profile').map(m => m.name),
+                      badges: Array.from(document.querySelectorAll('.corner-badge:not(.opening-badge)')).map(b => b.textContent),
+                      reentrantOffered: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(-1), true)),
+                      externalOffered: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true)) };
+        toggle2D();
+        setCornerDetail(ch.name, 0, '');
+        await updatePreview();
+        return out;
+    });
+    console.log('corner profile:', JSON.stringify(profiled));
+    if (profiled.detail !== 'profile' || profiled.meshes.length !== 1 || !profiled.badges.includes('P')
+        || profiled.reentrantOffered || !profiled.externalOffered)
+        throw new Error('corner profile not placed or offered wrongly: ' + JSON.stringify(profiled));
+    await page.waitForTimeout(1200);
     await page.evaluate(async () => { setActive(4); deleteElevation(); await new Promise(r => setTimeout(r, 1500)); });
     await page.click('#corner-type .turn-btn[data-value="lap"]');
     await page.waitForTimeout(1200);
@@ -575,22 +747,60 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     });
     console.log('offset scope:', JSON.stringify(offsetScope));
 
-    // Clicking a member of a built chain makes its base the chain's course datum.
+    // The course datum locks on the first row edit in a chain and never moves on a select.
+    // B and C share a chain; give B a splash zone at its foot so it starts 150 higher than
+    // C, type a row on B, then select C and B again: no row on either face may move.
+    await page.click('#cladding-type .turn-btn[data-value="panel"]');
+    await page.waitForTimeout(1500);
     const datum = await page.evaluate(async () => {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
         const b = state.elevations.find(e => e.chain.members.length > 1);
         const c = b.chain.members.find(m => m !== b);
-        const sent = () => [...new Set(getParams().elevations.filter(r => r.chain === b.chain.name)
-                                                             .map(r => r.course_datum_from))].join(',');
-        setActive(state.elevations.indexOf(c)); openEditWidget(c);
+        const saved = [b.disabled['base|0|0'], c.disabled['base|0|0']];
+        b.disabled['base|0|0'] = false; c.disabled['base|0|0'] = true;
+        b.chain.datumFrom = null;
+        b.chain.members.forEach(m => { m.panelRows = null; m.cover = null; });
+        const rows = () => b.chain.members.map(m => {
+            const z0 = m.result.frame.origin[2];
+            return m.name.replace('Elevation ', '') + ':' + [...new Set(window._lastPreview.geometry
+                .filter(g => g.ifc_type === 'panel' && g.elevation === m.result.name)
+                .map(g => Math.round(Math.min(...g.profile.map(q => q[1])) + z0)))].sort((x, y) => x - y).join('/');
+        }).join(' ');
+        setActive(state.elevations.indexOf(b)); await updatePreview();
+        const fallback = rows();
+        setActive(state.elevations.indexOf(c)); await updatePreview();
+        const unlockedSelect = rows();
+        setActive(state.elevations.indexOf(b)); await updatePreview();
+        const row = window._lastPreview.dimensions.find(d => d.kind === 'row' && d.elevation === b.result.name);
+        if (!row) return { error: 'no row dimension on ' + b.name, type: toggleValue('cladding-type'), fallback,
+                           dims: window._lastPreview.dimensions.filter(d => d.elevation === b.result.name).map(d => d.label + ':' + (d.kind || '-')),
+                           info: window._lastPreview.info.map(i => `${i.elevation}:${(i.rows || []).join('/')}`) };
+        applyDim(row, 700, 'chain');
+        await wait(1500);
+        const typed = rows(), locked = b.chain.datumFrom && b.chain.datumFrom.name;
+        setActive(state.elevations.indexOf(c)); await updatePreview();
+        const selectC = rows();
+        setActive(state.elevations.indexOf(b)); await updatePreview();
+        const selectB = rows();
+        // a later edit on C changes C's rows but leaves the datum on B
+        applyDim(window._lastPreview.dimensions.find(d => d.kind === 'row' && d.elevation === c.result.name) ||
+                 { kind: 'course', value: 0, elevation: c.result.name }, 650, 'one');
+        await wait(1500);
+        const stillB = b.chain.datumFrom && b.chain.datumFrom.name;
+        const hint = !!document.getElementById('edit-datum');
+        b.chain.members.forEach(m => { m.panelRows = null; });
+        b.chain.datumFrom = null;
+        [b.disabled['base|0|0'], c.disabled['base|0|0']] = saved;
         await updatePreview();
-        const afterC = sent(), note = document.getElementById('edit-datum').textContent;
-        setActive(state.elevations.indexOf(b)); closeEditWidget();
-        await updatePreview();
-        return { b: b.name, c: c.name, afterC, afterB: sent(), note };
+        return { b: b.name, fallback, unlockedSelect, typed, locked, selectC, selectB, stillB, hint,
+                 bRows: (window._lastPreview.info.find(i => i.elevation === b.result.name) || {}).rows };
     });
     console.log('course datum:', JSON.stringify(datum));
-    if (datum.afterC !== datum.c || datum.afterB !== datum.b || !datum.note.includes(datum.c))
-        throw new Error('clicking an elevation did not move the chain datum: ' + JSON.stringify(datum));
+    if (datum.unlockedSelect !== datum.fallback || datum.selectC !== datum.typed || datum.selectB !== datum.typed
+        || datum.locked !== datum.b || datum.stillB !== datum.b || datum.hint || datum.typed === datum.fallback)
+        throw new Error('selecting an elevation moved the rows, or the datum did not lock: ' + JSON.stringify(datum));
+    await page.click('#cladding-type .turn-btn[data-value="plank"]');
+    await page.waitForTimeout(1200);
 
     // The level picker's dot: red on a surface, green when it snaps to a corner.
     await page.evaluate(() => frameElevation(state.elevations[0].result));
@@ -626,9 +836,15 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     // Planks cannot lap, so the option disables itself and falls back to a mitre.
     await page.click('#cladding-type .turn-btn[data-value="plank"]');
     await page.waitForTimeout(1200);
-    console.log('lap disabled for planks:', await page.evaluate(() =>
-        document.querySelector('#corner-type .turn-btn[data-value="lap"]').disabled
-        + ' active=' + document.querySelector('#corner-type .turn-btn.active').dataset.value));
+    const plankCorners = await page.evaluate(() => ({
+        lap: document.querySelector('#corner-type .turn-btn[data-value="lap"]').disabled,
+        profile: document.querySelector('#corner-type .turn-btn[data-value="profile"]').disabled,
+        active: document.querySelector('#corner-type .turn-btn.active').dataset.value,
+        options: /value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true))
+                 && /value="lap"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true)) }));
+    console.log('Master and Profile disabled for planks:', JSON.stringify(plankCorners));
+    if (!plankCorners.lap || !plankCorners.profile || !plankCorners.options || plankCorners.active !== 'mitre')
+        throw new Error('Master or Profile offered for planks: ' + JSON.stringify(plankCorners));
 
     // The server importer, the fallback for models web-ifc cannot build.
     await page.evaluate(() => loadModel(state.file, 'server'));

@@ -42,6 +42,12 @@ def stacked_positions(start, end, pitch):
 ROW_MIN, ROW_MAX = 150.0, 3000.0     # mm – a listed panel row; short rows are deliberate tiers
 
 
+def row_height(heights, i, default_h):
+    """Height of list row *i*: as listed, held to ROW_MIN–ROW_MAX, or *default_h* past the list."""
+    heights = [float(h) for h in (heights or []) if h]
+    return min(ROW_MAX, max(ROW_MIN, heights[i])) if i < len(heights) else float(default_h)
+
+
 def panel_rows(heights, default_h, gap, start, end, base=None):
     """Panel rows up a face as [(v, h, index, full h)], bottom first, and the indices of
     rows asked for below ROW_MIN.
@@ -61,12 +67,9 @@ def panel_rows(heights, default_h, gap, start, end, base=None):
     seq, short = [], []
     v, i = float(start), 0
     while v < end - 1e-6:
-        if i < len(heights):
-            if heights[i] < ROW_MIN:
-                short.append(i)
-            h = min(ROW_MAX, max(ROW_MIN, heights[i]))
-        else:
-            h = default_h
+        if i < len(heights) and heights[i] < ROW_MIN:
+            short.append(i)
+        h = row_height(heights, i, default_h)
         seq.append((v, h, i))
         v, i = v + h + gap, i + 1
     v = float(start)
@@ -258,18 +261,24 @@ def buildup_depth(p):
     return d + (p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"])
 
 
-CORNER_DETAILS = ("mitre", "lap", "butt")
+CORNER_DETAILS = ("mitre", "lap", "profile", "butt")     # Mitred, Master, Profile, Square
 
 
-def corner_detail(p, override=None):
+def corner_detail(p, override=None, k=None):
     """The corner detail in force: *override* when a corner sets its own, else the job
-    setting. The master-lap is a panel detail: one board runs past the corner and the
-    other butts behind it, leaving the joint gap exposed. Plank cladding has no master
-    board to lap, so it falls back to a mitre."""
+    setting. Master ("lap") is a panel detail: one board runs past the corner and the
+    other stops a joint gap clear of it. Plank cladding has no master board to lap, so
+    it falls back to a mitre. Profile is a panel detail for right-angled external corners
+    (cladding_corners.offered); at a re-entrant corner (k <= 0), any other angle or with
+    planks it falls back to a mitre too."""
     detail = override if override in CORNER_DETAILS else p.get("corner", "mitre")
-    if detail == "lap" and p["cladding_type"] != "panel":
+    detail = detail if detail in CORNER_DETAILS else "mitre"
+    panel = p["cladding_type"] == "panel"
+    if detail == "lap" and not panel:
         return "mitre"
-    return detail if detail in CORNER_DETAILS else "mitre"
+    if detail == "profile" and (not panel or (k is not None and not (k > 0 and abs(k - 1.0) < 0.05))):
+        return "mitre"
+    return detail
 
 
 def corner_ends(elev, p):
@@ -303,10 +312,12 @@ def corner_ends(elev, p):
         return (0.0, 0.0) if master else (cot, -(depth / sin_b + gap))
 
     def end(k, master, override):
-        detail = corner_detail(p, override)
+        detail = corner_detail(p, override, k if k else None)
         if detail == "butt":
             return (0.0, 0.0), detail
-        return ((k, 0.0) if detail == "mitre" else lap(k, master)), detail
+        # A profiled corner cuts the layers behind as a mitre, so the battens run on under
+        # the profile's flanges; the boards stop short of it (cladding_geometry).
+        return ((k, 0.0) if detail in ("mitre", "profile") else lap(k, master)), detail
 
     (left, d_left), (right, d_right) = end(lo, master_lo, over_lo), end(hi, master_hi, over_hi)
     return left, right, (d_left, d_right)
@@ -325,6 +336,20 @@ def corner_shift(u, corner, s, tol=0.6):
 
 def corner_ring(ring, corner, s):
     return [(corner_shift(float(u), corner, s), float(v)) for u, v in ring]
+
+
+def ring_at(mesh, k, s):
+    """Ring *k* of a prism (0 the profile, then its holes) where it is *s* deep: the
+    chain-corner shear found by position, then the shift each vertex carries where the
+    board is mitred to a window or door lining ("vshift", one per ring vertex:
+    u += a + b·s, v += c + d·s). Shared by the IFC and DXF writers."""
+    rings = [mesh["profile"]] + list(mesh.get("holes") or [])
+    corner = mesh.get("corner")
+    pts = corner_ring(rings[k], corner, s) if corner else [(float(u), float(v)) for u, v in rings[k]]
+    shifts = mesh.get("vshift") or []
+    if k < len(shifts) and shifts[k]:
+        pts = [(u + a + b * s, v + c + d * s) for (u, v), (a, b, c, d) in zip(pts, shifts[k])]
+    return pts
 
 
 def clip_bounds(elev):

@@ -3,6 +3,7 @@
 from cladding_constants import (_parse, PLANK_SPAN_TABLE, MIN_CAVITY, FIXING_EMBEDMENT,
                                 MAX_BATTEN_SPAN)
 from cladding_primitives import ROW_MIN
+from cladding_corners import PANEL_SIZES as PROFILE_SIZES
 
 MIN_CLOSING_CUT = 100.0   # mm – narrower closing pieces are hard to fix and look wrong
 
@@ -82,8 +83,26 @@ def check_rules(params, infos=None):
     if per:
         add("Corners", "pass", "; ".join("%d corner end(s), %s" % (n, {
             "mitre": "mitred: the whole buildup wraps on the bisector plane",
-            "lap": "master-lap: one board masters the corner and the other butts behind it, joint gap exposed",
+            "lap": "master: one board masters the corner and the other stops a joint gap clear of it",
+            "profile": "profiled: an aluminium outer corner profile, the panels butting its nose",
             "butt": "square: both boards stop at the wall corner"}[d]) for d, n in sorted(per.items())))
+    # Corner profiles: the flanges want a batten under them, and the profile is sized to
+    # the panel, so a panel thickness it is not made for needs the manufacturer's word.
+    for i in infos:
+        for w in i.get("profile_warnings") or []:
+            add("Corner profile", "warn", w)
+    if any(i.get("profiles") for i in infos) and p["panel_t"] not in PROFILE_SIZES:
+        add("Corner profile", "warn", "Panels are %.0f mm thick: confirm the profile size for this panel thickness "
+            "with the manufacturer (the profile suits 6, 8 or 10 mm)" % p["panel_t"], p["panel_t"])
+    # A cut panel has to come out of a stock board, turned if rotation is allowed.
+    if p["cladding_type"] == "panel":
+        bw, bh = p["board_w"], p["board_h"]
+        fits = lambda w, h: (w <= bw and h <= bh) or (p["rotate"] and w <= bh and h <= bw)  # noqa: E731
+        big = sorted({(w, h) for i in infos for w in (i.get("panel_widths") or []) for h in (i.get("rows") or [])
+                      if not fits(w, h)})
+        if big:
+            add("Board size", "fail", "%d cut size(s) larger than the %.0f x %.0f board either way round, e.g. %.0f x %.0f"
+                % (len(big), bw, bh, big[0][0], big[0][1]), len(big))
     bad = sum(i.get("unsupported_joints", 0) for i in infos)
     if bad:
         add("End joints", "warn", "%d board end joints fall between battens — shorten max length or adjust centres" % bad, bad)

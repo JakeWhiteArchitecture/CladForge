@@ -19,6 +19,7 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 
 from cladding_primitives import clip_bounds, clip_bounds_v, splash_rings
+from cladding_edges import offset_region
 
 TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel"})
 _MIN_AREA = 25.0   # mm² – slivers smaller than this are discarded
@@ -169,7 +170,8 @@ def apply_boolean_ops(meshes, p):
     """
     regions, prepared = {}, {}
     for elev in p.get("elevations", []):
-        region = clip_region(elev, p["splash"])
+        # stood back from the top, side and bottom edges by the chain's offsets
+        region = offset_region(elev, clip_region(elev, p["splash"]))
         regions[elev.get("name", "")] = region
         try:
             prepared[elev.get("name", "")] = prep(region)

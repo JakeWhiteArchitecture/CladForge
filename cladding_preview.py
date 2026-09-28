@@ -6,6 +6,7 @@ from cladding_constants import _parse
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
 from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
+from cladding_edges import mitre_to_linings
 from cladding_checks import check_rules  # noqa: F401 — public API lives here
 
 
@@ -28,6 +29,7 @@ def _build_all(p):
     for elev in live:
         if elev.get("chain") in datums:
             elev["course_datum_z"] = datums[elev["chain"]]
+            elev["course_datum_locked"] = elev["chain"] in chosen
     for elev in live:
         m, d, i = build_elevation(p, elev, layout.get(elev.get("name")))
         meshes, dims = meshes + m, dims + d
@@ -40,6 +42,9 @@ def generate_preview(params):
     meshes, dims, infos = _build_all(p)
     if p["trim"]:
         meshes = apply_boolean_ops(meshes, p)
+    # Boards are mitred to the reveal linings on the finished outline, so the edges of
+    # holes left by trimming are mitred as well as the ends that land on a jamb.
+    meshes = mitre_to_linings(meshes, p, infos)
     return {"geometry": _ensure_unique_names(meshes), "dimensions": dims, "info": infos}
 
 

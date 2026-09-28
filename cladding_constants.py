@@ -20,7 +20,8 @@ PLANK_SPAN_TABLE = [(12.0, 400.0), (16.0, 500.0), (20.0, 600.0)]  # (min thickne
 COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers, see-through cladding
     "sheathing": ("#d9c9a3", 0.35), "insulation": ("#e8d86a", 0.30), "counter_batten": ("#8b7355", 1.0),
     "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
-    "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7)}
+    "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
+    "corner_profile": ("#c0c6cc", 1.0)}
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
     "batten_w": (50, 25, 100), "batten_d": (38, 19, 100), "batten_centres": (400, 300, 600),
@@ -30,6 +31,7 @@ _NUMERIC = {  # name: (default, min, max)
     "panel_gap": (10, 0, 15), "plank_w": (150, 75, 250), "plank_t": (20, 12, 32),
     "plank_lap": (0, 0, 50), "plank_gap": (8, 0, 15), "plank_len": (3600, 1800, 6000),
     "closer_w": (50, 25, 150),
+    "board_w": (1250, 300, 3000), "board_h": (2500, 300, 5000), "kerf": (3, 0, 10),   # stock and saw
 }
 
 
@@ -48,6 +50,7 @@ def _parse(params):
     p["plank_orient"] = "vertical" if params.get("plank_orient") == "vertical" else "horizontal"
     p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))
+    p["rotate"] = bool(params.get("rotate", True))          # a piece may be cut turned 90 degrees
     # Derived: battens perpendicular to boards; horizontal battens on vertical counter-battens.
     vertical_planks = p["cladding_type"] == "plank" and p["plank_orient"] == "vertical"
     p["boards_run"] = "vertical" if vertical_planks else "horizontal"
@@ -76,7 +79,25 @@ def _rect(u0, v0, u1, v1):
     return [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]
 
 
+WORLD_UP = (0.0, 0.0, 1.0)
+
+
 def frame_to_world(frame, u, v, d=0.0):
-    """Elevation-local (u, v, depth) → IFC world [x, y, z] (mm, Z-up)."""
+    """Frame-local (u, v, depth) → IFC world [x, y, z] (mm, Z-up): origin + u·U + v·V + d·N.
+    A frame can stand (a wall: V is world Z), lie flat (a roof: N is world Z) or run along
+    an edge (a trim: N along the edge). A frame with no "v" is old data and reads as world
+    Z, which is exactly what n × u gives for a wall frame, so walls are unaffected."""
     o, U, N = frame["origin"], frame["u"], frame["n"]
-    return [o[0] + U[0] * u + N[0] * d, o[1] + U[1] * u + N[1] * d, o[2] + v]
+    V = frame.get("v") or WORLD_UP
+    return [o[0] + U[0] * u + V[0] * v + N[0] * d, o[1] + U[1] * u + V[1] * v + N[1] * d,
+            o[2] + U[2] * u + V[2] * v + N[2] * d]
+
+
+def world_to_frame(frame, p):
+    """IFC world [x, y, z] → frame-local (u, v, depth). The inverse of frame_to_world for
+    an orthonormal frame."""
+    o, U, N = frame["origin"], frame["u"], frame["n"]
+    V = frame.get("v") or WORLD_UP
+    q = [p[0] - o[0], p[1] - o[1], p[2] - o[2]]
+    dot = lambda a: a[0] * q[0] + a[1] * q[1] + a[2] * q[2]   # noqa: E731
+    return [dot(U), dot(V), dot(N)]

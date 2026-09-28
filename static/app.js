@@ -4,6 +4,10 @@ const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDr
                model: null, seq: 0, editing: null, levels: null };
 let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null, _restarting = false;
 
+// Edge settings, per chain: offsets (mm) pulling the buildup back from its top, bottom and
+// free-end edges, the gap in every mitre, and how a window or door head is ventilated.
+const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10 };
+
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
 // meet at corners; coursing is set out along the whole run so joints carry round.
@@ -11,7 +15,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // turns it into cladding. See static/wizard.js.
 function newChain() {
     const chain = { name: 'Chain ' + (++state.seq), members: [], length: 0, built: false,
-                    topZ: null, bottomZ: null };
+                    topZ: null, bottomZ: null, edges: Object.assign({}, EDGE_DEFAULTS) };
     state.chains.push(chain);
     return chain;
 }
@@ -23,7 +27,7 @@ function newElevation(chain) {
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
                 offset: 0,
                 cornerLo: 0, cornerHi: 0, masterLo: false, masterHi: false, detailLo: null, detailHi: null,
-                clipLo: 0, clipHi: null };
+                clipLo: 0, clipHi: null, openingDetails: {} };
     e.chain.members.push(e);
     state.elevations.push(e);
     setActive(n);
@@ -35,19 +39,58 @@ function deleteElevation() {
     closeEditWidget();
     const e = state.elevations.splice(state.active, 1)[0];
     e.highlights.forEach(h => highlightGroup.remove(h));
+    if (e.chain.datumFrom === e) e.chain.datumFrom = null;     // back to the lowest start
     e.chain.members = e.chain.members.filter(m => m !== e);
     if (!e.chain.members.length) state.chains = state.chains.filter(c => c !== e.chain);
     else relinkChain(e.chain);
     setActive(Math.min(state.active, state.elevations.length - 1));
 }
 
+// The chain's course datum locks to the elevation where its first custom vertical input
+// is made — a typed row or course height, a split or a merge — and later edits on other
+// faces leave it there. Until then the engine falls back to the lowest start in the chain.
+function lockDatum(e) {
+    if (!e || !e.chain || e.chain.datumFrom) return false;
+    e.chain.datumFrom = e;
+    return true;
+}
+
 function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' · ' + e.name : e.name; }
+
+// The panel's edge fields show the active elevation's chain and write to all of it.
+function syncEdgeFields() {
+    const e = state.elevations[state.active], ed = e ? e.chain.edges : EDGE_DEFAULTS;
+    for (const k of ['top', 'side', 'bottom', 'gap', 'air']) {
+        const el = document.getElementById('edge-' + k);
+        if (el && document.activeElement !== el) el.value = ed[k];
+    }
+    selectToggle('head-vent', ed.vent);
+    document.getElementById('edge-air').disabled = ed.vent !== 'back';
+    document.getElementById('edge-chain').textContent = e ? 'for ' + e.chain.name : 'for the active chain';
+}
+
+function setEdge(e, key, value) {
+    if (!e) return false;
+    if (key === 'vent') e.chain.edges.vent = value === 'back' ? 'back' : 'front';
+    else {
+        const v = parseFloat(value);
+        if (!isFinite(v)) return false;
+        e.chain.edges[key] = Math.max(0, Math.min(100, v));
+    }
+    syncEdgeFields();
+    return true;
+}
+
+function onEdgeField(key, value) {
+    if (setEdge(state.elevations[state.active], key, value)) onNumeric();
+}
 
 function setActive(i) {
     state.active = i;
-    // Courses round a built chain are set out from the base of the elevation last clicked.
+    // Selecting never moves the chain's course datum: that locks on the first row or
+    // course edit (lockDatum), so choosing a face with a different base moves nothing.
     const picked = state.elevations[i];
-    if (picked && picked.chain.built && picked.result && picked.result.ok) picked.chain.datumFrom = picked;
+    syncEdgeFields();
     // Flat on an elevation, choosing another swings the view across to it.
     if (in2D() && picked && picked.result && picked.result.ok) enter2D(picked.result.name, picked.result.frame, cladBox(picked));
     renderElevationList();
@@ -161,12 +204,53 @@ function chainCorners(chain) {
 
 // Each corner can override the job's corner detail. The two faces meeting there hold the
 // same value (lo member's detailHi, hi member's detailLo), set together as the master is.
-const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master-lap, open joint', butt: 'Square' };
+const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master', profile: 'Profile', butt: 'Square' };
+const CORNER_LETTER = { mitre: 'M', lap: 'L', profile: 'P', butt: 'S' };
+
+// The corner profile is for right-angled external corners of panel cladding only.
+function profileOffered(k) { return toggleValue('cladding-type') === 'panel' && k > 0 && Math.abs(k - 1) < 0.05; }
 
 function cornerDetailInForce(c) {
     const job = toggleValue('corner-type') || 'mitre';
-    const d = c.lo.detailHi || job;
-    return (d === 'lap' && toggleValue('cladding-type') !== 'panel') ? 'mitre' : d;
+    const d = c.lo.detailHi || job, panel = toggleValue('cladding-type') === 'panel';
+    if (d === 'lap' && !panel) return 'mitre';
+    if (d === 'profile' && !profileOffered(c.k)) return 'mitre';
+    return d;
+}
+
+// The four details as <option>s, Master and Profile greyed where they do not apply.
+function cornerOptions(own, profileOk, withDefault) {
+    const panel = toggleValue('cladding-type') === 'panel';
+    return (withDefault ? [['', 'Job default']] : []).concat([['mitre', 'Mitred'], ['lap', 'Master'], ['profile', 'Profile'], ['butt', 'Square']])
+        .map(([v, t]) => {
+            const off = (v === 'lap' && !panel) || (v === 'profile' && !profileOk);
+            const why = v === 'lap' ? 'panel cladding only' : 'right-angled external corners of panel cladding only';
+            return `<option value="${v}" ${v === own ? 'selected' : ''} ${off ? 'disabled' : ''}>${t}${off ? ' (' + why + ')' : ''}</option>`;
+        }).join('');
+}
+
+// ─── WINDOW AND DOOR CORNERS ───
+// Each opening's jambs share one detail and one master arrangement (mirrored); its head
+// has its own. Choices live on the elevation by opening key (u0,v0 of the structural
+// opening), so they survive every rebuild.
+function openingsOf(m) {
+    const info = ((window._lastPreview || {}).info || []).find(i => m.result && i.elevation === m.result.name);
+    return (info && info.opening_details) || [];
+}
+
+function setOpeningDetail(e, key, part, detail, master, scope) {
+    const targets = scope === 'chain' ? e.chain.members.filter(m => m.result && m.result.ok) : [e];
+    for (const m of targets) {
+        const keys = scope === 'chain' ? openingsOf(m).map(o => o.key) : [key];
+        for (const k of keys) {
+            m.openingDetails = m.openingDetails || {};
+            const cur = m.openingDetails[k] = Object.assign({}, m.openingDetails[k]);
+            cur[part] = detail;
+            cur[part + '_master'] = master;
+        }
+    }
+    renderElevationList();
+    onNumeric();
 }
 
 function cornerRows(chain, members) {
@@ -180,10 +264,7 @@ function cornerRows(chain, members) {
         const master = c.lo.masterHi ? c.lo.name : c.hi.name;
         const own = c.lo.detailHi || '';
         const pick = `<select class="corner-detail" title="Corner detail for this corner" onclick="event.stopPropagation()"
-            onchange="setCornerDetail('${chain.name}', ${i}, this.value)">`
-            + [['', 'Job default'], ['mitre', 'Mitred'], ['lap', 'Master lap'], ['butt', 'Square']]
-                .map(([v, t]) => `<option value="${v}" ${v === own ? 'selected' : ''} ${v === 'lap' && !panel ? 'disabled' : ''}>${t}</option>`).join('')
-            + '</select>';
+            onchange="setCornerDetail('${chain.name}', ${i}, this.value)">` + cornerOptions(own, profileOffered(c.k), true) + '</select>';
         const swap = detail === 'lap'
             ? ` · <b>${master.replace('Elevation ', '')}</b> masters <button class="mini" onclick="event.stopPropagation(); swapCorner('${chain.name}', ${i})">Swap</button>`
             : '';
@@ -346,8 +427,6 @@ function openEditWidget(e) {
     state.editing = e;
     document.getElementById('edit-widget').style.display = '';
     document.getElementById('edit-title').textContent = chainLabel(e);
-    document.getElementById('edit-datum').textContent = e.chain.members.length > 1
-        ? 'Courses round ' + e.chain.name + ' now start from the base of ' + e.name + '.' : '';
     updateSliderRange();
     setStatus('Editing ' + chainLabel(e) + ' — shift this elevation\'s setting-out', 'ready');
 }
@@ -503,7 +582,7 @@ _json.dumps(_ex(_pl))`);
 const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
              'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
-             'plank_len', 'closer_w'];
+             'plank_len', 'closer_w', 'board_w', 'board_h', 'kerf'];
 function val(id) { return document.getElementById(id).value; }
 function toggleValue(id) { const b = document.querySelector('#' + id + ' .turn-btn.active'); return b ? b.dataset.value : null; }
 function selectToggle(id, value) {
@@ -526,7 +605,11 @@ function elevationRecords() {
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
                                                    clip_v_hi: vLocal(e, chain.topZ),
                                                    cover: e.cover || null, panel_rows: e.panelRows || null,
-                                                   course_datum_from: chain.datumFrom ? chain.datumFrom.name : null }));
+                                                   course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
+                                                   edge_top: chain.edges.top, edge_side: chain.edges.side,
+                                                   edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
+                                                   head_vent: chain.edges.vent, head_air: chain.edges.air,
+                                                   opening_details: e.openingDetails || {} }));
         }
     }
     return out;
@@ -547,6 +630,7 @@ function getParams() {
     p.reveals = document.getElementById('reveals').checked;
     p.set_out_from_openings = document.getElementById('set_out_from_openings').checked;
     p.cladding_type = toggleValue('cladding-type');
+    p.rotate = document.getElementById('rotate').checked;
     p.plank_orient = toggleValue('plank-orient');
     p.counter_batten = val('counter_batten');
     return p;
@@ -555,11 +639,13 @@ function getParams() {
 function onTypeChange() {
     const panel = toggleValue('cladding-type') === 'panel';
     // The master-lap needs a board to run past the corner, so it is a panel detail.
-    const lap = document.querySelector('#corner-type .turn-btn[data-value="lap"]');
-    lap.disabled = !panel;
-    lap.title = panel ? '' : 'Panel cladding only';
-    lap.style.opacity = panel ? '' : '0.45';
-    if (!panel && lap.classList.contains('active')) selectToggle('corner-type', 'mitre');
+    for (const v of ['lap', 'profile']) {          // Master and Profile are panel details
+        const b = document.querySelector('#corner-type .turn-btn[data-value="' + v + '"]');
+        b.disabled = !panel;
+        b.title = panel ? '' : 'Panel cladding only';
+        b.style.opacity = panel ? '' : '0.45';
+        if (!panel && b.classList.contains('active')) selectToggle('corner-type', 'mitre');
+    }
     document.getElementById('panel-section').style.display = panel ? '' : 'none';
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
     document.getElementById('batten_centres').readOnly = panel;
@@ -630,6 +716,7 @@ _json.dumps(_o)`);
         renderDims2D();
         renderChecks(result.checks);
         renderInfo(result.info);
+        if (params.trim) scheduleNesting();       // not on slider frames: those are untrimmed
     } catch (err) {
         console.error('preview failed', err);
         if (/fatally failed|Aborted/i.test(err.message || '')) {
@@ -776,6 +863,96 @@ import ifc_generator`);
     ifcReady = true;
 }
 
+// ─── BOARDS AND WASTE ───
+// Every panel of the active chain packed onto stock boards (cladding_nesting.py), after
+// each finished rebuild and debounced like a typed field, never on a slider frame.
+let _nestTimer = null, _nestSeq = 0;
+function scheduleNesting() {
+    if (_nestTimer) clearTimeout(_nestTimer);
+    _nestTimer = setTimeout(runNesting, 300);
+}
+
+function chainRecords(chain, params) {
+    const names = chain.members.filter(m => m.result && m.result.ok).map(m => m.result.name);
+    return { names, area: (window._lastPreview.info || []).filter(i => names.includes(i.elevation))
+                            .reduce((a, i) => a + (i.clad_area || 0), 0) };
+}
+
+async function runNesting() {
+    const box = document.getElementById('waste-readout');
+    const e = state.elevations[state.active];
+    if (!pyReady || !window._lastPreview || !e || !e.chain.built || toggleValue('cladding-type') !== 'panel') {
+        box.style.display = 'none';
+        return;
+    }
+    const seq = ++_nestSeq, { names, area } = chainRecords(e.chain);
+    try {
+        pyodide.globals.set('_nest_json', JSON.stringify({ names, area }));
+        const out = await pyodide.runPythonAsync(`
+import json as _json, time as _time
+from cladding_nesting import chain_plan as _cp
+from cladding_constants import _parse as _prs
+_n = _json.loads(_nest_json)
+_t0 = _time.perf_counter()
+_plan = _cp(_o["geometry"], _prs(_p), _n["names"], _n["area"])
+_plan["ms"] = round((_time.perf_counter() - _t0) * 1000)
+_plan.pop("boards")
+_json.dumps(_plan)`);
+        if (seq !== _nestSeq) return;
+        const plan = JSON.parse(out);
+        window._lastPlan = plan;
+        renderReadout(e.chain, plan);
+    } catch (err) {
+        console.warn('packing failed', err);
+        box.style.display = 'none';
+    }
+}
+
+function renderReadout(chain, plan) {
+    const box = document.getElementById('waste-readout'), set = (id, v) => document.getElementById(id).textContent = v;
+    box.style.display = '';
+    set('wr-title', `${chain.name} · panels`);
+    set('wr-area', `${plan.clad_area.toFixed(1)} m²`);
+    set('wr-boards', `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
+    set('wr-lower', `lower bound ${plan.lower_bound}`);
+    const w = document.getElementById('wr-waste');
+    w.textContent = `${(100 * plan.waste).toFixed(1)}%`;
+    box.classList.toggle('over', plan.waste > 0.05);          // red above 5%
+    const notes = [];
+    if (plan.oversize.length) notes.push(`${plan.oversize.length} panel(s) larger than the board`);
+    if (plan.capped) notes.push(`only the first ${plan.n_pieces} pieces packed`);
+    set('wr-note', notes.join(' · '));
+    box.title = `Packed by ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, ${plan.ms} ms`;
+}
+
+async function downloadCuttingPlan() {
+    if (!pyReady) { alert('The engine is still loading.'); return; }
+    const params = getParams(); params.trim = true;
+    if (!params.elevations.length || params.cladding_type !== 'panel') { alert('The cutting plan is for panel cladding: build a panel chain first.'); return; }
+    const btn = document.getElementById('plan-btn');
+    busy(btn, true, 'Packing…');
+    try {
+        const chains = state.chains.filter(c => c.built).map(c => ({
+            name: c.name, names: c.members.filter(m => m.result && m.result.ok).map(m => m.result.name) }))
+            .filter(c => c.names.length);
+        pyodide.globals.set('_params_json', JSON.stringify(params));
+        pyodide.globals.set('_chains_json', JSON.stringify(chains));
+        const dxf = await pyodide.runPythonAsync(`
+import json as _json
+from cladding_preview import generate_preview as _gp
+from cladding_constants import _parse as _prs
+from cladding_nesting import chain_plan as _cp, plan_dxf as _pd
+_p = _json.loads(_params_json)
+_o = _gp(_p)
+_area = {i["elevation"]: i.get("clad_area", 0) for i in _o["info"]}
+_pp = _prs(_p)
+_pd([(c["name"], _cp(_o["geometry"], _pp, c["names"], sum(_area.get(n, 0) for n in c["names"])))
+     for c in _json.loads(_chains_json)])`);
+        showReminder(new Blob([dxf], { type: 'application/dxf' }), 'cutting-plan.dxf');
+    } catch (err) { alert('Cutting plan failed: ' + err.message); }
+    finally { busy(btn, false); }
+}
+
 async function downloadDXF() {
     if (!pyReady) { alert('The engine is still loading.'); return; }
     const params = getParams(); params.trim = true;
@@ -848,7 +1025,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_geometry', 'cladding_booleans',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_geometry', 'cladding_booleans',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

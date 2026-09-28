@@ -83,10 +83,11 @@
                 <div class="field"><label>Corners <span class="unit">where a chain turns</span></label>
                     <div id="corner-type" class="turn-toggle">
                         <button class="turn-btn active" data-value="mitre" onclick="selectToggle('corner-type','mitre'); renderElevationList(); updatePreview()">Mitred</button>
-                        <button class="turn-btn" data-value="lap" onclick="selectToggle('corner-type','lap'); renderElevationList(); updatePreview()">Master lap</button>
+                        <button class="turn-btn" data-value="lap" onclick="selectToggle('corner-type','lap'); renderElevationList(); updatePreview()">Master</button>
+                        <button class="turn-btn" data-value="profile" onclick="selectToggle('corner-type','profile'); renderElevationList(); updatePreview()">Profile</button>
                         <button class="turn-btn" data-value="butt" onclick="selectToggle('corner-type','butt'); renderElevationList(); updatePreview()">Square</button>
                     </div>
-                    <p class="hint" style="margin:4px 0 0">Mitred cuts the whole buildup on the corner's bisector. Master lap is a panel detail: one board runs past and the other butts behind it, leaving the joint gap exposed. Pick which board masters on the corner row above.</p>
+                    <p class="hint" style="margin:4px 0 0">The default for chain corners; each corner, jamb and head can be set on its own (the corner rows above, or click its edge in 2D). Mitred cuts the whole buildup on the corner's bisector. Master is a panel detail: one board runs out flush to the other's face and the other stops a joint gap clear of it. Profile is an aluminium outer corner profile, for right-angled external corners of panels. Square is a placeholder.</p>
                 </div>
                 <div class="derived">Battens: <span id="d-battens">Vertical</span><br>Cover / bay: <span id="d-cover">158 mm</span></div>
             </div>
@@ -94,22 +95,51 @@
             <div class="section">
                 <h2>Openings</h2>
                 <label class="chk"><input type="checkbox" id="set_out_from_openings" checked onchange="updatePreview()"> Set out from the structural openings</label>
-                <label class="chk"><input type="checkbox" id="reveals" checked onchange="updatePreview()"> Reveal linings, mitred to the face panel</label>
+                <label class="chk"><input type="checkbox" id="reveals" checked onchange="updatePreview()"> Reveal linings at jambs and heads, mitred to the face panel</label>
                 <div class="field"><label>Cavity closer width <span class="unit">solid timber, both jambs</span></label>
                     <input type="number" id="closer_w" value="50" min="25" max="150" step="5" oninput="onNumeric()"></div>
-                <p class="hint">Panel edges land on the window jambs and each span between them is split into equal bays no wider than the maximum panel, so a window that does not suit the panel centres still sets the joints. A solid timber cavity closer goes to both vertical sides of every opening. Heads and sills are not lined.</p>
+                <p class="hint">Panel edges land on the window jambs and each span between them is split into equal bays no wider than the maximum panel, so a window that does not suit the panel centres still sets the joints. A solid timber cavity closer goes to both vertical sides of every opening. Jambs and heads are lined; sills are not.</p>
+            </div>
+
+            <div class="section" id="edge-section">
+                <h2>Edges <span class="unit" id="edge-chain">for the active chain</span></h2>
+                <div class="row edge-row">
+                    <div class="field"><label><i class="edge-key" style="background:#a855f7"></i>Top offset <span class="unit">mm</span></label><input type="number" id="edge-top" value="10" min="0" max="100" step="5" oninput="onEdgeField('top', this.value)"></div>
+                    <div class="field"><label><i class="edge-key" style="background:#3b82f6"></i>Bottom offset <span class="unit">mm</span></label><input type="number" id="edge-bottom" value="10" min="0" max="100" step="5" oninput="onEdgeField('bottom', this.value)"></div>
+                </div>
+                <div class="row edge-row">
+                    <div class="field"><label><i class="edge-key" style="background:#22c55e"></i>Free-end offset <span class="unit">mm</span></label><input type="number" id="edge-side" value="0" min="0" max="100" step="5" oninput="onEdgeField('side', this.value)"></div>
+                    <div class="field"><label><i class="edge-key" style="background:#ff9800"></i>Mitre gap <span class="unit">mm</span></label><input type="number" id="edge-gap" value="10" min="0" max="100" step="1" oninput="onEdgeField('gap', this.value)"></div>
+                </div>
+                <div class="field"><label><i class="edge-key" style="background:#ef4444"></i>Head ventilation</label>
+                    <div id="head-vent" class="turn-toggle">
+                        <button class="turn-btn active" data-value="front" onclick="onEdgeField('vent', 'front')">At front</button>
+                        <button class="turn-btn" data-value="back" onclick="onEdgeField('vent', 'back')">At back</button>
+                    </div></div>
+                <div class="field"><label>Air space <span class="unit">over the head lining and off the frame, vented at back</span></label>
+                    <input type="number" id="edge-air" value="10" min="0" max="100" step="1" oninput="onEdgeField('air', this.value)"></div>
+                <p class="hint">Offsets pull the battens, counter-battens and boards back from the top, bottom and free-end edges. Chain corners and window or door jambs take no offset; where boards are mitred the mitre gap opens between them. In the 2D view the edges are drawn in these colours: click one to type its value. Every value applies to the whole chain.</p>
             </div>
 
             <div class="section" id="panel-section">
                 <h2>4 · Panels</h2>
                 <div class="row pair">
                     <div class="field"><label>Thickness <span class="unit">6–20</span></label><input type="number" id="panel_t" value="9" min="6" max="20" oninput="onNumeric()"></div>
-                    <div class="field"><label>Max width <span class="unit">600–1500</span></label><input type="number" id="panel_w" value="1200" min="600" max="1500" step="10" oninput="onNumeric()"></div>
+                    <div class="field"><label>Cut width <span class="unit">600–1500</span></label><input type="number" id="panel_w" value="1200" min="600" max="1500" step="10" oninput="onNumeric()"></div>
                 </div>
                 <div class="row pair">
-                    <div class="field"><label>Max height <span class="unit">1200–3000</span></label><input type="number" id="panel_h" value="2400" min="1200" max="3000" step="10" oninput="onNumeric()"></div>
+                    <div class="field"><label>Cut height <span class="unit">1200–3000, rows by default</span></label><input type="number" id="panel_h" value="2400" min="1200" max="3000" step="10" oninput="onNumeric()"></div>
                     <div class="field"><label>Joint gap <span class="unit">0–15</span></label><input type="number" id="panel_gap" value="10" min="0" max="15" oninput="onNumeric()"></div>
                 </div>
+                <div class="row pair">
+                    <div class="field"><label>Board width <span class="unit">stock, as supplied</span></label><input type="number" id="board_w" value="1250" min="300" max="3000" step="10" oninput="onNumeric()"></div>
+                    <div class="field"><label>Board height <span class="unit">stock</span></label><input type="number" id="board_h" value="2500" min="300" max="5000" step="10" oninput="onNumeric()"></div>
+                </div>
+                <div class="row pair">
+                    <div class="field"><label>Kerf <span class="unit">mm per saw cut</span></label><input type="number" id="kerf" value="3" min="0" max="10" step="0.5" oninput="onNumeric()"></div>
+                    <label class="chk" style="flex:1"><input type="checkbox" id="rotate" checked onchange="updatePreview()"> Rotation allowed</label>
+                </div>
+                <p class="hint">The cut sizes are the panels as set out; the board is the stock they are cut from, so changing one keeps the other. The waste readout, top right of the view, packs every panel of the active chain onto boards (kerf between pieces, offcuts reused), and <b>Download cutting plan</b> draws the result.</p>
                 <p class="hint">Panel width drives batten centres: joints land on a batten, intermediate battens keep spans under 600 mm. Horizontal joints are open joints at the gap. Noggins behind them are only generated where counter-battens are on: between vertical battens a noggin sits on the drainage plane and dams it.</p>
             </div>
 
@@ -152,6 +182,7 @@
       <div class="panel-actions">
           <button class="btn btn-primary" id="ifc-btn" data-label="Download IFC4X3" onclick="downloadIFC()">Download IFC4X3</button>
           <button class="btn btn-secondary" id="dxf-btn" data-label="Download DXF elevations" onclick="downloadDXF()">Download DXF elevations</button>
+          <button class="btn btn-secondary" id="plan-btn" data-label="Download cutting plan (DXF)" onclick="downloadCuttingPlan()">Download cutting plan (DXF)</button>
           <a class="btn btn-secondary" style="text-align:center;text-decoration:none;font-size:12px;padding:7px" href="https://www.jakewhitearchitecture.com" target="_blank" rel="noopener">Jake White Architecture</a>
       </div>
     </div>
@@ -179,6 +210,13 @@
         <div class="status-chip busy" id="status-chip">Loading…</div>
         <div class="dim2d-layer" id="dim2d-layer"></div>
         <div class="dim2d-editor" id="dim2d-editor" style="display:none"></div>
+        <div class="waste-readout" id="waste-readout" style="display:none">
+            <div class="wr-title" id="wr-title">Chain 1 · panels</div>
+            <div>Clad area <b id="wr-area">--</b></div>
+            <div>Boards <b id="wr-boards">--</b> <span class="wr-muted" id="wr-lower"></span></div>
+            <div>Waste <b id="wr-waste">--</b></div>
+            <div class="wr-muted" id="wr-note"></div>
+        </div>
         <div class="view-actions">
             <button id="view-2d" onclick="toggle2D()" disabled title="Look at the active elevation flat and square-on (E)">2D elevation</button>
             <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
@@ -202,7 +240,6 @@
                 <span id="edit-offset-val">0 mm</span>
             </div>
             <p class="hint" style="margin:2px 0 0">Shifts this elevation's battens and boards, ± half a bay. Joints stop carrying round a corner once its two faces are offset differently. Click another clad face to edit that one.</p>
-            <p class="hint" id="edit-datum" style="margin:2px 0 0"></p>
         </div>
     </div>
 

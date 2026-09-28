@@ -105,7 +105,8 @@ def test_mitre_is_cut_on_the_bisector_plane_in_ifc():
     import ifcopenshell
     from synthetic import N, U, ORIGIN
     from ifc_generator import meshes_to_ifc
-    params = {"elevations": [_elev_with_mitre()], "cladding_type": "panel", "trim": True}
+    # no mitre gap, so the cut is exactly on the bisector (the gap has its own test)
+    params = {"elevations": [dict(_elev_with_mitre(), mitre_gap=0)], "cladding_type": "panel", "trim": True}
     out = generate_preview(params)
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     breps = ifc.by_type("IfcFacetedBrep")

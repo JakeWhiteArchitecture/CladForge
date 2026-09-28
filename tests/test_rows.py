@@ -123,7 +123,9 @@ def test_rows_start_from_the_chain_datum():
     """Rows set for a chain line up round its corners: the list starts at the chain's
     datum, and a face that starts higher cuts the row at its base, read-only there."""
     a, b = extract_elevation(payload()), extract_elevation(corner_payload())
-    common = dict(chain="Chain 1", chain_reversed=False, offset=0, panel_rows=[600, 900])
+    # the datum locked to A, where the rows were typed
+    common = dict(chain="Chain 1", chain_reversed=False, offset=0, panel_rows=[600, 900],
+                  course_datum_from="Elevation A")
     ra = dict(a, chain_start=0, **common)
     rb = dict(b, chain_start=a["width"], clip_v_lo=437.0, **common)       # its base is higher
     out = generate_preview({"elevations": [ra, rb], "cladding_type": "panel", "panel_h": 1200,
@@ -136,3 +138,36 @@ def test_rows_start_from_the_chain_datum():
     assert [(d.get("kind"), d.get("row"), d["label"]) for d in dims_b][:2] == [(None, None, "Cut 313"), ("row", 1, "R2 900")]
     info_b = next(i for i in out["info"] if i["elevation"] == "Elevation B")
     assert info_b["rows"][:2] == [600.0, 900.0]          # by list index, what an edit pads with
+
+
+def test_rows_are_reported_by_list_index():
+    """info["rows"] is indexed by the list from the datum, even where a row falls wholly
+    below a face's base, and row_index says which list row each drawn row is: that is how
+    the first edit, which locks the datum on the face, finds the row that was clicked."""
+    a, b = extract_elevation(payload()), extract_elevation(corner_payload())
+    common = dict(chain="Chain 1", chain_reversed=False, offset=0, panel_rows=[400, 900])
+    ra = dict(a, chain_start=0, **common)
+    rb = dict(b, chain_start=a["width"], clip_v_lo=700.0, **common)       # above all of row 1
+    out = generate_preview({"elevations": [ra, rb], "cladding_type": "panel", "panel_h": 1200,
+                            "panel_gap": GAP, "trim": False})
+    info = {i["elevation"]: i for i in out["info"]}
+    assert info["Elevation A"]["row_index"][:3] == [0, 1, 2]
+    assert info["Elevation B"]["row_index"][:2] == [1, 2]                 # row 1 (150-550) never reaches B
+    assert info["Elevation B"]["rows"][:2] == [400.0, 900.0]              # but still holds its place
+
+
+def test_a_cut_bottom_row_is_editable_until_the_datum_locks():
+    """Before any row or course edit the chain's datum is only the lowest start, so a face
+    that starts higher has its bottom row cut. That row must stay editable: typing on it is
+    what locks the datum to this face. Once locked, it is read-only on the other faces."""
+    a, b = extract_elevation(payload()), extract_elevation(corner_payload())
+    def dims_b(**lock):
+        common = dict(chain="Chain 1", chain_reversed=False, offset=0, **lock)
+        ra = dict(a, chain_start=0, **common)
+        rb = dict(b, chain_start=a["width"], clip_v_lo=437.0, **common)
+        out = generate_preview({"elevations": [ra, rb], "cladding_type": "panel", "panel_h": 1200,
+                                "panel_gap": GAP, "trim": False})
+        return [(d.get("kind"), d.get("row"), d["label"]) for d in out["dimensions"]
+                if d["elevation"] == "Elevation B" and d["p1"][0] > 3000][:2]
+    assert dims_b()[0] == ("row", 0, "R1 913")                            # 150 + 1200 - 437, open
+    assert dims_b(course_datum_from="Elevation A")[0] == (None, None, "Cut 913")
