@@ -260,13 +260,14 @@ function openDimEditor(item) {
     const scoped = (d.kind === 'row' || d.kind === 'course') && multi;
     const ed = document.getElementById('dim2d-editor');
     ed.innerHTML = `<div class="d2-title">${DIM_NAMES[d.kind]}${d.kind === 'row' ? ' ' + (d.row + 1) : ''}</div>
-        <input id="d2-input" type="number" step="1" value="${Math.round(d.value)}"> <span class="unit">mm</span>
+        <input id="d2-input" type="number" step="1" value="${Math.round(d.value)}"${d.fixed ? ' disabled' : ''}> <span class="unit">mm</span>
+        ${d.fixed ? `<div class="d2-hint">${d.fixed}</div>` : ''}
         ${scoped ? `<div class="d2-scope turn-toggle">
             <button class="turn-btn ${D2.scope === 'chain' ? 'active' : ''}" data-scope="chain">${e.chain.name}</button>
             <button class="turn-btn ${D2.scope === 'one' ? 'active' : ''}" data-scope="one">This elevation</button></div>` : ''}
         ${d.kind === 'row' ? `<div class="d2-actions"><button class="mini" id="d2-split">Split row</button>
-            <button class="mini" id="d2-merge">Merge with row above</button></div>` : ''}
-        <div class="d2-hint">Enter to apply · Esc to cancel · Tab for the next</div>`;
+            <button class="mini" id="d2-merge"${d.fixed ? ' disabled title="The top row has no row above it"' : ''}>Merge with row above</button></div>` : ''}
+        <div class="d2-hint">${d.fixed ? 'Esc to close' : 'Enter to apply · Esc to cancel'} · Tab for the next</div>`;
     ed.style.display = '';
     ed.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => {
         D2.scope = b.dataset.scope;
@@ -278,7 +279,8 @@ function openDimEditor(item) {
         document.getElementById('d2-merge').onclick = () => { mergeRow(e, d.row); closeDimEditor(); };
     }
     const input = document.getElementById('d2-input');
-    input.onkeydown = ev => {
+    // A disabled input takes no keys: the box itself does, for Escape and Tab.
+    (d.fixed ? ed : input).onkeydown = ev => {
         ev.stopPropagation();                  // Escape here cancels the edit, not the 2D view
         if (ev.key === 'Enter') { ev.preventDefault(); commitDimEditor(); }
         else if (ev.key === 'Escape') { ev.preventDefault(); closeDimEditor(); }
@@ -292,6 +294,7 @@ function openDimEditor(item) {
         }
     };
     position2D();
+    if (d.fixed) { ed.tabIndex = -1; ed.focus(); return; }
     input.focus();
     input.select();
 }
@@ -305,7 +308,7 @@ function closeDimEditor() {
 function commitDimEditor() {
     const input = document.getElementById('d2-input');
     const item = D2.editing && D2.editing.item;
-    if (!input || !item) return closeDimEditor();
+    if (!input || !item || item.d.fixed) return closeDimEditor();
     const v = parseFloat(input.value);
     closeDimEditor();
     if (!isFinite(v) || v <= 0 || Math.abs(v - item.d.value) < 0.5) return;
@@ -350,13 +353,16 @@ function applyDim(d, v, scope) {
     onNumeric();
 }
 
-// Split a row into two halves with the joint gap between them.
+// Split a row into two halves with the joint gap between them. The top row is whatever is
+// left, so splitting it types a new row below and leaves the remainder on top: the list
+// ends at the new row.
 function splitRow(e, j) {
     const gap = parseFloat(document.getElementById('panel_gap').value) || 0;
-    const h = rowsDrawn(e)[j];
+    const drawn = rowsDrawn(e), h = drawn[j];
     if (!h) return;
     const r = lockForRow(e, j), rows = withRow(e, r.j, h, r.drawn), half = Math.max(1, (h - gap) / 2);
-    rows.splice(r.j, 1, half, half);
+    if (j === drawn.length - 1) rows.splice(r.j, rows.length, half);
+    else rows.splice(r.j, 1, half, half);
     d2SetRows(e, rows);
 }
 

@@ -56,9 +56,10 @@ def test_mixed_row_heights(elevation):
     assert "Elevation A Panel R2-3" in names and not any(" C1-" in n for n in names)
     rows = sorted((d for d in out["dimensions"] if d.get("kind") == "row"), key=lambda d: d["row"])
     assert [(d["row"], d["value"], d["label"]) for d in rows] == [(0, 600.0, "R1 600"), (1, 1200.0, "R2 1200"),
-                                                                  (2, 300.0, "R3 300")]
-    cut = [d for d in out["dimensions"] if d["label"] == "Cut 720"]
-    assert cut and "kind" not in cut[0]          # the closing row is read-only
+                                                                  (2, 300.0, "R3 300"), (3, 720.0, "R4 720")]
+    # the top row is a row (it opens the row box) but its height is what is left: not typed
+    assert rows[-1].get("fixed") and not any(d.get("fixed") for d in rows[:-1])
+    assert not [d for d in out["dimensions"] if d["label"].startswith("Cut") and d["p1"][0] == d["p2"][0]]
 
 
 def test_a_list_shorter_than_the_wall_carries_on_at_panel_h(elevation):
@@ -70,7 +71,7 @@ def test_a_list_taller_than_the_wall_is_cut_at_the_top(elevation):
     out, _ = _build(elevation, [1000, 1000, 1000, 1000])
     assert _rows_drawn(out) == [(150.0, 1000.0), (1160.0, 1000.0), (2170.0, 830.0)]
     assert out["info"][0]["rows"] == [1000.0, 1000.0, 830.0]
-    assert len([d for d in out["dimensions"] if d.get("kind") == "row"]) == 2
+    assert len([d for d in out["dimensions"] if d.get("kind") == "row"]) == 3
 
 
 def test_noggins_at_every_row_joint_with_counter_battens(elevation):
@@ -114,7 +115,7 @@ def test_chain_scope_and_elevation_scope():
 def test_dxf_dimensions_every_row(elevation):
     out, params = _build(elevation, [600, 1200, 300])
     dxf = meshes_to_dxf_string(out["geometry"], params, out["info"])
-    for label in ("R1 600", "R2 1200", "R3 300", "Cut 720"):
+    for label in ("R1 600", "R2 1200", "R3 300", "R4 720"):
         assert label in dxf, label
     assert "Rows bottom up: 600, 1200, 300, 720" in dxf
 
@@ -135,7 +136,8 @@ def test_rows_start_from_the_chain_datum():
     assert rows["Elevation B"][:2] == [(437.0, 313.0), (760.0, 900.0)]      # row 1 cut at B's base
     assert [v for v, _h in rows["Elevation B"][1:]] == [v for v, _h in rows["Elevation A"][1:]]
     dims_b = [d for d in out["dimensions"] if d["elevation"] == "Elevation B" and d["p1"][0] > 3000]
-    assert [(d.get("kind"), d.get("row"), d["label"]) for d in dims_b][:2] == [(None, None, "Cut 313"), ("row", 1, "R2 900")]
+    assert [(d.get("kind"), d.get("row"), d["label"]) for d in dims_b][:2] == [(None, None, "R1 313"), ("row", 1, "R2 900")]
+    assert dims_b[0]["lock"]                              # set on A, where the datum comes from
     info_b = next(i for i in out["info"] if i["elevation"] == "Elevation B")
     assert info_b["rows"][:2] == [600.0, 900.0]          # by list index, what an edit pads with
 
@@ -170,4 +172,19 @@ def test_a_cut_bottom_row_is_editable_until_the_datum_locks():
         return [(d.get("kind"), d.get("row"), d["label"]) for d in out["dimensions"]
                 if d["elevation"] == "Elevation B" and d["p1"][0] > 3000][:2]
     assert dims_b()[0] == ("row", 0, "R1 913")                            # 150 + 1200 - 437, open
-    assert dims_b(course_datum_from="Elevation A")[0] == (None, None, "Cut 913")
+    assert dims_b(course_datum_from="Elevation A")[0] == (None, None, "R1 913")
+
+
+def test_the_top_row_is_a_row(elevation):
+    """With one row, that row is the top row: it is labelled R1 and opens the row box (so
+    Split row is offered), with its height fixed. Splitting it types a new row below and
+    leaves the remainder on top; with two rows the top one is R2."""
+    out, _ = _build(elevation, panel_h=2900)          # 150 + 2850 = 3000: one row
+    (row,) = [d for d in out["dimensions"] if d.get("kind") == "row"]
+    assert (row["row"], row["label"], bool(row.get("fixed"))) == (0, "R1 2850", True)
+    half = (2850 - GAP) / 2                           # what Split row types (dims2d.splitRow)
+    out, _ = _build(elevation, [half], panel_h=2900)
+    assert _rows_drawn(out) == [(150.0, half), (150.0 + half + GAP, half)]
+    rows = sorted((d for d in out["dimensions"] if d.get("kind") == "row"), key=lambda d: d["row"])
+    assert [d["label"] for d in rows] == ["R1 1420", "R2 1420"]
+    assert [bool(d.get("fixed")) for d in rows] == [False, True]

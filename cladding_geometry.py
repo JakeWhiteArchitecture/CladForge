@@ -220,6 +220,9 @@ def _courses(elev, v0, H, pitch):
 LOCK_CENTRES = "The panel bay sets the batten centres: change the panel width"
 LOCK_OPENING = "The structural opening sets this width"
 LOCK_BAYS = "Set out from the structural openings: the bays follow the jambs"
+LOCK_BASE_ROW = "Cut at this face's base: set this row on the face the chain's datum comes from"
+LOCK_UNDER_DATUM = "Under the chain's datum: rows here carry on down at the panel height"
+FIXED_TOP_ROW = "The top row is whatever is left under the top of the cladding, so its height is not typed: split it, or change the rows below"
 
 
 def _batten_dims(name, battens, pitch, along_u, H_or_W, lock=None):
@@ -421,18 +424,23 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     for o in holes:
         dims.append(_dim(name, [o[0], o[3]], [o[1], o[3]], "Opening %.0f" % (o[1] - o[0]), 250, [0, 1],
                          "opening", o[1] - o[0], lock=LOCK_OPENING))
-    # One dimension per row up the right-hand side, each naming the row it edits; the
-    # top row is the closing cut, which is whatever is left, so it is read-only.
+    # One dimension per row up the right-hand side, each naming the row it edits. The top
+    # row is a row like any other (it can be split, or merged into from below), but its
+    # height is whatever is left, so it is not typed.
     # Once the chain's datum is locked, a row cut at the base or under the datum is read-only
     # here: it is set on the face the datum comes from. Until then a cut bottom row can be
     # typed over, since that first edit is what locks the datum to this face's base.
     open_datum = not elev.get("course_datum_locked")
+    start = v0 if datum is None else datum
     for j, (v, h, i, full) in enumerate(rows):
-        if j < len(rows) - 1 and i is not None and (h >= full - 0.5 or open_datum):
-            dims.append(_dim(name, [W, v], [W, v + h], "R%d %.0f" % (i + 1, h), 300, [1, 0], "row", h, row=i))
+        top = j == len(rows) - 1
+        if i is None:
+            dims.append(_dim(name, [W, v], [W, v + h], "%.0f" % h, 300, [1, 0], lock=LOCK_UNDER_DATUM))
+        elif j == 0 and v > start + 0.5 and not open_datum:          # cut at this face's base
+            dims.append(_dim(name, [W, v], [W, v + h], "R%d %.0f" % (i + 1, h), 300, [1, 0], lock=LOCK_BASE_ROW))
         else:
-            dims.append(_dim(name, [W, v], [W, v + h], ("Cut %.0f" if h < full - 0.5 or j == len(rows) - 1 else "%.0f") % h,
-                             300, [1, 0]))
+            extra = {"fixed": FIXED_TOP_ROW} if top else {}
+            dims.append(_dim(name, [W, v], [W, v + h], "R%d %.0f" % (i + 1, h), 300, [1, 0], "row", h, row=i, **extra))
     return face
 
 

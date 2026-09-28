@@ -653,7 +653,7 @@ function renderDimensions(dims, elevByName, only) {
                                             new THREE.LineBasicMaterial({ color: 0x00ccff, depthTest: false }));
         dimGroup.add(line);
         // In 3D only the courses and rows open the course dialog; the rest are edited flat.
-        const editable = d.kind === 'course' || d.kind === 'row';
+        const editable = d.kind === 'course' || (d.kind === 'row' && !d.fixed);   // the top row splits flat
         const label = makeLabel(d.label, editable);
         label.position.copy(new THREE.Vector3((d.p1[0] + d.p2[0]) / 2 + nx * (off + 120), (d.p1[1] + d.p2[1]) / 2 + ny * (off + 120), 0).applyMatrix4(M));
         label.visible = !view2d.on;        // flat, HTML labels take over (dims2d.js)

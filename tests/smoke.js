@@ -350,6 +350,23 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     const split = await page.evaluate(() => window._lastPreview.info[0].rows.join('/'));
     console.log('2D split row:', split);
     if (!split.startsWith('445/445/')) throw new Error('split row: ' + split);
+    // The top row is a row too: its box offers Split row, its height is not typed, and
+    // splitting it adds a row.
+    const topRow = await page.evaluate(() => {
+        const d = window._lastPreview.dimensions.find(x => x.kind === 'row' && x.fixed && x.elevation === view2d.name);
+        return d && { key: 'row:' + d.row, label: d.label, n: window._lastPreview.info[0].n_courses };
+    });
+    if (!topRow || /Cut/.test(topRow.label)) throw new Error('top row is not a row: ' + JSON.stringify(topRow));
+    await page.click(`.dim2d[data-key="${topRow.key}"]`);
+    const topBox = await page.evaluate(() => ({ disabled: document.getElementById('d2-input').disabled,
+        split: !!document.getElementById('d2-split'), merge: document.getElementById('d2-merge').disabled,
+        why: (document.querySelector('#dim2d-editor .d2-hint') || {}).textContent }));
+    await page.click('#d2-split');
+    await page.waitForTimeout(1800);
+    topRow.after = await page.evaluate(() => window._lastPreview.info[0].n_courses);
+    console.log('2D top row:', JSON.stringify(topRow), JSON.stringify(topBox));
+    if (!topBox.disabled || !topBox.split || !topBox.merge || topRow.after !== topRow.n + 1)
+        throw new Error('top row box: ' + JSON.stringify([topRow, topBox]));
     await page.evaluate(async () => { state.elevations[0].panelRows = null; await updatePreview(); });
     // Centred instead of set out from the openings, the left cut is typed and the offset
     // solved for it; the top level is typed straight onto the chain.
