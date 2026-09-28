@@ -47,6 +47,7 @@ function renderDims2D() {
         D2.items.push(item);
     }
     edgeLines(e, layer);
+    jointLines(e, layer);
     cornerBadges(e, layer);
     if (D2.editing) {            // the preview was rebuilt under an open editor: re-anchor it
         const again = D2.items.concat(D2.edges).find(i => i.el.dataset.key === D2.editing.key);
@@ -153,6 +154,60 @@ function edgeLines(e, layer) {
         D2.edges.push(item);
     });
     layer.appendChild(svg);
+}
+
+// ─── PANEL JOINTS ───
+// Each horizontal joint between two panel rows, one segment per bay. Clicking one
+// dissolves it: the panels above and below in that bay become one. Clicking again puts
+// the joint back. A merge the stock board cannot take, either way round, is refused.
+function jointLines(e, layer) {
+    const info = (window._lastPreview.info || []).find(i => i.elevation === e.result.name);
+    if (!info || !info.hjoints || !info.hjoints.length) return;
+    const M = frameMatrix(e.result.frame, 60), ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'edge2d-svg');
+    for (const hj of info.hjoints) {
+        hj.spans.forEach(([u0, u1], n) => {
+            const line = document.createElementNS(ns, 'line');
+            line.setAttribute('stroke', hj.dissolved ? '#ffd166' : '#cfd8e3');
+            line.setAttribute('stroke-opacity', hj.dissolved ? '0.8' : '0.45');
+            if (hj.dissolved) line.setAttribute('stroke-dasharray', '6 6');
+            line.dataset.kind = 'joint';
+            line.dataset.key = `joint:${hj.row}:${hj.bay}:${n}`;
+            const title = document.createElementNS(ns, 'title');
+            title.textContent = hj.dissolved
+                ? `Dissolved joint, R${hj.row + 1}/R${hj.row + 2} bay ${hj.bay + 1} — click to put the joint back`
+                : `Joint R${hj.row + 1}/R${hj.row + 2} bay ${hj.bay + 1} — click to dissolve it (${Math.round(hj.size[0])} × ${Math.round(hj.size[1])} panel)`;
+            line.appendChild(title);
+            line.addEventListener('click', ev => { ev.stopPropagation(); toggleJoint(e, hj); });
+            svg.appendChild(line);
+            D2.edges.push({ joint: hj, el: line, a: new THREE.Vector3(u0, hj.v, 0).applyMatrix4(M),
+                            b: new THREE.Vector3(u1, hj.v, 0).applyMatrix4(M) });
+        });
+    }
+    layer.appendChild(svg);
+}
+
+function toggleJoint(e, hj) {
+    const list = (e.panelJoints || []).filter(q => !(q[0] === hj.row && q[1] === hj.bay));
+    const where = `R${hj.row + 1}/R${hj.row + 2} bay ${hj.bay + 1} on ${e.name}`;
+    if (hj.dissolved) {
+        setStatus(`Joint ${where} put back`, 'ready');
+    } else {
+        const bw = parseFloat(document.getElementById('board_w').value) || 1250;
+        const bh = parseFloat(document.getElementById('board_h').value) || 2500;
+        const [w, h] = hj.size;
+        if (!((w <= bw + 0.5 && h <= bh + 0.5) || (w <= bh + 0.5 && h <= bw + 0.5))) {
+            setStatus(`Not dissolved: the panel would be ${Math.round(w)} × ${Math.round(h)} mm, larger than the ${Math.round(bw)} × ${Math.round(bh)} board either way round`, 'busy');
+            return false;
+        }
+        list.push([hj.row, hj.bay, hj.u0, hj.u1, hj.v]);
+        setStatus(`Joint ${where} dissolved: one ${Math.round(w)} × ${Math.round(h)} panel`, 'ready');
+    }
+    e.panelJoints = list.length ? list : null;
+    renderElevationList();
+    onNumeric();
+    return true;
 }
 
 // The chain corner at the end of *e* that an orange corner edge sits on.

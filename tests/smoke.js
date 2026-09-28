@@ -495,6 +495,80 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                                       { c: { jamb: 'lap', jamb_master: 'reveal', head: 'profile', head_master: 'face' } }, {}]))
         throw new Error('apply-to-all reached the wrong openings: ' + scopeOnly);
     await page.evaluate(async () => { state.elevations[0].openingDetails = {}; await updatePreview(); });
+
+    // Panel joints: each horizontal joint, one segment per bay, dissolves when clicked. With
+    // 2400 rows the merged panel would be 4810 tall, too big for a 1250 x 2500 board: refused.
+    const jointAt = async fits => {
+        await page.waitForFunction(() => document.querySelector('.edge2d-svg line[data-kind="joint"]'), null, { timeout: 20000 });
+        const picked = await page.evaluate(fits => {
+            const e = d2Elev(view2d.name), info = window._lastPreview.info.find(i => i.elevation === view2d.name);
+            const names = new Set(window._lastPreview.geometry.map(m => m.name));
+            const board = [1250, 2500], ok = s => (s[0] <= board[0] && s[1] <= board[1]) || (s[0] <= board[1] && s[1] <= board[0]);
+            // a joint between two whole panels (neither cut in two by an opening)
+            const hj = info.hjoints.find(q => !q.dissolved && ok(q.size) === fits
+                && names.has(`${e.result.name} Panel R${q.row + 1}-${q.bay + 1}`) && names.has(`${e.result.name} Panel R${q.row + 2}-${q.bay + 1}`));
+            if (!hj) return null;
+            document.querySelectorAll('#smoke-joint').forEach(l => l.removeAttribute('id'));
+            document.querySelector(`.edge2d-svg line[data-key="joint:${hj.row}:${hj.bay}:0"]`).id = 'smoke-joint';
+            return hj;
+        }, fits);
+        return picked && { hj: picked, at: await onLine('smoke-joint') };
+    };
+    const tooBig = await jointAt(false);
+    if (!tooBig || !tooBig.at) throw new Error('no oversize joint to click: ' + JSON.stringify(tooBig));
+    await page.mouse.click(tooBig.at.x, tooBig.at.y);
+    const refused = await page.evaluate(() => ({ status: document.getElementById('status-chip').textContent,
+                                                 joints: (d2Elev(view2d.name).panelJoints || []).length }));
+    console.log('joint refused:', JSON.stringify(refused));
+    if (refused.joints || !/Not dissolved: the panel would be \d+ × 4810 mm, larger than the 1250 × 2500 board/.test(refused.status))
+        throw new Error('an oversize merge was not refused: ' + JSON.stringify(refused));
+    // With 1000 rows the merge fits: one panel fewer, and the waste readout is repacked.
+    await page.evaluate(async () => { d2Elev(view2d.name).panelRows = [1000, 1000]; await updatePreview(); });
+    await page.waitForFunction(() => window._lastPlan && window._lastPlan.n_pieces, null, { timeout: 20000 });
+    await page.waitForTimeout(900);
+    const fitting = await jointAt(true);
+    if (!fitting || !fitting.at) throw new Error('no joint that fits to click: ' + JSON.stringify(fitting));
+    const beforeJoint = await page.evaluate(() => {
+        window._smokePlan = window._lastPlan;
+        return { panels: window._lastPreview.geometry.filter(m => m.ifc_type === 'panel').length, pieces: window._lastPlan.n_pieces };
+    });
+    await page.mouse.click(fitting.at.x, fitting.at.y);
+    await page.waitForFunction(() => window._lastPlan !== window._smokePlan, null, { timeout: 20000 });
+    const afterJoint = await page.evaluate(() => {
+        const hj = window._lastPreview.info.find(i => i.elevation === view2d.name).panel_joints[0];
+        return { panels: window._lastPreview.geometry.filter(m => m.ifc_type === 'panel').length, pieces: window._lastPlan.n_pieces,
+                 merged: window._lastPreview.geometry.filter(m => / Panel R\d+-\d+\.\.R\d+-\d+$/.test(m.name)).map(m => m.name),
+                 stored: d2Elev(view2d.name).panelJoints, dashed: !!document.querySelector('.edge2d-svg line[data-kind="joint"][stroke-dasharray]'),
+                 readout: document.getElementById('wr-waste').textContent, waste: (100 * window._lastPlan.waste).toFixed(1), size: hj && hj.size };
+    });
+    console.log('joint dissolved:', JSON.stringify(fitting.hj.size), JSON.stringify(beforeJoint), '→', JSON.stringify(afterJoint));
+    if (afterJoint.panels !== beforeJoint.panels - 1 || afterJoint.pieces !== beforeJoint.pieces - 1 || afterJoint.merged.length !== 1
+        || !afterJoint.dashed || !afterJoint.readout.includes(afterJoint.waste))
+        throw new Error('dissolving a joint did not give one panel fewer: ' + JSON.stringify({ beforeJoint, afterJoint }));
+    // Clicking the same place again puts the joint back.
+    await page.evaluate(() => { document.querySelector('.edge2d-svg line[data-kind="joint"][stroke-dasharray]').id = 'smoke-joint-back'; });
+    const backAt = await onLine('smoke-joint-back');
+    await page.mouse.click(backAt.x, backAt.y);
+    await page.waitForTimeout(1800);
+    const restored = await page.evaluate(() => window._lastPreview.geometry.filter(m => m.ifc_type === 'panel').length);
+    console.log('joint restored:', restored);
+    if (restored !== beforeJoint.panels) throw new Error('clicking again did not restore the joint: ' + restored);
+    // A grid change under a dissolved joint drops it, with one message saying how many.
+    const pruned = await page.evaluate(async () => {
+        const e = d2Elev(view2d.name), info = window._lastPreview.info.find(i => i.elevation === view2d.name);
+        e.panelJoints = info.hjoints.filter(q => q.row === 0).slice(0, 2).map(q => [q.row, q.bay, q.u0, q.u1, q.v]);
+        await updatePreview();
+        const kept = (e.panelJoints || []).length;
+        document.getElementById('set_out_from_openings').checked = false;       // the bays move
+        await updatePreview();
+        const out = { kept, left: (e.panelJoints || []).length, status: document.getElementById('status-chip').textContent };
+        document.getElementById('set_out_from_openings').checked = true;
+        return out;
+    });
+    console.log('joints dropped:', JSON.stringify(pruned));
+    if (pruned.kept !== 2 || pruned.left !== 0 || !/^2 dissolved joints dropped/.test(pruned.status))
+        throw new Error('joints under a changed grid were not dropped and reported: ' + JSON.stringify(pruned));
+    await page.evaluate(async () => { const e = d2Elev(view2d.name); e.panelRows = null; e.panelJoints = null; await updatePreview(); });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(1200);
     const back = await page.evaluate(() => ({ ortho: !!activeCamera().isOrthographicCamera, rotate: controls.enableRotate,

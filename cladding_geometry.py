@@ -72,7 +72,7 @@ def build_elevation(p, elev, layout=None):
     region = offset_region(elev, outline)
     layers = depth                       # depth of the face the cavity starts from
     if p["cladding_type"] == "panel":
-        depth = _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset)
+        depth = _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
     elif p["battens"] == "vertical":
         depth = _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
     else:
@@ -336,7 +336,7 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
     return depth + p["plank_t"]
 
 
-def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
+def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Panels on vertical battens, joints on battens, noggins at horizontal joints only
     where a counter-batten layer is there to keep the drainage plane clear.
     Where the elevation has openings the setting-out starts from them: panel edges land
@@ -381,21 +381,33 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
     # that starts higher cuts the row at its base, one that starts lower carries on down.
     datum = _datum(elev)
     rows, short = panel_rows(elev.get("panel_rows"), p["panel_h"], gap, v0 if datum is None else datum, H, v0)
+    joints, dissolved, dropped = _hjoints(elev, rows, panels, gap, region)
     # A noggin between vertical battens sits on the drainage plane and dams it, so the
     # horizontal seams are left unsupported unless a counter-batten layer holds the
     # battens off the wall and the water can run down behind them. With one, every row
     # joint gets its noggin, whatever the rows' heights.
+    # A dissolved joint is no joint: no noggin behind it.
     for j, (v, h, _i, _f) in enumerate(rows[:-1] if p["has_cb"] else []):
         vj = v + h + gap / 2
         for k, (a, b) in enumerate(zip(battens, battens[1:])):
-            if b - a > bw + 1:
+            bay = next((q for q, (s, e, _f) in enumerate(panels) if s <= (a + b) / 2 <= e), None)
+            if b - a > bw + 1 and (j, bay) not in dissolved:
                 meshes.append(_prism(_rect(a + bw / 2, vj - bw / 2, b - bw / 2, vj + bw / 2), depth - p["batten_d"],
                                      p["batten_d"], frame, "cross_batten", "%s Cross Batten R%d-%d" % (name, j + 1, k + 1), name))
     info["seam_noggins"] = bool(p["has_cb"]) and len(rows) > 1
+    # A bay's cells joined by dissolved joints are one panel, drawn from its bottom cell:
+    # lower + gap + upper, named for both cells. Every merge is within one bay, so it is
+    # always a rectangle.
     for j, (v, h, _i, _f) in enumerate(rows):
         for k, (s, e, _full) in enumerate(panels):
-            meshes.append(_prism(_rect(s, v, e, v + h), depth, p["panel_t"], frame, "panel",
-                                 "%s Panel R%d-%d" % (name, j + 1, k + 1), name))
+            if (j - 1, k) in dissolved:
+                continue
+            t = j
+            while (t, k) in dissolved:
+                t += 1
+            label = "R%d-%d" % (j + 1, k + 1) + ("..R%d-%d" % (t + 1, k + 1) if t > j else "")
+            meshes.append(_prism(_rect(s, v, e, rows[t][0] + rows[t][1]), depth, p["panel_t"], frame, "panel",
+                                 "%s Panel %s" % (name, label), name))
     face = depth + p["panel_t"]
     fulls = [pn for pn in panels if pn[2]]
     widths = sorted({round(e - s, 1) for s, e, _f in panels})
@@ -407,7 +419,10 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
                 row_index=[i for _v, _h, i, _f in rows],
                 short_rows=short,
                 closing_cut_left=(fulls[0][0] if fulls else W), closing_cut_right=(W - fulls[-1][1]) if fulls else 0.0,
-                closing_cut_top=rows[-1][1] if rows else 0.0, n_full=len(fulls) * len(rows),
+                closing_cut_top=rows[-1][1] if rows else 0.0,
+                n_full=len(fulls) * len(rows) - len([1 for _j, k in dissolved if panels[k][2]]),
+                # the horizontal joints, one per bay, that the 2D view offers to dissolve
+                hjoints=joints, panel_joints=[q for q in joints if q["dissolved"]], joints_dropped=dropped,
                 set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
     dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_CENTRES)
@@ -442,6 +457,55 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset):
             extra = {"fixed": FIXED_TOP_ROW} if top else {}
             dims.append(_dim(name, [W, v], [W, v + h], "R%d %.0f" % (i + 1, h), 300, [1, 0], "row", h, row=i, **extra))
     return face
+
+
+def _hjoints(elev, rows, panels, gap, region):
+    """The horizontal joints between rows, one per bay, and which of them are dissolved.
+
+    A dissolved joint is stored on the elevation (elev["panel_joints"]) as its (row, bay)
+    pair, drawn indices from 0, with the bay's span and the joint's level as it was when
+    clicked: [row, bay, u0, u1, v]. It is kept only while the grid still has that joint
+    in the same place, so a change underneath (row heights, panel width, offset) can
+    never carry it onto another panel; the rest are dropped and counted. A joint is
+    offered only where it crosses the clad area (not wholly in an opening or off the
+    trimmed outline)."""
+    from cladding_booleans import strip_intervals
+    grid = {}
+    for j in range(len(rows) - 1):
+        vc = rows[j][0] + rows[j][1] + gap / 2.0
+        runs = strip_intervals(region, vc - 0.5, vc + 0.5) if region is not None else [(-1e9, 1e9)]
+        for k, (s, e, _f) in enumerate(panels):
+            spans = [[round(max(a, s), 1), round(min(b, e), 1)] for a, b in runs if min(b, e) - max(a, s) >= 10.0]
+            if spans:
+                grid[(j, k)] = (s, e, vc, spans)
+    dissolved, dropped = set(), 0
+    for q in elev.get("panel_joints") or []:
+        try:
+            key, at = (int(q[0]), int(q[1])), [float(x) for x in q[2:5]]
+        except (TypeError, ValueError, IndexError):
+            dropped += 1
+            continue
+        g = grid.get(key)
+        if g and len(at) == 3 and all(abs(a - b) < 0.5 for a, b in zip(g[:3], at)):
+            dissolved.add(key)
+        else:
+            dropped += 1
+
+    def group(j, k):                     # the rows a panel of this cell spans, bottom and top
+        lo, hi = j, j
+        while (lo - 1, k) in dissolved:
+            lo -= 1
+        while (hi, k) in dissolved:
+            hi += 1
+        return lo, hi
+    joints = []
+    for (j, k), (s, e, vc, spans) in sorted(grid.items()):
+        lo, top = group(j, k)[0], group(j + 1, k)[1]
+        joints.append({"row": j, "bay": k, "u0": round(s, 1), "u1": round(e, 1), "v": round(vc, 1), "spans": spans,
+                       "dissolved": (j, k) in dissolved,
+                       # the panel this bay makes across the joint when it is dissolved
+                       "size": [round(e - s, 1), round(rows[top][0] + rows[top][1] - rows[lo][0], 1)]})
+    return joints, dissolved, dropped
 
 
 def _row_list(elev, p, rows):

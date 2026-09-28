@@ -155,6 +155,7 @@ function elevationCard(e, i) {
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
         + (e.cover ? ` · course ${Math.round(e.cover)}` : '')
         + (e.panelRows && e.panelRows.length ? ` · rows ${e.panelRows.map(Math.round).join('/')}` : '')
+        + (e.panelJoints && e.panelJoints.length ? ` · ${e.panelJoints.length} joint${e.panelJoints.length > 1 ? 's' : ''} dissolved` : '')
         + (ok && (e.chain.topZ !== null || e.chain.bottomZ !== null)
             ? ` · levels ${Math.round(Math.max(0, vLocal(e, e.chain.bottomZ) || 0))}–${Math.round(Math.min(r.height, vLocal(e, e.chain.topZ) === null ? r.height : vLocal(e, e.chain.topZ)))}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
@@ -406,7 +407,7 @@ function toggle2D() {
     enter2D(e.result.name, e.result.frame, cladBox(e));
     update2DButton();
     renderDims2D();
-    setStatus('2D elevation: click a dimension to type over it · E or Esc for 3D', 'ready');
+    setStatus('2D elevation: click a dimension to type over it, a panel joint to dissolve it · E or Esc for 3D', 'ready');
 }
 
 function update2DButton() {
@@ -605,6 +606,7 @@ function elevationRecords() {
                                                    clip_v_lo: vLocal(e, chain.bottomZ) || 0,
                                                    clip_v_hi: vLocal(e, chain.topZ),
                                                    cover: e.cover || null, panel_rows: e.panelRows || null,
+                                                   panel_joints: e.panelJoints || null,
                                                    course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
                                                    edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
@@ -716,6 +718,7 @@ _json.dumps(_o)`);
         renderDims2D();
         renderChecks(result.checks);
         renderInfo(result.info);
+        pruneJoints(result.info);
         if (params.trim) scheduleNesting();       // not on slider frames: those are untrimmed
     } catch (err) {
         console.error('preview failed', err);
@@ -724,6 +727,21 @@ _json.dumps(_o)`);
         }
         setStatus('Preview error: ' + err.message, 'busy');
     }
+}
+
+// Dissolved panel joints the grid no longer has in the same place (row heights, panel
+// width or offset changed under them) are dropped, never moved onto another panel: the
+// engine keeps the ones that still match and counts the rest. One message says how many.
+function pruneJoints(infos) {
+    let dropped = 0;
+    for (const i of infos) {
+        const e = state.elevations.find(m => m.result && m.result.name === i.elevation);
+        if (!e || !i.hjoints || !i.joints_dropped) continue;
+        e.panelJoints = i.panel_joints.map(q => [q.row, q.bay, q.u0, q.u1, q.v]);
+        dropped += i.joints_dropped;
+    }
+    if (dropped) renderElevationList();
+    if (dropped) setStatus(`${dropped} dissolved joint${dropped > 1 ? 's' : ''} dropped: the panel grid changed under ${dropped > 1 ? 'them' : 'it'}`, 'busy');
 }
 
 function renderChecks(checks) {
