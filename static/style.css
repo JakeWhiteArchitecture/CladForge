@@ -195,3 +195,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .dim2d-editor .d2-row { width: 100%; display: flex; align-items: center; gap: 6px; }
 .dim2d-editor .d2-ask { width: 100%; padding: 6px; border: 1px solid #ffd166; border-radius: 4px; color: #ffd166; }
 .dim2d.opening-badge { background: #ff9800; border-color: #ff9800; }
+
+/* Boards and waste for the active chain, top right of the view. */
+.waste-readout { position: absolute; top: 80px; right: 10px; z-index: 5; min-width: 190px; font-size: 12px;
+    background: rgba(22,33,62,0.92); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px;
+    color: var(--text); line-height: 1.6; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+.waste-readout .wr-title { font-weight: 600; color: var(--accent); }
+.waste-readout .wr-muted { color: var(--hint); font-size: 11px; }
+.waste-readout.over #wr-waste { color: #ef4444; }
+.waste-readout.over { border-color: #ef4444; }

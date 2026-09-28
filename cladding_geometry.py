@@ -119,6 +119,7 @@ def build_elevation(p, elev, layout=None):
     dims.append(_dim(name, [0, 0], [0, H], "Top %.0f" % H, 900, [-1, 0], "level_top", H))
     info["total_depth"] = depth
     info["edges"] = edges                             # coloured in the 2D view
+    info["clad_area"] = round(outline.area / 1e6, 3)  # m², net of openings and splash zones
     info["n_boards"] = sum(1 for m in meshes if m["ifc_type"] in ("plank", "panel"))
     return meshes, dims, info
 

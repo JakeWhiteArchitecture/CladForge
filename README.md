@@ -167,6 +167,11 @@ default. Each is one place in the code, so any of them can be flipped.
 | Coursing at openings [OPEN] | Straight through and cut. Coursing never resets at a reveal. | `cladding_booleans.apply_boolean_ops` |
 | 2D elevation | A view, not a mode of the model: nothing is rebuilt on the way in or out. The perspective camera turns on a sphere about the target (a slerp, eased over 600 ms) so it swings round the model rather than through it, then an orthographic camera takes over with the frustum the perspective one saw at that distance, so the swap does not jump. Everything that picks or projects goes through the active camera. Flat, dimensions are HTML labels placed from projected points each frame, so they stay readable at any zoom; in 3D they stay sprites, and only courses and rows open the course dialog. Every dimension carries its kind and value (and a row its index, a cut its bay), or a *lock* naming what drives it. | `view2d.enter2D`, `exit2D`, `activeCamera`, `dims2d.applyDim`, `cladding_geometry._dim` |
 | Panel rows | Panel courses are a list of **row heights**, bottom row first, carried on the elevation (`panel_rows`). With no list every row is the panel height, as before. Rows stack up with the joint gap between them from the chain's course datum (the lowest start in the chain until the first row or course edit locks it to that face's base, as for plank courses; selecting a face never moves it), so seams run level round the corners: a face that starts higher cuts the row at its base, and one that starts lower carries on down at the panel height. Once the datum is locked, rows cut at the base or below the datum are dimensioned read-only on that face; before that, a bottom row cut at a higher face's base can still be typed over, since that first edit is what locks the datum to the face; once the list runs out they carry on at the panel height, and the top row is always the closing cut, taking whatever is left. Each listed row is held to 150–3000 mm: rows down to 150 are deliberate tiers, and a row asked for below that, or a closing row under 100 mm, is flagged in the checks. Every row gets its own dimension up the right-hand side, which can be typed over for this elevation or the whole chain; the closing row is dimensioned read-only as the cut. Noggins go behind every row joint when counter-battens are on. Panels are named by row, *Panel R2-3*, and the DXF dimensions every row and lists the heights in its schedule. | `cladding_primitives.panel_rows`, `cladding_geometry._panels`, `cladding_checks.check_rules`, `wizard.lockForRow` |
+| Board size | The stock board the panels are cut from, as supplied: **1250 × 2500 mm** by default, set in the Panel section and kept separate from the cut size, so changing the panel never loses the board. The panel's own width and row heights are labelled **cut width** and **cut heights**. A cut panel larger than the board either way round fails the Board size check and is left out of the packing, named on the cutting plan. **Rotation allowed** (on by default) lets a piece be cut from the board turned 90°. | `cladding_constants._parse`, `cladding_checks` |
+| Kerf | 3 mm per saw cut by default, editable (0–10). It is charged between pieces, never at the board edges: 4 × 622 + 3 × 3 = 2497 fits a 2500 board, 4 × 625 + 3 × 3 = 2509 does not. Each piece and the board are inflated by the kerf while packing, which gives exactly that. | `cladding_nesting._pack` |
+| Packing method | 2D **guillotine** bin packing, because a panel saw cuts edge to edge (Jylänki, *A Thousand Ways to Pack the Bin*, 2010, guillotine section). Pieces are every panel of the chain as built: closing cuts, rows of different heights, and panels notched round openings, which pack as their bounding rectangle (they are cut from one) while only their net area counts as used. 16 deterministic heuristics are run, sort order (area, longest side, height, width, all descending, ties by name) × placement (best area fit, best short side fit) × split (shorter or longer leftover axis), and the best kept: fewest boards, then least waste. Offcuts stay on their board for later pieces. It stops early once a result reaches the lower bound, `ceil(net area / board area)`. At most 400 pieces are packed; beyond that the readout and the plan say it is capped. It runs 300 ms after a rebuild settles, never on slider frames. | `cladding_nesting.pack` |
+| Waste readout | Top right of the view, for the active chain: clad area (m², net of openings and splash zones), boards used against the lower bound, and **waste = 1 − net panel area / (boards × board area)**, red above 5 %. Panel mode only; it refreshes after each rebuild. | `app.renderReadout` |
+| Cutting plan | **Download cutting plan (DXF)**, beside the DXF button: every built chain packed separately, one rectangle per board to scale in a grid, each piece in place with its panel name and cut size, rotated pieces marked, offcuts hatched, waste per board and in total. Its header reads *"Cutting plan for setting-out. Not a quantity take-off for pricing."* | `cladding_nesting.plan_dxf` |
 | Horizontal panel joints [ASSUMED] | Open joints at the gap. Noggins behind them only where counter-battens are on: a noggin between vertical battens sits on the drainage plane and dams it, so by default the seams are left to a proprietary horizontal profile and the checks say so. | `cladding_geometry._panels` |
 | Batten orientation | Derived, never a free choice. Horizontal planks → vertical battens. Vertical planks → horizontal battens on vertical counter-battens. Panels → vertical battens, with seam noggins only when counter-battens are on. The only override is *Counter-battens: force on/off*, and the checks flag the buildups that then fail to drain. | `cladding_constants._parse`, `cladding_preview.check_rules` |
 | IFC container [OPEN] | `IfcElementAssembly` per elevation (`PredefinedType=USERDEFINED`, `ObjectType="Cladding system"`), placed in the host wall's storey. | `ifc_generator.meshes_to_ifc` |
@@ -185,6 +190,7 @@ width × depth where depth is the cavity.
 | Fixing through insulation | first batten layer depth ≥ insulation + 25 | | less |
 | Cavity depth | ≥ 25 | | less |
 | Panel size | within max W and H (by construction) | | |
+| Board size | every cut panel fits the board, either way round if rotation is allowed | | a cut size larger than the board |
 | Buildup | derived | counter-battens forced on | horizontal battens with no counter-battens |
 | End joints / closing cut | on battens, cuts ≥ 100 | otherwise | |
 
@@ -241,22 +247,27 @@ Dimensions: batten centres, splash zone, closing cut, course height, overall
 size. A setting-out schedule under each elevation and the disclaimer block in
 the title area.
 
+**Cutting plan (DXF).** R12, layers `BOARD`, `PIECE`, `OFFCUT` (hatched at 45°, since R12
+has no hatch entity) and `NOTES`. Its scope is stated in the header: *Cutting plan for
+setting-out. Not a quantity take-off for pricing.*
+
 ## File budget
 
 | File | Lines | Budget |
 |---|---|---|
 | fabric_extract.py | 566 | 400 |
-| cladding_constants.py | 82 | 80 |
-| cladding_geometry.py | 535 | 400 |
+| cladding_constants.py | 103 | 80 |
+| cladding_geometry.py | 536 | 400 |
 | cladding_primitives.py | 396 | 300 |
 | cladding_edges.py | 294 | 300 |
 | cladding_corners.py | 126 | 300 |
+| cladding_nesting.py | 208 | 300 |
 | cladding_booleans.py | 210 | 200 |
 | cladding_preview.py | 45 | 100 |
 | ifc_generator.py | 396 | 400 |
 | dxf_generator.py | 248 | 500 |
 | app.py | 78 | 150 |
-| templates/index.html | 248 | 500 |
+| templates/index.html | 295 | 500 |
 
 `fabric_extract.py`, `cladding_geometry.py`, `cladding_primitives.py` and `cladding_booleans.py`
 are over their budgets. Splitting the region clean-up (notches, seeded patches) out of the
@@ -279,7 +290,7 @@ VENDOR_DIR=... node tests/smoke.js    # browser smoke test against a running app
 The smoke test drives Chromium through Playwright: loads the sample house,
 picks the south and east walls, builds each chain through the wizard (by Enter
 and by the button), moves the slider, switches to panels, and downloads both
-exports. It also checks that picking alone generates nothing. `VENDOR_DIR` is only needed where the CDNs are
+exports and the cutting plan, checking the waste readout turns red above 5 %. It also checks that picking alone generates nothing. `VENDOR_DIR` is only needed where the CDNs are
 unreachable; it serves Pyodide, Three.js, web-ifc, the IfcOpenShell wheel and the
 two PyPI deps that are not in the Pyodide distribution from local copies
 (`<dir>/{pyodide,three,web-ifc,wasm-wheels,pypi}`).

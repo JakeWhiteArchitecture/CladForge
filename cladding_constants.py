@@ -31,6 +31,7 @@ _NUMERIC = {  # name: (default, min, max)
     "panel_gap": (10, 0, 15), "plank_w": (150, 75, 250), "plank_t": (20, 12, 32),
     "plank_lap": (0, 0, 50), "plank_gap": (8, 0, 15), "plank_len": (3600, 1800, 6000),
     "closer_w": (50, 25, 150),
+    "board_w": (1250, 300, 3000), "board_h": (2500, 300, 5000), "kerf": (3, 0, 10),   # stock and saw
 }
 
 
@@ -49,6 +50,7 @@ def _parse(params):
     p["plank_orient"] = "vertical" if params.get("plank_orient") == "vertical" else "horizontal"
     p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))
+    p["rotate"] = bool(params.get("rotate", True))          # a piece may be cut turned 90 degrees
     # Derived: battens perpendicular to boards; horizontal battens on vertical counter-battens.
     vertical_planks = p["cladding_type"] == "plank" and p["plank_orient"] == "vertical"
     p["boards_run"] = "vertical" if vertical_planks else "horizontal"

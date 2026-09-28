@@ -582,7 +582,7 @@ _json.dumps(_ex(_pl))`);
 const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
              'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
-             'plank_len', 'closer_w'];
+             'plank_len', 'closer_w', 'board_w', 'board_h', 'kerf'];
 function val(id) { return document.getElementById(id).value; }
 function toggleValue(id) { const b = document.querySelector('#' + id + ' .turn-btn.active'); return b ? b.dataset.value : null; }
 function selectToggle(id, value) {
@@ -630,6 +630,7 @@ function getParams() {
     p.reveals = document.getElementById('reveals').checked;
     p.set_out_from_openings = document.getElementById('set_out_from_openings').checked;
     p.cladding_type = toggleValue('cladding-type');
+    p.rotate = document.getElementById('rotate').checked;
     p.plank_orient = toggleValue('plank-orient');
     p.counter_batten = val('counter_batten');
     return p;
@@ -715,6 +716,7 @@ _json.dumps(_o)`);
         renderDims2D();
         renderChecks(result.checks);
         renderInfo(result.info);
+        if (params.trim) scheduleNesting();       // not on slider frames: those are untrimmed
     } catch (err) {
         console.error('preview failed', err);
         if (/fatally failed|Aborted/i.test(err.message || '')) {
@@ -861,6 +863,96 @@ import ifc_generator`);
     ifcReady = true;
 }
 
+// ─── BOARDS AND WASTE ───
+// Every panel of the active chain packed onto stock boards (cladding_nesting.py), after
+// each finished rebuild and debounced like a typed field, never on a slider frame.
+let _nestTimer = null, _nestSeq = 0;
+function scheduleNesting() {
+    if (_nestTimer) clearTimeout(_nestTimer);
+    _nestTimer = setTimeout(runNesting, 300);
+}
+
+function chainRecords(chain, params) {
+    const names = chain.members.filter(m => m.result && m.result.ok).map(m => m.result.name);
+    return { names, area: (window._lastPreview.info || []).filter(i => names.includes(i.elevation))
+                            .reduce((a, i) => a + (i.clad_area || 0), 0) };
+}
+
+async function runNesting() {
+    const box = document.getElementById('waste-readout');
+    const e = state.elevations[state.active];
+    if (!pyReady || !window._lastPreview || !e || !e.chain.built || toggleValue('cladding-type') !== 'panel') {
+        box.style.display = 'none';
+        return;
+    }
+    const seq = ++_nestSeq, { names, area } = chainRecords(e.chain);
+    try {
+        pyodide.globals.set('_nest_json', JSON.stringify({ names, area }));
+        const out = await pyodide.runPythonAsync(`
+import json as _json, time as _time
+from cladding_nesting import chain_plan as _cp
+from cladding_constants import _parse as _prs
+_n = _json.loads(_nest_json)
+_t0 = _time.perf_counter()
+_plan = _cp(_o["geometry"], _prs(_p), _n["names"], _n["area"])
+_plan["ms"] = round((_time.perf_counter() - _t0) * 1000)
+_plan.pop("boards")
+_json.dumps(_plan)`);
+        if (seq !== _nestSeq) return;
+        const plan = JSON.parse(out);
+        window._lastPlan = plan;
+        renderReadout(e.chain, plan);
+    } catch (err) {
+        console.warn('packing failed', err);
+        box.style.display = 'none';
+    }
+}
+
+function renderReadout(chain, plan) {
+    const box = document.getElementById('waste-readout'), set = (id, v) => document.getElementById(id).textContent = v;
+    box.style.display = '';
+    set('wr-title', `${chain.name} · panels`);
+    set('wr-area', `${plan.clad_area.toFixed(1)} m²`);
+    set('wr-boards', `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
+    set('wr-lower', `lower bound ${plan.lower_bound}`);
+    const w = document.getElementById('wr-waste');
+    w.textContent = `${(100 * plan.waste).toFixed(1)}%`;
+    box.classList.toggle('over', plan.waste > 0.05);          // red above 5%
+    const notes = [];
+    if (plan.oversize.length) notes.push(`${plan.oversize.length} panel(s) larger than the board`);
+    if (plan.capped) notes.push(`only the first ${plan.n_pieces} pieces packed`);
+    set('wr-note', notes.join(' · '));
+    box.title = `Packed by ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, ${plan.ms} ms`;
+}
+
+async function downloadCuttingPlan() {
+    if (!pyReady) { alert('The engine is still loading.'); return; }
+    const params = getParams(); params.trim = true;
+    if (!params.elevations.length || params.cladding_type !== 'panel') { alert('The cutting plan is for panel cladding: build a panel chain first.'); return; }
+    const btn = document.getElementById('plan-btn');
+    busy(btn, true, 'Packing…');
+    try {
+        const chains = state.chains.filter(c => c.built).map(c => ({
+            name: c.name, names: c.members.filter(m => m.result && m.result.ok).map(m => m.result.name) }))
+            .filter(c => c.names.length);
+        pyodide.globals.set('_params_json', JSON.stringify(params));
+        pyodide.globals.set('_chains_json', JSON.stringify(chains));
+        const dxf = await pyodide.runPythonAsync(`
+import json as _json
+from cladding_preview import generate_preview as _gp
+from cladding_constants import _parse as _prs
+from cladding_nesting import chain_plan as _cp, plan_dxf as _pd
+_p = _json.loads(_params_json)
+_o = _gp(_p)
+_area = {i["elevation"]: i.get("clad_area", 0) for i in _o["info"]}
+_pp = _prs(_p)
+_pd([(c["name"], _cp(_o["geometry"], _pp, c["names"], sum(_area.get(n, 0) for n in c["names"])))
+     for c in _json.loads(_chains_json)])`);
+        showReminder(new Blob([dxf], { type: 'application/dxf' }), 'cutting-plan.dxf');
+    } catch (err) { alert('Cutting plan failed: ' + err.message); }
+    finally { busy(btn, false); }
+}
+
 async function downloadDXF() {
     if (!pyReady) { alert('The engine is still loading.'); return; }
     const params = getParams(); params.trim = true;
@@ -933,7 +1025,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_geometry', 'cladding_booleans',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_geometry', 'cladding_booleans',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

@@ -487,6 +487,51 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (back.ortho || !back.rotate || back.pose !== pose3d)
         throw new Error('3D pose not restored: ' + JSON.stringify(back) + ' vs ' + pose3d);
 
+    // Boards and waste: the active panel chain packed onto stock boards after a rebuild.
+    await page.evaluate(async () => { await updatePreview(); });
+    await page.waitForFunction(() => window._lastPlan && document.getElementById('waste-readout').style.display !== 'none', null, { timeout: 20000 });
+    const readout = await page.evaluate(() => {
+        const box = document.getElementById('waste-readout'), plan = window._lastPlan;
+        const red = () => getComputedStyle(document.getElementById('wr-waste')).color;
+        const real = { text: box.innerText.replace(/\n/g, ' | '), waste: +(100 * plan.waste).toFixed(1), over: box.classList.contains('over'),
+                       colour: red(), boards: plan.n_boards, lower: plan.lower_bound, pieces: plan.n_pieces, ms: plan.ms };
+        // the colour follows the 5% line either way
+        const chain = state.elevations[0].chain;
+        renderReadout(chain, Object.assign({}, plan, { waste: 0.04 }));
+        const at4 = { over: box.classList.contains('over'), colour: red() };
+        renderReadout(chain, Object.assign({}, plan, { waste: 0.06 }));
+        const at6 = { over: box.classList.contains('over'), colour: red() };
+        renderReadout(chain, plan);
+        return { real, at4, at6 };
+    });
+    console.log('waste readout:', JSON.stringify(readout));
+    if (readout.real.boards < readout.real.lower || readout.real.pieces < 1 || readout.at4.over || !readout.at6.over
+        || readout.at6.colour !== 'rgb(239, 68, 68)' || readout.at4.colour === readout.at6.colour
+        || readout.real.over !== (readout.real.waste > 5) || readout.real.ms > 1000)
+        throw new Error('waste readout wrong: ' + JSON.stringify(readout));
+    // A board as big as two panels side by side packs them two to a board.
+    const bigger = await page.evaluate(async () => {
+        document.getElementById('board_w').value = 2500; await updatePreview();
+        await new Promise(r => setTimeout(r, 900));
+        const n = window._lastPlan.n_boards;
+        document.getElementById('board_w').value = 1250; await updatePreview();
+        await new Promise(r => setTimeout(r, 900));
+        return { wide: n, normal: window._lastPlan.n_boards };
+    });
+    console.log('board size:', JSON.stringify(bigger));
+    if (!(bigger.wide < bigger.normal)) throw new Error('a wider board did not save boards: ' + JSON.stringify(bigger));
+    // The cutting plan, from the button beside the DXF one.
+    await page.click('#plan-btn');
+    await page.waitForSelector('#download-reminder.open', { timeout: 120000 });
+    const [planFile] = await Promise.all([page.waitForEvent('download'), page.click('#download-reminder .btn-primary')]);
+    const planPath = path.join(__dirname, 'smoke_out.plan.dxf');
+    await planFile.saveAs(planPath);
+    const planText = fs.readFileSync(planPath, 'utf8');
+    console.log('cutting plan:', planFile.suggestedFilename(), fs.statSync(planPath).size, 'bytes,',
+                (planText.match(/Board \d+  -  waste/g) || []).length, 'boards drawn');
+    if (!planText.includes('Cutting plan for setting-out. Not a quantity take-off for pricing.') || !/Panel R\d-\d/.test(planText))
+        throw new Error('cutting plan DXF is missing its header or pieces');
+
     // The wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
     await lookAt('Wing south wall', [0, 0.3, 1]);
     await page.waitForFunction(() => state.elevations.length === 2 && state.elevations[1].result && state.elevations[1].result.ok && state.elevations[1].chain !== state.elevations[0].chain, null, { timeout: 60000 });
