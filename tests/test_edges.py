@@ -105,13 +105,15 @@ def test_the_mitre_gap_at_a_reveal(elevation):
                             "trim": True, "reveals": True})
     pull = 8.0 * math.sqrt(2)
     face = out["info"][0]["total_depth"]
+    board = 9.0
     linings = [m for m in out["geometry"] if m["ifc_type"] == "reveal"]
-    assert linings and all(abs(m["corner"]["ext_l"] + pull) < 1e-6 for m in linings)
+    assert linings and all(m["corner"]["k_l"] == 1.0 and abs(m["corner"]["ext_l"] + board + pull) < 1e-6 for m in linings)
     shifts = {tuple(round(x, 6) for x in sh) for m in out["geometry"] if m.get("vshift")
               for ring in m["vshift"] for sh in ring if any(sh)}
-    assert (round(face - pull, 6), -1.0, 0.0, 0.0) in shifts        # left jamb
-    assert (round(-(face - pull), 6), 1.0, 0.0, 0.0) in shifts      # right jamb
-    assert (0.0, 0.0, round(-(face - pull), 6), 1.0) in shifts      # head
+    e = round(board - face - pull, 6)
+    assert (e, 1.0, 0.0, 0.0) in shifts                              # left jamb
+    assert (-e, -1.0, 0.0, 0.0) in shifts                            # right jamb
+    assert (0.0, 0.0, -e, -1.0) in shifts                            # head
 
 
 def _head(elevation, **kw):
@@ -139,7 +141,7 @@ def test_head_air_space_only_when_vented_at_the_back(elevation):
     # the face board comes down to the lowered lining, so the air space stays closed at the front
     assert abs(board_back[2] - (board_front[2] - 10.0)) < 1e-6
     # the head lining is mitred at its front edge like the jambs, across the mitre gap
-    assert front["corner"]["k_l"] == -1.0 and abs(front["corner"]["ext_l"] + 5 * math.sqrt(2)) < 1e-6
+    assert front["corner"]["k_l"] == 1.0 and abs(front["corner"]["ext_l"] + 9.0 + 5 * math.sqrt(2)) < 1e-6
 
 
 def test_head_lining_exports(elevation):
@@ -155,3 +157,42 @@ def test_head_lining_exports(elevation):
     assert len(ifc.by_type("IfcElement")) >= len(out["geometry"])
     dxf = meshes_to_dxf_string(out["geometry"], params, out["info"])
     assert "Reveal linings: 3 no." in dxf
+
+
+def test_the_opening_mitre_is_on_the_true_bisector(elevation):
+    """At a mitred jamb the board and the lining are cut on the bisector through the outer
+    arris (the lining's opening face at the cladding face) and the inner corner, each
+    half the mitre gap off it, so the gap is the mitre gap straight across and the arris
+    is closed; and no board outline folds back on itself, panels or planks."""
+    from shapely.geometry import Polygon
+    from cladding_primitives import ring_at
+    from cladding_constants import world_to_frame
+    out = generate_preview({"elevations": [dict(elevation, offset=0)], "cladding_type": "panel",
+                            "trim": True, "reveals": True})
+    F, face, board, u0, V = elevation["frame"], out["info"][0]["total_depth"], 9.0, 2000.0, 1300.0
+    pull = 5.0 * math.sqrt(2)
+    edge = {}
+    for m in out["geometry"]:
+        if m["ifc_type"] == "panel" and m.get("vshift"):
+            for d in (face - board, face):
+                us = [q[0] for q in ring_at(m, 0, d) if abs(q[0] - u0) < 20 and 905 <= q[1] <= 2095]
+                if us:
+                    edge[d] = max(us)
+    assert abs(edge[face - board] - (u0 - pull)) < 1e-6          # back of the board: pulled off
+    assert abs(edge[face] - (u0 + board - pull)) < 1e-6          # face: out to the arris, less the gap
+    (lining,) = [m for m in out["geometry"] if m["ifc_type"] == "reveal" and m["name"].endswith("1L")]
+    front = {}
+    for s in (0.0, board):
+        ul = min(q[0] for q in ring_at(lining, 0, s))
+        u, _v, d = world_to_frame(F, frame_to_world(lining["frame"], ul, 0.0, s))
+        front[round(u - u0)] = d                                     # the frame is rounded to 1e-6
+    assert abs(front[0] - (face - board - pull)) < 0.01          # its back face, behind the board
+    assert abs(front[9] - (face - pull)) < 0.01                  # its opening face, to the arris
+    for kind in ("panel", "plank"):
+        out = generate_preview({"elevations": [dict(elevation, offset=0)], "cladding_type": kind,
+                                "trim": True, "reveals": True})
+        for m in out["geometry"]:
+            if m.get("vshift"):
+                for d in (m["depth"], m["depth"] + m["thickness"]):
+                    for k in range(1 + len(m.get("holes") or [])):
+                        assert Polygon(ring_at(m, k, d)).is_valid, (kind, m["name"], d)

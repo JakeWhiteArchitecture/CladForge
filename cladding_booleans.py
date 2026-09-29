@@ -18,7 +18,7 @@ from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
-from cladding_primitives import clip_bounds, clip_bounds_v, splash_rings
+from cladding_primitives import clip_bounds, clip_bounds_v, splash_rings, openings
 from cladding_edges import offset_region
 
 TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel"})
@@ -74,6 +74,9 @@ def clip_elevation(elev):
     if (lo <= 0.001 and hi >= float(elev["width"]) - 0.001
             and v_lo <= 0.001 and v_hi >= float(elev["height"]) - 0.001):
         return elev
+    # Windows and doors are found on the face as picked, before the clip turns one that
+    # crosses the clad top or bottom into a bite out of the edge (cladding_primitives.openings).
+    found = [list(r) for r in openings(dict(elev, clip_lo=0, clip_hi=None, clip_v_lo=0, clip_v_hi=None))]
     band = box(lo, v_lo, hi, v_hi)
     polygons = []
     for poly in elev.get("polygons", []):
@@ -87,7 +90,7 @@ def clip_elevation(elev):
                 continue
             ext, holes = polygon_to_rings(part)
             polygons.append({"exterior": ext, "holes": holes})
-    return dict(elev, polygons=polygons)
+    return dict(elev, polygons=polygons, openings=found)
 
 
 def strip_intervals(region, lo, hi, across=False, min_len=1.0):

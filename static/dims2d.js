@@ -80,9 +80,14 @@ function cornerBadges(e, layer) {
         D2.items.push(item);
     });
     // Each window and door: a badge on its left jamb (both jambs share it) and one on its head.
+    const info = (window._lastPreview.info || []).find(i => i.elevation === e.result.name) || {};
     for (const o of openingsOf(e)) {
         const [u0, u1, v0, v1] = o.rect;
-        for (const [part, u, v] of [['jamb', u0, (v0 + v1) / 2], ['head', (u0 + u1) / 2, v1]]) {
+        // a window or door can cross the clad top or bottom: its badges sit on what is clad
+        const lo = Math.max(v0, info.base_level || 0), hi = Math.min(v1, info.clad_top === undefined ? v1 : info.clad_top);
+        const parts = [['jamb', u0, (lo + hi) / 2]];
+        if (info.clad_top === undefined || v1 < info.clad_top - 0.5) parts.push(['head', (u0 + u1) / 2, v1]);
+        for (const [part, u, v] of parts) {
             const el = document.createElement('button');
             el.className = 'dim2d corner-badge opening-badge';
             el.dataset.key = 'opening:' + o.key + ':' + part;

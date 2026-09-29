@@ -74,7 +74,7 @@ def test_reveal_linings_are_mitred_to_the_face_panel(elevation):
     reveals = [m for m in out["geometry"] if m["ifc_type"] == "reveal"]
     assert len(reveals) == 3
     for m in reveals:
-        assert m["corner"]["k_l"] == -1.0 and abs(m["corner"]["ext_l"] + pull) < 1e-9
+        assert m["corner"]["k_l"] == 1.0 and abs(m["corner"]["ext_l"] + p["panel_t"] + pull) < 1e-9
         assert abs(m["thickness"] - p["panel_t"]) < 1e-6
         # the lining runs from the cladding face back to the wall face
         assert [q[0] for q in m["profile"][:2]] == [0.0, depth]
@@ -86,10 +86,10 @@ def test_reveal_linings_are_mitred_to_the_face_panel(elevation):
         for ring, shifts in zip([m["profile"]] + m["holes"], m["vshift"]):
             for (u, v), (du, duk, dv, dvk) in zip(ring, shifts):
                 if duk:
-                    assert abs(abs(du) - (depth - pull)) < 1e-6 and abs(duk) == 1.0 and u in (2000.0, 3200.0)
+                    assert abs(abs(du) - (depth - p["panel_t"] + pull)) < 1e-6 and abs(duk) == 1.0 and u in (2000.0, 3200.0)
                     kinds.add("jamb")
                 if dvk:
-                    assert abs(dv + (depth - pull)) < 1e-6 and dvk == 1.0 and v == 2100.0
+                    assert abs(dv - (depth - p["panel_t"] + pull)) < 1e-6 and dvk == -1.0 and v == 2100.0
                     kinds.add("head")
     assert kinds == {"jamb", "head"}, kinds
     # with no lining there is nothing to mitre to, so the panel stays square
@@ -281,3 +281,51 @@ def test_a_course_height_can_be_set_per_elevation(elevation):
                                "cladding_type": "panel", "trim": False})
     row = next(d for d in panels["dimensions"] if d.get("kind") == "row")
     assert row["value"] == 1500.0 and row["row"] == 0
+
+
+# ── openings at the edges of the clad band, and full-height openings ──
+
+def _kinds_along(out, u, v_lo, v_hi):
+    """The edge kinds along the vertical line u between v_lo and v_hi."""
+    return {e["kind"] for e in out["info"][0]["edges"]
+            if abs(e["p1"][0] - u) < 1 and abs(e["p2"][0] - u) < 1 and max(e["p1"][1], e["p2"][1]) > v_lo
+            and min(e["p1"][1], e["p2"][1]) < v_hi}
+
+
+def test_a_window_crossing_the_clad_top_is_still_a_window(elevation):
+    """The chain's top is picked through the window: the window becomes a bite out of the
+    clad band's top, not a hole. Its sides are still jambs (closed, lined and mitred),
+    and it has no head lining, since its head is above the cladding."""
+    out = generate_preview(_params(dict(elevation, clip_v_hi=1500.0), trim=True))
+    assert _kinds_along(out, WINDOW[0], 900, 1500) == {"jamb"} and _kinds_along(out, WINDOW[1], 900, 1500) == {"jamb"}
+    geo = out["geometry"]
+    linings = {m["name"][-2:]: m for m in geo if m["ifc_type"] == "reveal"}
+    assert set(linings) == {"1L", "1R"}                                   # no head lining
+    for m in linings.values():
+        vs = [q[1] for q in m["profile"]]
+        assert (min(vs), max(vs)) == (900.0, 1500.0)                      # up to the clad top
+    closers = [m for m in geo if m["ifc_type"] == "closer"]
+    assert len(closers) == 2 and all(max(q[1] for q in m["profile"]) == 1500.0 for m in closers)
+    assert any(m.get("vshift") for m in geo if m["ifc_type"] == "panel")   # the jambs are mitred
+
+
+def test_a_window_crossing_the_clad_bottom_keeps_its_head(elevation):
+    out = generate_preview(_params(dict(elevation, clip_v_lo=1500.0), trim=True))
+    assert _kinds_along(out, WINDOW[0], 1500, 2100) == {"jamb"}
+    linings = {m["name"][-2:]: m for m in out["geometry"] if m["ifc_type"] == "reveal"}
+    assert set(linings) == {"1L", "1R", "1H"}
+    assert min(q[1] for q in linings["1L"]["profile"]) == 1500.0
+
+
+def test_a_full_height_opening_splits_the_face_but_is_still_an_opening(elevation):
+    """A door or glazing taller than the face splits it in two: the gap between the pieces,
+    open at top and bottom, is an opening, and its sides are jambs, not free ends."""
+    W, H = float(elevation["width"]), float(elevation["height"])
+    split = dict(elevation, polygons=[{"exterior": [[0, 0], [2000, 0], [2000, H], [0, H]], "holes": []},
+                                      {"exterior": [[2900, 0], [W, 0], [W, H], [2900, H]], "holes": []}],
+                 notches=[], abutments=[a for a in elevation["abutments"] if a.get("source") == "base"])
+    assert (2000.0, 2900.0, 0.0, H) in openings(split)
+    out = generate_preview(dict(_params(split, trim=True), splash=0))
+    assert _kinds_along(out, 2000.0, 200, H - 200) == {"jamb"} and _kinds_along(out, 2900.0, 200, H - 200) == {"jamb"}
+    linings = {m["name"][-2:] for m in out["geometry"] if m["ifc_type"] == "reveal"}
+    assert linings == {"1L", "1R"}

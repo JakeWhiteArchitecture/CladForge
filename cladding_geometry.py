@@ -535,18 +535,24 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
     # joint at the front edge is the vent.
     air = s["air"] if s["vent"] == "back" else 0.0
     details = dict((tuple(r), d) for r, d in opening_details(elev, p))
+    band_lo, band_hi = clip_bounds_v(elev)
     for i, (u0, u1, v0, v1) in enumerate(holes):
         d = details.get((u0, u1, v0, v1), {})
+        # An opening can cross the clad top or bottom, or run the full height: its closers
+        # and jamb linings stop at the clad band, and it has a head lining only if its head
+        # is within the cladding.
+        jv0, jv1 = max(v0, band_lo), min(v1, band_hi)
+        head_in = v1 < band_hi - 0.5
         jamb = reveal_treatment(d.get("jamb", "mitre"), d.get("jamb_master", "face"), face, pull, board, p["panel_gap"])[1]
         head_t = reveal_treatment(d.get("head", "mitre"), d.get("head_master", "face"), face, pull, board, p["panel_gap"])[1]
         for side, u in ((-1.0, u0), (1.0, u1)):
             # The closer sits in the wall side of the jamb and fills the cavity.
             a, b = (u - cw, u) if side < 0 else (u, u + cw)
-            meshes.append(_prism(_rect(a, v0, b, v1), cavity_start, cavity_t, frame, "closer",
+            meshes.append(_prism(_rect(a, jv0, b, jv1), cavity_start, cavity_t, frame, "closer",
                                  "%s Cavity Closer %d%s" % (name, i + 1, "L" if side < 0 else "R"), name))
             if not p["reveals"]:
                 continue
-            lining = _prism(_rect(0.0, v0, face, v1), 0.0, board,
+            lining = _prism(_rect(0.0, jv0, face, jv1), 0.0, board,
                             _reveal_frame(frame, u, face, -side), "reveal",
                             "%s Reveal %d%s" % (name, i + 1, "L" if side < 0 else "R"), name)
             if jamb:
@@ -555,7 +561,7 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
         ua, ub = u0 + board, u1 - board                      # between the jamb linings
         if not p["reveals"]:
             continue
-        if ub - ua > 1.0:
+        if ub - ua > 1.0 and head_in:
             head = _prism(_rect(0.0, 0.0, face - air, ub - ua), 0.0, board,
                           _head_frame(frame, ua, v1 - air, face), "reveal", "%s Reveal %dH" % (name, i + 1), name)
             if head_t:
@@ -563,7 +569,7 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
             meshes.append(head)
         # Corner profiles at the arris, flange A on the elevation face. A jamb's runs up
         # to the underside of the head lining; the head's runs between the jamb linings.
-        z_c = v1 - air - board                                # the head's arris
+        z_c = v1 - air - board if head_in else jv1            # the head's arris, or the clad top
         if d.get("jamb") == "profile":
             for side, u_c in ((1.0, u0 + board), (-1.0, u1 - board)):
                 lo_v = max(v0, base + s["bottom"]) if v0 <= base else v0
@@ -577,7 +583,7 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
                     if not profiles.flange_supported(meshes, name, span, (lo_v, z_c), face - board):
                         prof["warnings"].append("%s: a jamb profile's flange at opening %d is not over a batten or closer"
                                                 % (name, i + 1))
-        if d.get("head") == "profile":
+        if d.get("head") == "profile" and head_in:
             m = profiles.head_profile(frame, ua, ub, z_c, face, board, "%s Head Profile %d" % (name, i + 1), name)
             if m:
                 meshes.append(m)

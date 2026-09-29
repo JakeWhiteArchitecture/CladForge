@@ -128,10 +128,21 @@ MIN_OPENING = 300.0   # mm – smaller holes are penetrations, not windows
 
 
 def openings(elev, limit=MIN_OPENING):
-    """Structural openings as (u0, u1, v0, v1), from the interior holes big enough to
-    be a window or door rather than a pipe penetration, plus the notches the extractor
-    found: a door reaching the foot of the wall breaks the outline instead of leaving
-    a hole, and it still needs closing and lining."""
+    """Structural openings as (u0, u1, v0, v1), at their true height: the interior holes
+    big enough to be a window or door rather than a pipe penetration, the notches the
+    extractor found (a door reaching the foot of the wall breaks the outline instead of
+    leaving a hole), and full-height openings, which split the face in two.
+
+    The chain's top and bottom levels clip the outline before anything is built, and a
+    window crossing either would then be a bite rather than a hole: so the openings are
+    found on the face as picked and carried through the clip ("openings", set by
+    cladding_booleans.clip_elevation). Only those reaching the clad band are returned,
+    cut sideways to the clad part of the face, but never in height."""
+    lo, hi = clip_bounds(elev)
+    if elev.get("openings") is not None:
+        v_lo, v_hi = clip_bounds_v(elev)
+        return sorted((max(u0, lo), min(u1, hi), v0, v1) for u0, u1, v0, v1 in elev["openings"]
+                      if min(u1, hi) - max(u0, lo) >= limit and min(v1, v_hi) - max(v0, v_lo) > 1.0)
     out = []
     for poly in elev.get("polygons", []):
         for hole in poly.get("holes", []):
@@ -139,11 +150,42 @@ def openings(elev, limit=MIN_OPENING):
             vs = [q[1] for q in hole]
             if max(us) - min(us) >= limit and max(vs) - min(vs) >= limit:
                 out.append((min(us), max(us), min(vs), max(vs)))
-    lo, hi = clip_bounds(elev)
-    for u0, u1, v0, v1 in elev.get("notches") or []:
+    for u0, u1, v0, v1 in list(elev.get("notches") or []) + _splits(elev.get("polygons", []), limit):
         if min(u1, hi) - max(u0, lo) >= limit and v1 - v0 >= limit:
             out.append((max(u0, lo), min(u1, hi), v0, v1))
-    return sorted(out)
+    return sorted(set(out))
+
+
+def _splits(polygons, limit):
+    """Openings that run the full height of the face and so split it into pieces: a
+    rectangular gap between the pieces, open at the top and the bottom."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    shells = []
+    for poly in polygons:
+        try:
+            pg = Polygon(poly["exterior"])
+            shells.append(pg if pg.is_valid else pg.buffer(0))
+        except Exception:   # noqa: BLE001
+            continue
+    if len(shells) < 2:
+        return []
+    try:
+        whole = unary_union(shells)
+        umin, vmin, umax, vmax = whole.bounds
+        rest = whole.envelope.difference(whole)
+    except Exception:   # noqa: BLE001 — GEOS trouble: no split openings
+        return []
+    out = []
+    for piece in getattr(rest, "geoms", [rest]):
+        if piece.is_empty or piece.geom_type != "Polygon":
+            continue
+        u0, v0, u1, v1 = piece.bounds
+        if piece.area < 0.9 * (u1 - u0) * (v1 - v0) or u1 - u0 < limit:
+            continue
+        if abs(v0 - vmin) < 1.0 and abs(v1 - vmax) < 1.0 and u0 > umin + 1.0 and u1 < umax - 1.0:
+            out.append((round(u0, 2), round(u1, 2), round(v0, 2), round(v1, 2)))
+    return out
 
 
 def bays_between(stops, max_panel, gap):

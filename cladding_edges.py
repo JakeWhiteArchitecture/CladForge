@@ -182,7 +182,12 @@ def reveal_treatment(detail, master, face, pull, board, gap):
       profile  both stop the profile's nose (D = board thickness) short of the arris
       square   both stop square at the opening line (a placeholder)"""
     if detail == "mitre":
-        return (face - pull, -1.0), (-1.0, -pull)
+        # One cut on the bisector through the outer arris (the lining's opening face at the
+        # cladding face) and the inner corner (its back face at the board's back), each
+        # side pulled off it by half the mitre gap: the board's edge runs from -pull at its
+        # back to board - pull at its face; the lining's front end from board + pull (in
+        # from the cladding face) at its back to pull at its opening face.
+        return (board - face - pull, 1.0), (1.0, -(board + pull))
     if detail == "lap":
         return ((board, 0.0), (0.0, -(board + gap))) if master == "face" else ((-gap, 0.0), None)
     if detail == "profile":
@@ -239,8 +244,10 @@ def _split(ring, holes):
 
 def _ring_shifts(ring, holes, treatments, air):
     """(ring, shifts) with a shift per vertex. A vertex between two mitred edges takes
-    both (the corner of an opening); one between a mitred edge and a plain one is
-    doubled, one copy for each edge, so the end steps rather than slopes."""
+    both (the corner of an opening). One between a mitred edge and a plain one takes the
+    shift where the plain edge runs the way the shift moves it (it just gets longer or
+    shorter along itself); otherwise it is doubled, one copy for each edge, so the end
+    steps rather than slopes."""
     ring = _split([list(p) for p in ring], holes)
     n = len(ring)
     edge = [_opening_shift(ring[i], ring[(i + 1) % n], treatments, air) for i in range(n)]
@@ -253,8 +260,16 @@ def _ring_shifts(ring, holes, treatments, air):
             shifts.append(before if same else tuple(x + y for x, y in zip(before, after)))
             pts.append(ring[i])
         elif before or after:
-            pts += [ring[i], ring[i]]
-            shifts += [before or (0.0, 0.0, 0.0, 0.0), after or (0.0, 0.0, 0.0, 0.0)]
+            sh = before or after
+            plain = (ring[i - 1], ring[i]) if after else (ring[i], ring[(i + 1) % n])
+            along_u = abs(plain[1][1] - plain[0][1]) < TOL          # plain edge horizontal
+            along_v = abs(plain[1][0] - plain[0][0]) < TOL          # plain edge vertical
+            if (along_u and not (sh[2] or sh[3])) or (along_v and not (sh[0] or sh[1])):
+                pts.append(ring[i])
+                shifts.append(sh)
+            else:
+                pts += [ring[i], ring[i]]
+                shifts += [before or (0.0, 0.0, 0.0, 0.0), after or (0.0, 0.0, 0.0, 0.0)]
         else:
             pts.append(ring[i])
             shifts.append((0.0, 0.0, 0.0, 0.0))

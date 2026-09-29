@@ -88,7 +88,7 @@ def test_both_jambs_of_an_opening_always_match(faces):
     corners = {m["name"][-2:]: m["corner"] for m in out["geometry"] if m["ifc_type"] == "reveal"}
     assert corners["1L"] == corners["1R"] == {"k_l": 0.0, "ext_l": -(t + gap), "u_l": 0.0}
     # the head keeps its own choice (mitred here)
-    assert corners["1H"]["k_l"] == -1.0
+    assert corners["1H"]["k_l"] == 1.0
 
 
 def test_master_at_a_head_both_ways(faces):
