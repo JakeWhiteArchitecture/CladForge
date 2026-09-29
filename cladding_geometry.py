@@ -103,6 +103,7 @@ def build_elevation(p, elev, layout=None):
             if m["ifc_type"] in ("panel", "plank") and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
                 m["corner"] = dict(c, **{"ext_" + side: c.get("ext_" + side, 0.0) - mitre_pullback(gap, k)})
     _profiled_corners(p, elev, meshes, prof, edges, depth, ((lo, left, d_left, "l"), (hi, right, d_right, "r")))
+    _across_corners(meshes, ((lo, left, "l"), (hi, right, "r")))
     if p["cladding_type"] == "panel":
         _gaskets(p, elev, meshes, depth - board)
     info["profile_strips"], info["profile_warnings"], info["profiles"] = prof["strips"], prof["warnings"], prof["count"]
@@ -162,6 +163,26 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
         if not timbers and not profiles.flange_supported(meshes, name, span, (v_from, v_to), face - D):
             prof["warnings"].append("%s: the corner profile's %.0f mm flange at the %s end is not over a batten"
                                     % (name, fl, "right" if side == "r" else "left"))
+
+
+def _across_corners(meshes, ends):
+    """A vertical batten set out on a joint close to an external chain corner can straddle
+    the wall's corner line. Past that line the cavity carries on in front of the other
+    face's insulation, so trimming it to the wall there would leave it off the joint it
+    backs (and its gasket off it): it is trimmed in height only, as long as it stays on
+    this face's side of the corner at its back face."""
+    for u_end, (k, _ext), side in ends:
+        if not k or k <= 0:
+            continue                                      # re-entrant: the other face is there
+        toward = 1.0 if side == "r" else -1.0
+        for m in meshes:
+            if m["ifc_type"] != "batten" or m.get("clip_v_at") or m.get("corner"):
+                continue
+            us = [q[0] for q in m["profile"]]
+            inside, outside = (min(us), max(us)) if toward > 0 else (max(us), min(us))
+            past = (outside - u_end) * toward
+            if (inside - u_end) * toward < -0.5 and 0.5 < past <= k * float(m["depth"]) + 0.5:
+                m["clip_v_at"] = sorted((u_end - toward * 2.0, u_end - toward * 0.5))
 
 
 def _corner_timbers(p, meshes, u_end, k, side, before, toward, board_end):

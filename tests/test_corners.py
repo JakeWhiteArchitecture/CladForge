@@ -256,3 +256,23 @@ def test_gaskets_and_corner_timbers_export(faces):
     gaskets = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "EPDM gasket"]
     assert gaskets and all(e.PredefinedType == "MEMBRANE" for e in gaskets)
     assert "GASKET" in meshes_to_dxf_string(out["geometry"], params, out["info"])
+
+
+def test_a_batten_across_the_corner_line_stays_on_its_joint(faces):
+    """The last joint lands 16 mm short of the wall's corner line, so its batten straddles
+    it. Past the line the cavity carries on in front of the other face's insulation: the
+    batten is trimmed in height only and stays centred on the joint, its gasket on it."""
+    params, out = _pair(faces, detail="profile", panel_t=10, trim=True, insulation=True, insulation_t=100,
+                        sheathing=True, sheathing_t=9, batten_d=50)
+    geo = [m for m in out["geometry"] if m["elevation"] == "Elevation A"]
+    span = lambda m: (min(q[0] for q in m["profile"]), max(q[0] for q in m["profile"]))  # noqa: E731
+    panels = sorted(span(m) for m in geo if m["ifc_type"] == "panel" and min(q[1] for q in m["profile"]) < 1500 < max(q[1] for q in m["profile"]))
+    joint = (panels[-2][1] + panels[-1][0]) / 2                  # 7984
+    (batten,) = [m for m in geo if m["ifc_type"] == "batten" and span(m)[0] < joint < span(m)[1]
+                 and min(q[1] for q in m["profile"]) < 1500 < max(q[1] for q in m["profile"])]
+    lo, hi = span(batten)
+    assert hi > 8000 and abs((lo + hi) / 2 - joint) < 1e-6          # across the line, on the joint
+    (gasket,) = [m for m in geo if m["ifc_type"] == "gasket" and m["on"] == batten["name"].rstrip("abcdefgh")
+                 and min(q[1] for q in m["profile"]) < 1500 < max(q[1] for q in m["profile"])]
+    glo, ghi = span(gasket)
+    assert abs((glo + ghi) / 2 - joint) < 1e-6 and round(ghi - glo, 6) == round(hi - lo + 30, 6)
