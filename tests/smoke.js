@@ -568,13 +568,31 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('joints dropped:', JSON.stringify(pruned));
     if (pruned.kept !== 2 || pruned.left !== 0 || !/^2 dissolved joints dropped/.test(pruned.status))
         throw new Error('joints under a changed grid were not dropped and reported: ' + JSON.stringify(pruned));
-    await page.evaluate(async () => { const e = d2Elev(view2d.name); e.panelRows = null; e.panelJoints = null; await updatePreview(); });
+    await page.evaluate(async () => { window._smokePlan = window._lastPlan; const e = d2Elev(view2d.name); e.panelRows = null; e.panelJoints = null; await updatePreview(); });
+    // Flat, every panel is tinted by how well its board is used; back in 3D they are not.
+    await page.waitForFunction(() => window._lastPlan && window._lastPlan !== window._smokePlan
+                                     && document.getElementById('wr-key').style.display !== 'none', null, { timeout: 20000 });
+    const tint = await page.evaluate(() => {
+        const panels = cladGroup.children.flatMap(l => l.children).filter(o => o.isMesh && / Panel R\d/.test(o.userData.name || '') && o.visible);
+        const hex = panels.map(o => o.material.color.getHex());
+        const bands = [0x22c55e, 0xf59e0b, 0xef4444];
+        const right = panels.filter(o => { const f = window._lastPlan.fills[o.userData.name];
+            return f === undefined || o.material.color.getHex() === (f >= 0.9 ? bands[0] : f >= 0.75 ? bands[1] : bands[2]); }).length;
+        const oversize = panels.filter(o => window._lastPlan.oversize.includes(o.userData.name)).length;
+        return { panels: panels.length, tinted: hex.filter(h => bands.includes(h)).length, right, oversize };
+    });
+    console.log('board use tint:', JSON.stringify(tint));
+    if (!tint.panels || tint.tinted !== tint.panels - tint.oversize || tint.right !== tint.panels) throw new Error('panels not tinted by board use: ' + JSON.stringify(tint));
     await page.keyboard.press('Escape');
     await page.waitForTimeout(1200);
     const back = await page.evaluate(() => ({ ortho: !!activeCamera().isOrthographicCamera, rotate: controls.enableRotate,
         pose: [camera.position.toArray(), controls.target.toArray()].map(v => v.map(Math.round).join(',')).join(' → '),
         opacity: modelGroup.children[0].material.opacity }));
+    back.tinted = await page.evaluate(() => cladGroup.children.flatMap(l => l.children)
+        .filter(o => o.isMesh && / Panel R\d/.test(o.userData.name || '') && [0x22c55e, 0xf59e0b, 0xef4444].includes(o.material.color.getHex())).length);
+    back.key = await page.evaluate(() => document.getElementById('wr-key').style.display);
     console.log('back to 3D:', JSON.stringify(back), '| was', pose3d);
+    if (back.tinted || back.key !== 'none') throw new Error('panels still tinted in 3D: ' + JSON.stringify(back));
     if (back.ortho || !back.rotate || back.pose !== pose3d)
         throw new Error('3D pose not restored: ' + JSON.stringify(back) + ' vs ' + pose3d);
 
@@ -587,12 +605,11 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         const real = { text: box.innerText.replace(/\n/g, ' | '), waste: +(100 * plan.waste).toFixed(1), over: box.classList.contains('over'),
                        colour: red(), boards: plan.n_boards, lower: plan.lower_bound, pieces: plan.n_pieces, ms: plan.ms };
         // the colour follows the 5% line either way
-        const chain = state.elevations[0].chain;
-        renderReadout(chain, Object.assign({}, plan, { waste: 0.04 }));
+        renderReadout(Object.assign({}, plan, { waste: 0.04 }));
         const at4 = { over: box.classList.contains('over'), colour: red() };
-        renderReadout(chain, Object.assign({}, plan, { waste: 0.06 }));
+        renderReadout(Object.assign({}, plan, { waste: 0.06 }));
         const at6 = { over: box.classList.contains('over'), colour: red() };
-        renderReadout(chain, plan);
+        renderReadout(plan);
         return { real, at4, at6 };
     });
     console.log('waste readout:', JSON.stringify(readout));
@@ -600,6 +617,36 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || readout.at6.colour !== 'rgb(239, 68, 68)' || readout.at4.colour === readout.at6.colour
         || readout.real.over !== (readout.real.waste > 5) || readout.real.ms > 1000)
         throw new Error('waste readout wrong: ' + JSON.stringify(readout));
+    // The whole job is packed together (every built chain), and Optimise boards runs the
+    // full search: never more boards than the quick check, and the readout says which it is.
+    const optimised = await page.evaluate(async () => {
+        const quick = window._lastPlan, builtNames = state.chains.filter(c => c.built)
+            .flatMap(c => c.members.filter(m => m.result && m.result.ok).map(m => m.result.name));
+        const pieces = window._lastPreview.geometry.filter(m => m.ifc_type === 'panel' && builtNames.includes(m.elevation)).length;
+        await optimiseBoards();
+        const deep = window._lastPlan;
+        return { quick: [quick.n_boards, quick.strategies, quick.deep], deep: [deep.n_boards, deep.strategies, deep.deep],
+                 pooled: quick.n_pieces === pieces, chains: state.chains.filter(c => c.built).length, ms: deep.ms,
+                 title: document.getElementById('wr-title').textContent, sizes: document.getElementById('wr-sizes').textContent,
+                 button: getComputedStyle(document.getElementById('wr-optimise')).display, status: document.getElementById('status-chip').textContent };
+    });
+    console.log('optimise boards:', JSON.stringify(optimised));
+    if (!optimised.pooled || optimised.quick[1] !== 16 || optimised.quick[2] || !optimised.deep[2] || optimised.deep[0] > optimised.quick[0]
+        || !/optimised$/.test(optimised.title) || !/^Divides the board: 1250 · 623 · 414 × 2500 · 1248/.test(optimised.sizes)
+        || optimised.button !== 'none' || !/^Optimised: /.test(optimised.status) || optimised.ms > 15000)
+        throw new Error('Optimise boards wrong: ' + JSON.stringify(optimised));
+    // Edge trim comes off the board before packing: never fewer boards, and the readout says so.
+    const trimmed = await page.evaluate(async () => {
+        const before = window._lastPlan.n_boards;
+        document.getElementById('board_trim').value = 10; await updatePreview();
+        await new Promise(r => setTimeout(r, 900));
+        const plan = window._lastPlan, note = document.getElementById('wr-note').textContent;
+        document.getElementById('board_trim').value = 0; await updatePreview();
+        await new Promise(r => setTimeout(r, 900));
+        return { before, after: plan.n_boards, trim: plan.trim, note };
+    });
+    console.log('edge trim:', JSON.stringify(trimmed));
+    if (trimmed.trim !== 10 || !/10 mm edge trim/.test(trimmed.note)) throw new Error('edge trim not applied: ' + JSON.stringify(trimmed));
     // A board as big as two panels side by side packs them two to a board.
     const bigger = await page.evaluate(async () => {
         document.getElementById('board_w').value = 2500; await updatePreview();

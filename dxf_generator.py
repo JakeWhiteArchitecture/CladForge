@@ -169,9 +169,11 @@ def _schedule(p, info, meshes):
                      else "is centred on the elevation"))
     if p["cladding_type"] == "panel":
         rows = info.get("rows") or []
-        lines.append("Panels: %d pieces in %d rows, joint gap %.0f. Rows bottom up: %s (top row is the "
-                     "closing cut); every row is dimensioned on the right." % (
-                         counts.get("panel", 0), len(rows), p["panel_gap"], ", ".join("%.0f" % h for h in rows)))
+        merged = len(info.get("panel_joints") or [])
+        lines.append("Panels: %d pieces in %d rows, joint gap %.0f. Rows bottom up: %s (the top row takes what "
+                     "is left); every row is dimensioned on the right.%s" % (
+                         counts.get("panel", 0), len(rows), p["panel_gap"], ", ".join("%.0f" % h for h in rows),
+                         " %d horizontal joint(s) dissolved: those panels run across rows." % merged if merged else ""))
     else:
         lines.append("Planks: %d pieces %.0fx%.0f, %d courses @ %.0f cover (%s)" % (
             counts.get("plank", 0), p["plank_w"], p["plank_t"], info.get("n_courses", 0), info.get("cover", 0),

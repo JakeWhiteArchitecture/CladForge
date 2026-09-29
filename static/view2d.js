@@ -28,14 +28,26 @@ function currentPose() {
 
 // Square-on pose for an elevation: on its outward normal, looking at the middle of the clad
 // region {u0, u1, v0, v1}, far enough back that the region and its dimensions fit.
+// The waste readout sits over the top right of the view: while it shows, that strip is
+// kept clear, so no dimension lands under it.
 function elevationPose(frame, box) {
     const M = frameMatrix(frame, 0);
-    const target = new THREE.Vector3((box.u0 + box.u1) / 2, (box.v0 + box.v1) / 2, 0).applyMatrix4(M);
     const dir = new THREE.Vector3(frame.n[0], 0, -frame.n[1]).normalize();
-    const w = box.u1 - box.u0 + 2 * VIEW2D_DIMS, h = box.v1 - box.v0 + 2 * VIEW2D_DIMS;
+    const clear = readoutReserve();
+    const w = (box.u1 - box.u0 + 2 * VIEW2D_DIMS) / (1 - clear), h = box.v1 - box.v0 + 2 * VIEW2D_DIMS;
     const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
     const dist = Math.max(h / 2 / tan, w / 2 / (tan * camera.aspect)) * VIEW2D_MARGIN;
+    // look a little right of the middle (u runs left to right, seen from outside), so the
+    // elevation sits in the part of the view the readout leaves
+    const shift = clear / 2 * 2 * dist * tan * camera.aspect;
+    const target = new THREE.Vector3((box.u0 + box.u1) / 2 + shift, (box.v0 + box.v1) / 2, 0).applyMatrix4(M);
     return { target, dir, dist, w, h };
+}
+
+function readoutReserve() {
+    const box = document.getElementById('waste-readout'), c = renderer && renderer.domElement;
+    if (!box || box.style.display === 'none' || !c || !c.clientWidth) return 0;
+    return Math.min(0.35, (box.offsetWidth + 20) / c.clientWidth);
 }
 
 // Move the perspective camera from pose a to pose b. The direction turns on the sphere
@@ -120,6 +132,7 @@ function apply2DLook(on) {
     dimGroup.visible = on || layerVisible.dims;
     // Flat, the labels are HTML over the view (dims2d.js); the sprites are for 3D.
     for (const o of dimGroup.children) if (o.isSprite) o.visible = !on;
+    if (typeof tintPanels === 'function') tintPanels();      // board use shows flat only (dims2d.js)
 }
 
 // Called after every render of the cladding too, since a preview rebuilds it.

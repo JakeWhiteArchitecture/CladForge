@@ -96,14 +96,15 @@ def check_rules(params, infos=None):
             "with the manufacturer (the profile suits 6, 8 or 10 mm)" % p["panel_t"], p["panel_t"])
     # A cut panel has to come out of a stock board, turned if rotation is allowed.
     if p["cladding_type"] == "panel":
-        bw, bh = p["board_w"], p["board_h"]
+        trim = 2 * p.get("board_trim", 0.0)                 # squared-up edges come off first
+        bw, bh = p["board_w"] - trim, p["board_h"] - trim
         fits = lambda w, h: (w <= bw and h <= bh) or (p["rotate"] and w <= bh and h <= bw)  # noqa: E731
         big = sorted({(w, h) for i in infos for w in (i.get("panel_widths") or []) for h in (i.get("rows") or [])
                       if not fits(w, h)}
                      | {tuple(q["size"]) for i in infos for q in (i.get("panel_joints") or []) if not fits(*q["size"])})
         if big:
-            add("Board size", "fail", "%d cut size(s) larger than the %.0f x %.0f board either way round, e.g. %.0f x %.0f"
-                % (len(big), bw, bh, big[0][0], big[0][1]), len(big))
+            add("Board size", "fail", "%d cut size(s) larger than the %.0f x %.0f board%s either way round, e.g. %.0f x %.0f"
+                % (len(big), bw, bh, " left after edge trim" if trim else "", big[0][0], big[0][1]), len(big))
     bad = sum(i.get("unsupported_joints", 0) for i in infos)
     if bad:
         add("End joints", "warn", "%d board end joints fall between battens — shorten max length or adjust centres" % bad, bad)
