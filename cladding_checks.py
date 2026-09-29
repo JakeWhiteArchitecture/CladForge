@@ -104,6 +104,15 @@ def check_rules(params, infos=None):
         if big:
             add("Board size", "fail", "%d cut size(s) larger than the %.0f x %.0f board either way round, e.g. %.0f x %.0f"
                 % (len(big), bw, bh, big[0][0], big[0][1]), len(big))
+    # Where each reveal lining runs back to: the window or door frame in the model, a
+    # position typed on the opening, or the chain's default (cladding_edges.opening_frames).
+    ops = [d for i in infos for d in (i.get("opening_details") or []) if "frame_from" in d]
+    if ops and p.get("reveals", True):
+        notes = [d["frame_note"] for d in ops if d.get("frame_note")]
+        count = {k: sum(1 for d in ops if d["frame_from"] == k) for k in ("model", "set", "default")}
+        add("Window frames", "warn" if notes else "pass",
+            "; ".join(notes) if notes else "Linings run to the frame: %d from the model, %d set on the opening, %d at the "
+            "chain's frame position" % (count["model"], count["set"], count["default"]), len(ops))
     bad = sum(i.get("unsupported_joints", 0) for i in infos)
     if bad:
         add("End joints", "warn", "%d board end joints fall between battens — shorten max length or adjust centres" % bad, bad)

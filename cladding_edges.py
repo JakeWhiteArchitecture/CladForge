@@ -25,6 +25,8 @@ from cladding_primitives import clip_bounds, openings
 
 EDGE_DEFAULTS = {"top": 10.0, "side": 0.0, "bottom": 10.0}
 MITRE_GAP = 10.0        # between two mitred boards, measured straight across the joint
+FRAME_SETBACK = 50.0    # a window or door frame's outer face, behind the wall face, when not found
+FRAME_REACH = 600.0     # with no wall depth known: how far behind the wall face a frame may be
 HEAD_AIR = 10.0         # vented at the back: air over the head lining, and its gap off the frame
 MAX_EDGE = 100.0
 TOL = 0.6
@@ -164,6 +166,50 @@ def opening_details(elev, p):
             if d[part + "_master"] not in ("face", "reveal"):
                 d[part + "_master"] = "face"
         out.append((rect, d))
+    return out
+
+
+def opening_frames(elev, holes, face):
+    """{rect: {"depth", "from", "name", "note"}}: where each opening's reveal linings run
+    back to, the outer face of its window or door frame, as a depth from the wall face
+    (out is positive), tight to it.
+
+      set      typed on the opening (opening_details[key]["frame"], mm behind the wall
+               face; negative is forward of it): always wins
+      model    the window or door the extractor found in the opening: an IfcWindow or
+               IfcDoor only, covering most of the opening, and its face within the
+               reveal, behind the cladding face and in front of the back of the wall
+      default  the chain's frame setback (elev["frame_setback"], 50 mm behind the wall
+               face by default), with a note where a frame was found but rejected"""
+    chosen = elev.get("opening_details") or {}
+    try:
+        default = -float(elev.get("frame_setback") if elev.get("frame_setback") is not None else FRAME_SETBACK)
+    except (TypeError, ValueError):
+        default = -FRAME_SETBACK
+    back = float(elev.get("wall_depth") or 0.0) or FRAME_REACH
+    out = {}
+    for rect in holes:
+        u0, u1, v0, v1 = rect
+        typed = (chosen.get(opening_key(rect)) or {}).get("frame")
+        if isinstance(typed, (int, float)) and not isinstance(typed, bool):
+            out[rect] = {"depth": -float(typed), "from": "set", "name": None, "note": None}
+            continue
+        best, area = None, (u1 - u0) * (v1 - v0)
+        for fr in elev.get("frames") or []:
+            a0, a1, b0, b1 = fr["rect"]
+            ov = max(0.0, min(u1, a1) - max(u0, a0)) * max(0.0, min(v1, b1) - max(v0, b0))
+            if ov >= 0.5 * area or ov >= 0.5 * max(1.0, (a1 - a0) * (b1 - b0)):
+                if best is None or ov > best[0]:
+                    best = (ov, fr)
+        note = None
+        if best:
+            f = float(best[1]["face"])
+            if -back - 1.0 <= f < face - 1.0:
+                out[rect] = {"depth": f, "from": "model", "name": best[1].get("name"), "note": None}
+                continue
+            note = "%s found %.0f mm %s the wall face, outside the reveal: the chain's frame position is used" % (
+                best[1].get("name") or "a window or door", abs(f), "behind" if f < 0 else "in front of")
+        out[rect] = {"depth": default, "from": "default", "name": None, "note": note}
     return out
 
 

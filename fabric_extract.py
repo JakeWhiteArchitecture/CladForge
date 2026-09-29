@@ -39,6 +39,8 @@ PITCH_TOL = 20.0          # mm – rise along an abutment line before it counts 
 DEFAULT_BUDGET_S = 20.0   # s – extraction gives up on context past this rather than hang
 # Type names are compared upper-cased: web-ifc reports IFCSLAB, IfcOpenShell IfcSlab.
 ABUTMENT_TYPES = frozenset({"IFCSLAB", "IFCSLABSTANDARDCASE", "IFCSLABELEMENTEDCASE", "IFCROOF"})
+# Windows and doors: where a reveal lining runs back to (cladding_edges.opening_frames).
+FRAME_TYPES = frozenset({"IFCWINDOW", "IFCWINDOWSTANDARDCASE", "IFCDOOR", "IFCDOORSTANDARDCASE"})
 IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE", "IFCSPACE",
                           "IFCSITE", "IFCOPENINGELEMENT", "IFCOPENINGSTANDARDCASE",
                           "IFCFURNISHINGELEMENT", "IFCCOVERING", "IFCRAILING", "IFCSTAIR",
@@ -360,7 +362,7 @@ def _extract(payload):
     _say(dbg, "%s: %d faces, region %.0f x %.0f" % (name, len(faces), region.bounds[2] - region.bounds[0],
                                                     region.bounds[3] - region.bounds[1]))
     clad_depth = float(options.get("clad_depth") or 0.0)
-    abutments, cuts = [], []
+    abutments, cuts, frames = [], [], []
     umin0, vmin0, umax0, vmax0 = region.bounds
     skipped = 0
     for elem in payload.get("context", []):
@@ -379,6 +381,10 @@ def _extract(payload):
         _t0 = time.perf_counter()
         try:   # one awkward element must not sink the whole extraction
             tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
+            if etype in FRAME_TYPES:
+                fr = _frame_of(tris, n, d, u)
+                if fr:
+                    frames.append(dict(fr, name=elem.get("name", ""), type=elem.get("type") or etype))
             straddles, touches, poly, pts = _section(tris, n, d, u)
             # An abutment counts if it reaches the wall or merely stands in the cladding
             # zone in front of it; a penetration still has to cross the face to be a hole.
@@ -437,12 +443,30 @@ def _extract(payload):
                    "width": round(width, 2), "height": round(height, 2),
                    "area": round(region.area, 1), "notches": notches,
                    "abutments": _merge_abutments(abutments, umin, vmin, width),
+                   "frames": [dict(f, rect=[round(f["rect"][0] - umin, 1), round(f["rect"][1] - umin, 1),
+                                            round(f["rect"][2] - vmin, 1), round(f["rect"][3] - vmin, 1)])
+                              for f in frames],
+                   "wall_depth": float(options.get("wall_depth") or 0.0),
                    "n_holes": sum(len(pg["holes"]) for pg in polygons) + len(notches)})
     result["timings_ms"] = {k: v for k, v in sorted(clock.items(), key=lambda kv: -kv[1])[:8] if v >= 20}
     _say(dbg, "%s: done — %s" % (name, result["timings_ms"] or "nothing slow"))
     if any(a.get("pitched") for a in result["abutments"]):
         result["warnings"].append("Pitched abutment detected — the splash zone follows the roof line; check it")
     return result
+
+
+def _frame_of(tris, n, d, u):
+    """A window or door as the reveal sees it: its footprint on the face, (u0, u1, v0, v1)
+    before the local shift, and the depth of its outer face from the wall face (out is
+    positive). The bottom tenth is left out of the depth, so a projecting sill or
+    threshold is not taken for the frame."""
+    pts = [(_dot(p, u), p[2], _dot(p, n) - d) for tri in tris for p in tri]
+    if not pts:
+        return None
+    us, vs = [q[0] for q in pts], [q[1] for q in pts]
+    v0, v1 = min(vs), max(vs)
+    above = [q[2] for q in pts if q[1] >= v0 + 0.1 * (v1 - v0)] or [q[2] for q in pts]
+    return {"rect": [min(us), max(us), v0, v1], "face": round(max(above), 1)}
 
 
 def _seeded(region, seeds, u, tol=100.0):

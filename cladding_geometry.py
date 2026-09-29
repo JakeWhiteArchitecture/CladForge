@@ -12,7 +12,7 @@ from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN
 from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
-                            opening_key, settings as edge_settings)
+                            opening_key, opening_frames, settings as edge_settings)
 import cladding_corners as profiles
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
@@ -85,7 +85,11 @@ def build_elevation(p, elev, layout=None):
     edges = classify_edges(elev, outline)
     _openings_extras(p, elev, meshes, holes, layers, depth - board - layers, depth, board, prof, v0)
     info["openings"] = len(holes)
-    info["opening_details"] = [dict(d, key=opening_key(r), rect=list(r)) for r, d in opening_details(elev, p)]
+    frames = opening_frames(elev, holes, depth)
+    info["opening_details"] = [dict(d, key=opening_key(r), rect=list(r), frame_depth=frames[r]["depth"],
+                                    frame_from=frames[r]["from"], frame_name=frames[r]["name"],
+                                    frame_note=frames[r]["note"])
+                               for r, d in opening_details(elev, p)]
 
     # Each end takes its own corner's detail: a lap at one end and a mitre at the other
     # treat the layers behind the boards differently, so the ends are applied apart.
@@ -530,11 +534,12 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
     s = edge_settings(elev)
     pull = mitre_pullback(s["gap"], 1.0)
     # Vented at the back, the head lining drops by the air space and stops the same
-    # distance short of the window frame (taken as the wall face), so air runs over it
+    # distance short of the window frame (cladding_edges.opening_frames), so air runs over it
     # and out at the frame. Vented at the front it is tight to the head and the open
     # joint at the front edge is the vent.
     air = s["air"] if s["vent"] == "back" else 0.0
     details = dict((tuple(r), d) for r, d in opening_details(elev, p))
+    frames = opening_frames(elev, holes, face)
     band_lo, band_hi = clip_bounds_v(elev)
     for i, (u0, u1, v0, v1) in enumerate(holes):
         d = details.get((u0, u1, v0, v1), {})
@@ -543,6 +548,10 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
         # is within the cladding.
         jv0, jv1 = max(v0, band_lo), min(v1, band_hi)
         head_in = v1 < band_hi - 0.5
+        # The linings run from the cladding face back to the window or door frame, tight
+        # to its outer face (cladding_edges.opening_frames): past the wall face where the
+        # frame is set back, short of it where the frame stands forward.
+        reach = max(board, face - frames[(u0, u1, v0, v1)]["depth"])
         jamb = reveal_treatment(d.get("jamb", "mitre"), d.get("jamb_master", "face"), face, pull, board, p["panel_gap"])[1]
         head_t = reveal_treatment(d.get("head", "mitre"), d.get("head_master", "face"), face, pull, board, p["panel_gap"])[1]
         for side, u in ((-1.0, u0), (1.0, u1)):
@@ -552,7 +561,7 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
                                  "%s Cavity Closer %d%s" % (name, i + 1, "L" if side < 0 else "R"), name))
             if not p["reveals"]:
                 continue
-            lining = _prism(_rect(0.0, jv0, face, jv1), 0.0, board,
+            lining = _prism(_rect(0.0, jv0, reach, jv1), 0.0, board,
                             _reveal_frame(frame, u, face, -side), "reveal",
                             "%s Reveal %d%s" % (name, i + 1, "L" if side < 0 else "R"), name)
             if jamb:
@@ -562,7 +571,7 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
         if not p["reveals"]:
             continue
         if ub - ua > 1.0 and head_in:
-            head = _prism(_rect(0.0, 0.0, face - air, ub - ua), 0.0, board,
+            head = _prism(_rect(0.0, 0.0, max(board, reach - air), ub - ua), 0.0, board,
                           _head_frame(frame, ua, v1 - air, face), "reveal", "%s Reveal %dH" % (name, i + 1), name)
             if head_t:
                 head["corner"] = {"k_l": head_t[0], "ext_l": head_t[1], "u_l": 0.0}

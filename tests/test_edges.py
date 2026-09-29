@@ -131,12 +131,13 @@ def test_head_air_space_only_when_vented_at_the_back(elevation):
     wider, _b, _f2 = _head(elevation, head_vent="back", head_air=25.0)
     for m in (front, back, wider):
         assert m["frame"]["n"] == [0.0, 0.0, -1.0] and m["frame"]["v"][2] == 0.0   # lies flat, facing down
-    # at front the lining is tight to the head, and runs back to the wall face
+    # at front the lining is tight to the head, and runs back to the frame (no frame in
+    # this model: the chain's default, 50 mm behind the wall face)
     assert abs(frame_to_world(front["frame"], 0, 0)[2] - head_z) < 1e-6
-    assert max(q[0] for q in front["profile"]) == face
+    assert max(q[0] for q in front["profile"]) == face + 50.0
     # at back there is air over it, and it stops the same distance short of the frame
     assert abs(frame_to_world(back["frame"], 0, 0)[2] - (head_z - 10.0)) < 1e-6
-    assert max(q[0] for q in back["profile"]) == face - 10.0
+    assert max(q[0] for q in back["profile"]) == face + 50.0 - 10.0
     assert abs(frame_to_world(wider["frame"], 0, 0)[2] - (head_z - 25.0)) < 1e-6
     # the face board comes down to the lowered lining, so the air space stays closed at the front
     assert abs(board_back[2] - (board_front[2] - 10.0)) < 1e-6

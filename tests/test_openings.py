@@ -76,8 +76,9 @@ def test_reveal_linings_are_mitred_to_the_face_panel(elevation):
     for m in reveals:
         assert m["corner"]["k_l"] == 1.0 and abs(m["corner"]["ext_l"] + p["panel_t"] + pull) < 1e-9
         assert abs(m["thickness"] - p["panel_t"]) < 1e-6
-        # the lining runs from the cladding face back to the wall face
-        assert [q[0] for q in m["profile"][:2]] == [0.0, depth]
+        # the lining runs from the cladding face back to the frame: no frame in this
+        # model, so the chain's default, 50 mm behind the wall face
+        assert [q[0] for q in m["profile"][:2]] == [0.0, depth + 50.0]
     # the face boards along the jambs and head carry the mitre on those vertices
     shifted = [m for m in out["geometry"] if m["ifc_type"] == "panel" and m.get("vshift")]
     assert shifted, "no face panel mitred at the reveal"
@@ -329,3 +330,70 @@ def test_a_full_height_opening_splits_the_face_but_is_still_an_opening(elevation
     assert _kinds_along(out, 2000.0, 200, H - 200) == {"jamb"} and _kinds_along(out, 2900.0, 200, H - 200) == {"jamb"}
     linings = {m["name"][-2:] for m in out["geometry"] if m["ifc_type"] == "reveal"}
     assert linings == {"1L", "1R"}
+
+
+# ── reveal linings run back to the window or door frame ──
+
+def _with_window(face_depth, wall_depth=300.0, name="W1"):
+    """The synthetic wall with an IfcWindow in its opening, its outer frame face
+    *face_depth* from the wall face (negative is behind it), 70 deep, with a sill that
+    projects 40 in front of the frame at the bottom."""
+    pl = payload()
+    frame = box_tris(2000.0, 3200.0, 930.0, 2100.0, face_depth - 70.0, face_depth)
+    sill = box_tris(1980.0, 3220.0, 900.0, 930.0, face_depth - 70.0, face_depth + 40.0)
+    pl["context"] = pl["context"] + [{"type": "IfcWindow", "name": name,
+                                      "tris": [[list(p) for p in t] for t in frame + sill]}]
+    pl["options"] = dict(pl.get("options") or {}, wall_depth=wall_depth)
+    return extract_elevation(pl)
+
+
+def _lining_reach(out, suffix="1L"):
+    (m,) = [m for m in out["geometry"] if m["ifc_type"] == "reveal" and m["name"].endswith(suffix)]
+    return max(q[0] for q in m["profile"])
+
+
+def test_linings_run_back_to_the_window_frame_in_the_model():
+    elev = _with_window(-80.0)
+    (fr,) = elev["frames"]
+    assert fr["face"] == -80.0                                         # the sill is not the frame
+    out = generate_preview(_params(elev, trim=True))
+    face = out["info"][0]["total_depth"]
+    assert _lining_reach(out) == face + 80.0 and _lining_reach(out, "1R") == face + 80.0
+    assert _lining_reach(out, "1H") == face + 80.0
+    (d,) = out["info"][0]["opening_details"]
+    assert (d["frame_from"], d["frame_depth"], d["frame_name"]) == ("model", -80.0, "W1")
+    # a frame standing forward of the wall face, in the insulation zone as in Rockpanel H.02
+    out = generate_preview(_params(_with_window(40.0), trim=True))
+    assert _lining_reach(out) == out["info"][0]["total_depth"] - 40.0
+
+
+def test_no_frame_or_one_outside_the_reveal_falls_back_to_the_chain_setting(elevation):
+    out = generate_preview(_params(elevation, trim=True))                   # no window in the model
+    face = out["info"][0]["total_depth"]
+    assert _lining_reach(out) == face + 50.0                              # 50 mm behind the wall face
+    (d,) = out["info"][0]["opening_details"]
+    assert d["frame_from"] == "default" and d["frame_note"] is None
+    out = generate_preview(_params(dict(elevation, frame_setback=-30.0), trim=True))
+    assert _lining_reach(out) == face - 30.0                              # set forward on the chain
+    # a window found beyond the back of the wall is not the frame of this reveal
+    out = generate_preview(_params(_with_window(-420.0, wall_depth=300.0), trim=True))
+    (d,) = out["info"][0]["opening_details"]
+    assert d["frame_from"] == "default" and "420 mm behind" in d["frame_note"]
+    assert _lining_reach(out) == face + 50.0
+
+
+def test_a_frame_typed_on_the_opening_always_wins():
+    elev = _with_window(-80.0)
+    out = generate_preview(_params(dict(elev, opening_details={"2000,900": {"frame": 25}}), trim=True))
+    assert _lining_reach(out) == out["info"][0]["total_depth"] + 25.0
+    assert out["info"][0]["opening_details"][0]["frame_from"] == "set"
+
+
+def test_the_frame_check_says_where_linings_run_to(elevation):
+    from cladding_preview import check_rules
+    params = _params(elevation, trim=True)
+    (c,) = [c for c in check_rules(params, generate_preview(params)["info"]) if c["name"] == "Window frames"]
+    assert c["status"] == "pass" and "0 from the model, 0 set on the opening, 1 at the chain's frame position" in c["message"]
+    params = _params(_with_window(-420.0), trim=True)
+    (c,) = [c for c in check_rules(params, generate_preview(params)["info"]) if c["name"] == "Window frames"]
+    assert c["status"] == "warn" and "W1 found 420 mm behind the wall face" in c["message"]
