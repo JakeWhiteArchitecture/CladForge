@@ -738,6 +738,11 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         const out = { detail: cornerDetailInForce(c),
                       meshes: window._lastPreview.geometry.filter(m => m.ifc_type === 'corner_profile').map(m => m.name),
                       badges: Array.from(document.querySelectorAll('.corner-badge:not(.opening-badge)')).map(b => b.textContent),
+                      // the battens there meet in a solid L of timber, one twice as wide
+                      timbers: window._lastPreview.geometry.filter(m => m.corner_timber).map(m => m.corner_timber).sort().join(','),
+                      flanges: (window._lastPreview.geometry.find(m => m.ifc_type === 'corner_profile') || {}).profile_info,
+                      gaskets: window._lastPreview.geometry.filter(m => m.ifc_type === 'gasket').length,
+                      pgap: document.getElementById('edge-pgap').value,
                       reentrantOffered: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(-1), true)),
                       externalOffered: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true)) };
         toggle2D();
@@ -747,7 +752,9 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     });
     console.log('corner profile:', JSON.stringify(profiled));
     if (profiled.detail !== 'profile' || profiled.meshes.length !== 1 || !profiled.badges.includes('P')
-        || profiled.reentrantOffered || !profiled.externalOffered)
+        || profiled.reentrantOffered || !profiled.externalOffered || !/narrow/.test(profiled.timbers) || !/wide/.test(profiled.timbers)
+        || !profiled.flanges || profiled.flanges.flange_a !== 35 || profiled.flanges.flange_b !== 35
+        || !(profiled.gaskets > 0) || profiled.pgap !== '1')
         throw new Error('corner profile not placed or offered wrongly: ' + JSON.stringify(profiled));
     await page.waitForTimeout(1200);
     await page.evaluate(async () => { setActive(4); deleteElevation(); await new Promise(r => setTimeout(r, 1500)); });

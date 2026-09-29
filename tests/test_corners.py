@@ -102,11 +102,11 @@ def test_master_at_a_head_both_ways(faces):
 
 def test_profile_at_a_chain_corner(faces):
     """The nose's outside faces are flush with both panel faces, and each panel stops the
-    nose (D, the panel thickness) short of the outer corner line."""
+    nose (D, the panel thickness) and the 1 mm profile gap short of the outer corner line."""
     params, out = _pair(faces, detail="profile", panel_t=10)
     depth = buildup_depth(_parse(params))
-    assert _ends(out, "Elevation A", "r") == {round(depth - 10, 6)}
-    assert _ends(out, "Elevation B", "l") == {round(depth - 10, 6)}
+    assert _ends(out, "Elevation A", "r") == {round(depth - 10 - 1, 6)}
+    assert _ends(out, "Elevation B", "l") == {round(depth - 10 - 1, 6)}
     (prof,) = [m for m in out["geometry"] if m["ifc_type"] == "corner_profile"]
     assert prof["elevation"] == "Elevation A"                            # the face before the corner
     assert prof["frame"]["n"] == [0.0, 0.0, 1.0] and len(prof["holes"]) == 1   # upright, hollow nose
@@ -116,7 +116,7 @@ def test_profile_at_a_chain_corner(faces):
     assert abs(max(out_of) - depth) < 0.01              # flush with face A's panel face
     assert abs(max(along) - (8000.0 + depth)) < 0.01    # and with face B's, round the corner
     info = prof["profile_info"]
-    assert (info["D"], info["flange_a"], info["flange_b"], info["thickness"]) == (10.0, 35.0, 10.0, 1.1)
+    assert (info["D"], info["flange_a"], info["flange_b"], info["thickness"]) == (10.0, 35.0, 35.0, 1.1)
     # flange A runs 35 behind face A's panel, which ends D short of the corner
     assert abs(min(along) - (8000.0 + depth - 10 - 35)) < 0.01
     assert not [c for c in check_rules(params, out["info"]) if c["name"] == "Corner profile"]
@@ -141,7 +141,7 @@ def test_profile_at_jambs_and_head(faces):
     head = next(m for m in out["geometry"] if m["name"] == "Elevation A Head Profile 1")
     assert head["frame"]["n"][2] == 0.0                                  # runs along the head
     linings = {m["name"][-2:]: m["corner"] for m in out["geometry"] if m["ifc_type"] == "reveal"}
-    assert all(c == {"k_l": 0.0, "ext_l": -10.0, "u_l": 0.0} for c in linings.values())   # D short of the arris
+    assert all(c == {"k_l": 0.0, "ext_l": -11.0, "u_l": 0.0} for c in linings.values())   # D + 1 short of the arris
     assert len(out["info"][0]["profile_strips"]) == 3
 
 
@@ -163,7 +163,96 @@ def test_profile_exports(faces):
     assert len(members) == 1
     import ifcopenshell.util.element as eu
     ps = eu.get_psets(members[0])["CladForge_CornerProfile"]
-    assert ps["NoseSize"] == 10.0 and ps["FlangeA"] == 35.0 and ps["FlangeB"] == 10.0 and ps["Thickness"] == 1.1
+    assert ps["NoseSize"] == 10.0 and ps["FlangeA"] == 35.0 and ps["FlangeB"] == 35.0 and ps["Thickness"] == 1.1
     assert ps["Length"] > 2000
     dxf = meshes_to_dxf_string(out["geometry"], params, out["info"])
     assert "CORNER_PROFILE" in dxf
+
+
+# ── the timber L at a profiled corner, the profile gap, and EPDM gaskets ──
+
+def _plan(m, v=None):
+    """A timber's footprint in plan (world x, y), from its u extent and depth."""
+    from shapely.geometry import Polygon
+    us = [q[0] for q in m["profile"]]
+    v = m["profile"][0][1] if v is None else v
+    d0, d1 = m["depth"], m["depth"] + m["thickness"]
+    return Polygon([frame_to_world(m["frame"], u, v, d)[:2] for u, d in ((min(us), d0), (max(us), d0), (max(us), d1), (min(us), d1))])
+
+
+@pytest.mark.parametrize("insulation", [False, True])
+def test_a_profiled_corner_has_a_solid_timber_l(faces, insulation):
+    """Rockpanel H.03: the face before the corner has a batten twice as wide running on
+    past the corner, flush with the other face's batten face; the other face's batten,
+    one wide, sits tight behind it. Square, no mitre, and both survive trimming."""
+    from shapely.ops import unary_union
+    params, out = _pair(faces, detail="profile", panel_t=10, trim=True, insulation=insulation, insulation_t=100)
+    p = _parse(params)
+    L = {m["corner_timber"]: m for m in out["geometry"] if m.get("corner_timber")}
+    wide, narrow = L["wide"], L["narrow"]
+    assert (wide["elevation"], narrow["elevation"]) == ("Elevation A", "Elevation B")
+    d0 = wide["depth"]
+    d1 = d0 + wide["thickness"]
+    uw, un = [q[0] for q in wide["profile"]], [q[0] for q in narrow["profile"]]
+    assert (round(min(uw), 3), round(max(uw), 3)) == (round(8000 + d1 - 2 * p["batten_w"], 3), round(8000 + d1, 3))
+    assert (round(min(un), 3), round(max(un), 3)) == (round(-d0, 3), round(-d0 + p["batten_w"], 3))
+    assert "k_r" not in (wide.get("corner") or {}) and "k_l" not in (narrow.get("corner") or {})   # square
+    a, b = _plan(wide), _plan(narrow)
+    assert a.intersection(b).area < 1.0 and a.distance(b) < 1e-6                # tight, not overlapping
+    assert unary_union([a, b]).geom_type == "Polygon"                            # one solid L
+    # flange A lies on the wide timber and flange B on its end: nothing to warn about
+    assert not [c for c in check_rules(params, out["info"]) if c["name"] == "Corner profile"]
+
+
+def test_other_corners_keep_mitred_battens(faces):
+    _params, out = _pair(faces, detail="mitre")
+    assert not [m for m in out["geometry"] if m.get("corner_timber")]
+    assert any((m.get("corner") or {}).get("k_r") == 1.0 for m in out["geometry"]
+               if m["ifc_type"] == "batten" and m["elevation"] == "Elevation A")
+
+
+def test_the_profile_gap(faces):
+    params, out = _pair(faces, detail="profile", panel_t=10)
+    depth = buildup_depth(_parse(params))
+    for gap in (0, 2.5):
+        a, b = faces
+        params, out = _pair((dict(a, profile_gap=gap), dict(b, profile_gap=gap)), detail="profile", panel_t=10)
+        assert _ends(out, "Elevation A", "r") == {round(depth - 10 - gap, 6)}
+    # at a jamb the face board stops the gap back from the opening line, both sides
+    params, out = _opening(faces, {"jamb": "profile"}, panel_t=10)
+    shifts = _shifts(out)
+    assert (-1.0, 0.0, 0.0, 0.0) in shifts and (1.0, 0.0, 0.0, 0.0) in shifts
+
+
+def test_epdm_gaskets_on_the_vertical_timbers(faces):
+    """2 mm, 15 mm past the timber each side, in the back 2 mm of the board so the cavity
+    keeps its depth; on battens and jamb closers, panels only."""
+    params, out = _opening(faces, {}, panel_t=10, trim=False)
+    p = _parse(params)
+    geo = out["geometry"]
+    by_name = {m["name"]: m for m in geo}
+    gaskets = [m for m in geo if m["ifc_type"] == "gasket"]
+    battens = [m for m in geo if m["ifc_type"] == "batten"]
+    back = buildup_depth(p) - p["panel_t"]
+    assert gaskets and {round(g["depth"], 6) for g in gaskets} == {round(back, 6)}
+    assert {g["thickness"] for g in gaskets} == {2.0}
+    assert {by_name[g["on"]]["ifc_type"] for g in gaskets} == {"batten", "closer"}
+    assert len([g for g in gaskets if by_name[g["on"]]["ifc_type"] == "batten"]) == len(battens)
+    for g in gaskets:
+        if by_name[g["on"]]["ifc_type"] != "batten" or by_name[g["on"]].get("corner"):
+            continue
+        gu, tu = [q[0] for q in g["profile"]], [q[0] for q in by_name[g["on"]]["profile"]]
+        assert round(min(tu) - min(gu), 6) == 15.0 and round(max(gu) - max(tu), 6) == 15.0
+    _params, planks = _opening(faces, {}, kind="plank")
+    assert not [m for m in planks["geometry"] if m["ifc_type"] == "gasket"]
+
+
+def test_gaskets_and_corner_timbers_export(faces):
+    import ifcopenshell
+    from ifc_generator import meshes_to_ifc
+    from dxf_generator import meshes_to_dxf_string
+    params, out = _pair(faces, detail="profile", panel_t=10, trim=True)
+    ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
+    gaskets = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "EPDM gasket"]
+    assert gaskets and all(e.PredefinedType == "MEMBRANE" for e in gaskets)
+    assert "GASKET" in meshes_to_dxf_string(out["geometry"], params, out["info"])

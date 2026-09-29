@@ -8,7 +8,7 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 
 import math
 
-from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN
+from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP
 from cladding_booleans import clip_region, strip_intervals
 from cladding_constants import frame_to_world
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
@@ -103,6 +103,8 @@ def build_elevation(p, elev, layout=None):
             if m["ifc_type"] in ("panel", "plank") and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
                 m["corner"] = dict(c, **{"ext_" + side: c.get("ext_" + side, 0.0) - mitre_pullback(gap, k)})
     _profiled_corners(p, elev, meshes, prof, edges, depth, ((lo, left, d_left, "l"), (hi, right, d_right, "r")))
+    if p["cladding_type"] == "panel":
+        _gaskets(p, elev, meshes, depth - board)
     info["profile_strips"], info["profile_warnings"], info["profiles"] = prof["strips"], prof["warnings"], prof["count"]
     k_run = (elev.get("corner_lo"), elev.get("corner_hi"))          # run order, like the details
     k_left, k_right = k_run[::-1] if elev.get("chain_reversed") else k_run
@@ -126,10 +128,11 @@ def build_elevation(p, elev, layout=None):
 
 def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
     """At a chain corner set to Profile the panels stop the nose (D, the panel thickness)
-    short of the outer corner line, square; the layers behind are already mitred, so the
-    battens run on under the flanges. The face before the corner in the run carries the
-    profile itself, over the clad height of the corner less the top and bottom offsets;
-    both faces show its strip and check their flange lies over a batten."""
+    and the chain's profile gap short of the outer corner line, square. The battens meet
+    in a solid L of timber (_corner_timbers); the layers behind them stay mitred. The face
+    before the corner in the run carries the profile itself, over the clad height of the
+    corner less the top and bottom offsets; both faces show its strip, and where there is
+    no L to carry them, check their flange lies over a batten."""
     name, frame, D = elev["name"], elev["frame"], p["panel_t"]
     s = edge_settings(elev)
     for u_end, (k, _ext), detail, side in ends:
@@ -138,7 +141,7 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
         for m in meshes:
             c = m.get("corner") or {}
             if m["ifc_type"] == "panel" and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
-                m["corner"] = dict(c, **{"k_" + side: 0.0, "ext_" + side: k * face - D})
+                m["corner"] = dict(c, **{"k_" + side: 0.0, "ext_" + side: k * face - D - s["pgap"]})
         at = [q[1] for e in edges if e["kind"] == "corner" and abs(e["p1"][0] - u_end) < 1.0 for q in (e["p1"], e["p2"])]
         if not at:
             continue
@@ -146,6 +149,7 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
         toward = 1.0 if side == "r" else -1.0
         u_c = u_end + toward * k * face                          # the outer corner line
         before = (side == "r") != bool(elev.get("chain_reversed"))
+        timbers = _corner_timbers(p, meshes, u_end, k, side, before, toward, u_end + toward * (k * face - D - s["pgap"]))
         if before:
             m = profiles.vertical_profile(frame, u_c, toward, v_from, v_to, face, D,
                                           "%s Corner Profile" % name, name)
@@ -155,9 +159,86 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
         prof["strips"].append(profiles.strip(*sorted((u_c, u_c - toward * D)), v_from, v_to))
         fl = profiles.FLANGE_A if before else profiles.FLANGE_B
         span = sorted((u_c - toward * D, u_c - toward * (D + fl)))
-        if not profiles.flange_supported(meshes, name, span, (v_from, v_to), face - D):
+        if not timbers and not profiles.flange_supported(meshes, name, span, (v_from, v_to), face - D):
             prof["warnings"].append("%s: the corner profile's %.0f mm flange at the %s end is not over a batten"
                                     % (name, fl, "right" if side == "r" else "left"))
+
+
+def _corner_timbers(p, meshes, u_end, k, side, before, toward, board_end):
+    """The battens at a profiled corner as a solid L of timber, square, not mitred
+    (Rockpanel H.03): the face before the corner has a batten twice the batten width,
+    running on past the corner until it is flush with the other face's batten face, where
+    flange A lies on it; the face after the corner has one of the batten width, tight
+    behind it, and flange B lies over the wide one's end. Both run past their own
+    outline, so they are trimmed in height only, to the clad height at the corner
+    ("clip_v_at", cladding_booleans). Returns how many battens were made so."""
+    bw, done = p["batten_w"], 0
+    battens = [m for m in meshes if m["ifc_type"] == "batten" and not m.get("corner_timber")]
+    at = [m for m in battens if ("k_" + side) in (m.get("corner") or {})
+          and abs(m["corner"]["u_" + side] - u_end) <= 0.6]
+    if not at and battens:
+        # No batten reached the corner (one close by took its place): make one from the
+        # nearest batten's section.
+        near = min(battens, key=lambda m: min(abs(q[0] - u_end) for q in m["profile"]))
+        at = [dict(near, corner={}, name="%s Corner Batten" % near["elevation"])]
+        meshes.append(at[0])
+    for m in at:
+        c = m.get("corner") or {}
+        d0 = float(m["depth"])
+        reach, width = (k * (d0 + float(m["thickness"])), 2 * bw) if before else (k * d0, bw)
+        outer = u_end + toward * reach
+        a, b = sorted((outer, outer - toward * width))
+        vs = [q[1] for q in m["profile"]]
+        m["profile"], m["holes"] = _rect(a, min(vs), b, max(vs)), []
+        c = {key: v for key, v in c.items() if not key.endswith("_" + side)}
+        if c:
+            m["corner"] = c
+        else:
+            m.pop("corner", None)
+        m["clip_v_at"] = sorted((u_end - toward * 2.0, u_end - toward * 0.5))
+        m["corner_timber"] = "wide" if before else "narrow"
+        # its gasket stops where the board does, on the corner side: the narrow one's runs
+        # on over the wide one's end, under flange B
+        m["gasket_to"] = board_end
+        # a batten the L now covers would clash with it: the L takes its place
+        for other in battens:
+            ou = [q[0] for q in other["profile"]]
+            if other is not m and other in meshes and min(b, max(ou)) - max(a, min(ou)) > 0.5 and \
+                    abs(float(other["depth"]) - d0) < 0.5:
+                meshes.remove(other)
+        done += 1
+    return done
+
+
+def _gaskets(p, elev, meshes, board_back):
+    """A UV- and weather-resistant EPDM gasket on every vertical timber the panels touch
+    (battens, the corner L, jamb closers), 15 mm wider than the timber each side
+    (Rockpanel: aR1 >= 15 mm), 2 mm thick. It is drawn in the back 2 mm of the board, so
+    nothing moves and the cavity keeps its depth. A side that meets a corner keeps the
+    timber's end instead of lapping past it."""
+    out = []
+    for m in meshes:
+        if m.get("elevation") != elev["name"] or m["ifc_type"] not in ("batten", "closer"):
+            continue
+        us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+        if max(vs) - min(vs) <= max(us) - min(us):
+            continue                                      # horizontal: not a vertical timber
+        if m["ifc_type"] == "closer" and abs(float(m["depth"]) + float(m["thickness"]) - board_back) > 1.0:
+            continue                                      # not out to the boards
+        c = m.get("corner") or {}
+        lo, hi = min(us) - (0.0 if "k_l" in c else EPDM_LAP), max(us) + (0.0 if "k_r" in c else EPDM_LAP)
+        if "gasket_to" in m:                              # a corner timber: its corner side
+            to = m["gasket_to"]
+            lo, hi = (to, hi) if abs(to - min(us)) < abs(to - max(us)) else (lo, to)
+        g = _prism(_rect(lo, min(vs), hi, max(vs)), board_back, EPDM_T, elev["frame"], "gasket",
+                   "%s EPDM Gasket %d" % (elev["name"], len(out) + 1), elev["name"])
+        g["on"] = m["name"]                               # the timber it is fixed to
+        if c:
+            g["corner"] = dict(c)
+        if m.get("clip_v_at"):
+            g["clip_v_at"] = list(m["clip_v_at"])
+        out.append(g)
+    meshes.extend(out)
 
 
 def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
@@ -537,8 +618,8 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
     details = dict((tuple(r), d) for r, d in opening_details(elev, p))
     for i, (u0, u1, v0, v1) in enumerate(holes):
         d = details.get((u0, u1, v0, v1), {})
-        jamb = reveal_treatment(d.get("jamb", "mitre"), d.get("jamb_master", "face"), face, pull, board, p["panel_gap"])[1]
-        head_t = reveal_treatment(d.get("head", "mitre"), d.get("head_master", "face"), face, pull, board, p["panel_gap"])[1]
+        jamb = reveal_treatment(d.get("jamb", "mitre"), d.get("jamb_master", "face"), face, pull, board, p["panel_gap"], s["pgap"])[1]
+        head_t = reveal_treatment(d.get("head", "mitre"), d.get("head_master", "face"), face, pull, board, p["panel_gap"], s["pgap"])[1]
         for side, u in ((-1.0, u0), (1.0, u1)):
             # The closer sits in the wall side of the jamb and fills the cavity.
             a, b = (u - cw, u) if side < 0 else (u, u + cw)
