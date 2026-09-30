@@ -591,7 +591,7 @@ _json.dumps(_ex(_pl))`);
 const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
              'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
-             'plank_len', 'closer_w', 'board_w', 'board_h', 'kerf'];
+             'plank_len', 'closer_w', 'board_w', 'board_h', 'kerf', 'board_trim'];
 function val(id) { return document.getElementById(id).value; }
 function toggleValue(id) { const b = document.querySelector('#' + id + ' .turn-btn.active'); return b ? b.dataset.value : null; }
 function selectToggle(id, value) {
@@ -1026,54 +1026,74 @@ import ifc_generator`);
 }
 
 // ─── BOARDS AND WASTE ───
-// Every panel of the active chain packed onto stock boards (cladding_nesting.py), after
-// each finished rebuild and debounced like a typed field, never on a slider frame.
+// Every panel of every built chain is packed onto stock boards together
+// (cladding_nesting.py), so an offcut from one chain can feed another. The quick check
+// (16 strategies, a few ms) runs after each finished rebuild, debounced like a typed
+// field and never on a slider frame. Optimise boards runs the full search on demand; the
+// cutting plan always uses it.
 let _nestTimer = null, _nestSeq = 0;
 function scheduleNesting() {
     if (_nestTimer) clearTimeout(_nestTimer);
-    _nestTimer = setTimeout(runNesting, 300);
+    _nestTimer = setTimeout(() => runNesting(false), 300);
 }
 
-function chainRecords(chain, params) {
-    const names = chain.members.filter(m => m.result && m.result.ok).map(m => m.result.name);
-    return { names, area: (window._lastPreview.info || []).filter(i => names.includes(i.elevation))
-                            .reduce((a, i) => a + (i.clad_area || 0), 0) };
+function jobRecords() {
+    const chains = state.chains.filter(c => c.built && c.members.some(m => m.result && m.result.ok));
+    const names = chains.flatMap(c => c.members.filter(m => m.result && m.result.ok).map(m => m.result.name));
+    const area = (window._lastPreview.info || []).filter(i => names.includes(i.elevation)).reduce((a, i) => a + (i.clad_area || 0), 0);
+    return { names, area, title: chains.length === 1 ? chains[0].name : `All ${chains.length} chains` };
 }
 
-async function runNesting() {
+async function runNesting(deep) {
     const box = document.getElementById('waste-readout');
-    const e = state.elevations[state.active];
-    if (!pyReady || !window._lastPreview || !e || !e.chain.built || toggleValue('cladding-type') !== 'panel') {
+    if (!pyReady || !window._lastPreview || !state.chains.some(c => c.built) || toggleValue('cladding-type') !== 'panel') {
         box.style.display = 'none';
-        return;
+        window._lastPlan = null;
+        tintPanels();
+        return null;
     }
-    const seq = ++_nestSeq, { names, area } = chainRecords(e.chain);
+    const seq = ++_nestSeq, job = jobRecords();
     try {
-        pyodide.globals.set('_nest_json', JSON.stringify({ names, area }));
+        pyodide.globals.set('_nest_json', JSON.stringify({ names: job.names, area: job.area, deep: !!deep }));
         const out = await pyodide.runPythonAsync(`
 import json as _json, time as _time
 from cladding_nesting import chain_plan as _cp
 from cladding_constants import _parse as _prs
 _n = _json.loads(_nest_json)
 _t0 = _time.perf_counter()
-_plan = _cp(_o["geometry"], _prs(_p), _n["names"], _n["area"])
+_plan = _cp(_o["geometry"], _prs(_p), _n["names"], _n["area"], _n["deep"])
 _plan["ms"] = round((_time.perf_counter() - _t0) * 1000)
 _plan.pop("boards")
 _json.dumps(_plan)`);
-        if (seq !== _nestSeq) return;
+        if (seq !== _nestSeq) return null;
         const plan = JSON.parse(out);
+        plan.title = job.title;
         window._lastPlan = plan;
-        renderReadout(e.chain, plan);
+        renderReadout(plan);
+        return plan;
     } catch (err) {
         console.warn('packing failed', err);
         box.style.display = 'none';
+        return null;
     }
 }
 
-function renderReadout(chain, plan) {
+async function optimiseBoards() {
+    const btn = document.getElementById('wr-optimise');
+    btn.disabled = true; btn.textContent = 'Optimising…';
+    await new Promise(r => setTimeout(r, 30));          // let the label paint before Python blocks
+    const before = window._lastPlan;
+    const plan = await runNesting(true);
+    btn.disabled = false; btn.textContent = 'Optimise boards';
+    if (plan) setStatus(`Optimised: ${plan.n_boards} board${plan.n_boards === 1 ? '' : 's'}, ${(100 * plan.waste).toFixed(1)}% waste`
+        + (before && !before.deep && before.n_boards > plan.n_boards ? ` — ${before.n_boards - plan.n_boards} fewer than the quick check` : '')
+        + ` (${plan.strategies} strategies, ${(plan.ms / 1000).toFixed(1)} s)`, 'ready');
+}
+
+function renderReadout(plan) {
     const box = document.getElementById('waste-readout'), set = (id, v) => document.getElementById(id).textContent = v;
     box.style.display = '';
-    set('wr-title', `${chain.name} · panels`);
+    set('wr-title', `${plan.title || 'Panels'} · panels · ${plan.deep ? 'optimised' : 'quick check'}`);
     set('wr-area', `${plan.clad_area.toFixed(1)} m²`);
     set('wr-boards', `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
     set('wr-lower', `lower bound ${plan.lower_bound}`);
@@ -1083,8 +1103,17 @@ function renderReadout(chain, plan) {
     const notes = [];
     if (plan.oversize.length) notes.push(`${plan.oversize.length} panel(s) larger than the board`);
     if (plan.capped) notes.push(`only the first ${plan.n_pieces} pieces packed`);
+    if (plan.trim) notes.push(`${plan.trim} mm edge trim`);
     set('wr-note', notes.join(' · '));
-    box.title = `Packed by ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, ${plan.ms} ms`;
+    // Cut sizes that divide the board exactly, kerf and trim allowed for: where the design
+    // can move, these are the sizes that waste nothing.
+    const f = plan.friendly;
+    set('wr-sizes', f ? `Divides the board: ${f.across.join(' · ')} × ${f.along.join(' · ')}` : '');
+    document.getElementById('wr-sizes').title = 'Cut widths (across) and heights (along) that divide the board with nothing over, kerf and edge trim allowed for';
+    document.getElementById('wr-optimise').style.display = plan.deep ? 'none' : '';
+    box.title = `Packed by ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, `
+        + `${plan.strategies} strateg${plan.strategies === 1 ? 'y' : 'ies'}, ${plan.ms} ms`;
+    tintPanels();
 }
 
 async function downloadCuttingPlan() {
@@ -1092,13 +1121,12 @@ async function downloadCuttingPlan() {
     const params = getParams(); params.trim = true;
     if (!params.elevations.length || params.cladding_type !== 'panel') { alert('The cutting plan is for panel cladding: build a panel chain first.'); return; }
     const btn = document.getElementById('plan-btn');
-    busy(btn, true, 'Packing…');
+    busy(btn, true, 'Optimising boards…');
+    await new Promise(r => setTimeout(r, 30));
     try {
-        const chains = state.chains.filter(c => c.built).map(c => ({
-            name: c.name, names: c.members.filter(m => m.result && m.result.ok).map(m => m.result.name) }))
-            .filter(c => c.names.length);
+        const job = jobRecords();
         pyodide.globals.set('_params_json', JSON.stringify(params));
-        pyodide.globals.set('_chains_json', JSON.stringify(chains));
+        pyodide.globals.set('_job_json', JSON.stringify(job));
         const dxf = await pyodide.runPythonAsync(`
 import json as _json
 from cladding_preview import generate_preview as _gp
@@ -1106,10 +1134,8 @@ from cladding_constants import _parse as _prs
 from cladding_nesting import chain_plan as _cp, plan_dxf as _pd
 _p = _json.loads(_params_json)
 _o = _gp(_p)
-_area = {i["elevation"]: i.get("clad_area", 0) for i in _o["info"]}
-_pp = _prs(_p)
-_pd([(c["name"], _cp(_o["geometry"], _pp, c["names"], sum(_area.get(n, 0) for n in c["names"])))
-     for c in _json.loads(_chains_json)])`);
+_job = _json.loads(_job_json)
+_pd([(_job["title"], _cp(_o["geometry"], _prs(_p), _job["names"], _job["area"], True))])`);
         showReminder(new Blob([dxf], { type: 'application/dxf' }), 'cutting-plan.dxf');
     } catch (err) { alert('Cutting plan failed: ' + err.message); }
     finally { busy(btn, false); }

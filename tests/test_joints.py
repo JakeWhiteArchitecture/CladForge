@@ -134,3 +134,4 @@ def test_exports_nesting_and_names_use_the_actual_panels(elevation):
     # the DXF elevation draws one panel outline fewer
     count = lambda o: meshes_to_dxf_string(o["geometry"], params, o["info"]).count("CLADDING")  # noqa: E731
     assert count(out) < count(trimmed)
+    assert "1 horizontal joint(s) dissolved" in meshes_to_dxf_string(out["geometry"], params, out["info"])

@@ -22,6 +22,7 @@ function d2Editable(d) { return !!(d.kind && DIM_NAMES[d.kind] && !d.lock); }
 
 // Rebuild the labels after a preview or on entering 2D; clear them in 3D.
 function renderDims2D() {
+    tintPanels();
     const layer = document.getElementById('dim2d-layer');
     layer.innerHTML = '';
     D2.items = [];
@@ -156,6 +157,24 @@ function edgeLines(e, layer) {
     layer.appendChild(svg);
 }
 
+// ─── BOARD USE ───
+// Flat, each panel is tinted by how well the board it is cut from is used, from the last
+// packing: green 90% and over, amber 75–90%, red under that. The red ones are where the
+// design is costing boards. In 3D the panels keep their own colour.
+const BOARD_USE = [[0.9, 0x22c55e], [0.75, 0xf59e0b], [-1, 0xef4444]];
+function tintPanels() {
+    const plan = window._lastPlan, on = !!(in2D() && plan && plan.fills);
+    const key = document.getElementById('wr-key');
+    if (key) key.style.display = on ? '' : 'none';
+    if (typeof cladGroup === 'undefined' || !cladGroup) return;
+    for (const layer of cladGroup.children) for (const o of layer.children) {
+        if (!o.isMesh || !/ Panel R\d/.test(o.userData.name || '')) continue;
+        if (o.userData.baseColor === undefined) o.userData.baseColor = o.material.color.getHex();
+        const f = on ? plan.fills[o.userData.name] : undefined;
+        o.material.color.setHex(f === undefined ? o.userData.baseColor : BOARD_USE.find(c => f >= c[0])[1]);
+    }
+}
+
 // ─── PANEL JOINTS ───
 // Each horizontal joint between two panel rows, one segment per bay. Clicking one
 // dissolves it: the panels above and below in that bay become one. Clicking again puts
@@ -194,11 +213,12 @@ function toggleJoint(e, hj) {
     if (hj.dissolved) {
         setStatus(`Joint ${where} put back`, 'ready');
     } else {
-        const bw = parseFloat(document.getElementById('board_w').value) || 1250;
-        const bh = parseFloat(document.getElementById('board_h').value) || 2500;
+        const trim = 2 * (parseFloat(document.getElementById('board_trim').value) || 0);
+        const bw = (parseFloat(document.getElementById('board_w').value) || 1250) - trim;
+        const bh = (parseFloat(document.getElementById('board_h').value) || 2500) - trim;
         const [w, h] = hj.size;
         if (!((w <= bw + 0.5 && h <= bh + 0.5) || (w <= bh + 0.5 && h <= bw + 0.5))) {
-            setStatus(`Not dissolved: the panel would be ${Math.round(w)} × ${Math.round(h)} mm, larger than the ${Math.round(bw)} × ${Math.round(bh)} board either way round`, 'busy');
+            setStatus(`Not dissolved: the panel would be ${Math.round(w)} × ${Math.round(h)} mm, larger than the ${Math.round(bw)} × ${Math.round(bh)} board${trim ? ' left after edge trim' : ''} either way round`, 'busy');
             return false;
         }
         list.push([hj.row, hj.bay, hj.u0, hj.u1, hj.v]);

@@ -204,3 +204,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .waste-readout .wr-muted { color: var(--hint); font-size: 11px; }
 .waste-readout.over #wr-waste { color: #ef4444; }
 .waste-readout.over { border-color: #ef4444; }
+.waste-readout .wr-key span { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 3px 0 6px; vertical-align: -1px; }
+.waste-readout #wr-optimise { margin-left: 6px; padding: 1px 6px; font-size: 10px; }
+.waste-readout #wr-sizes, .waste-readout .wr-key { font-size: 10px; white-space: nowrap; }
+.waste-readout .wr-key span:first-child { margin-left: 0; }
