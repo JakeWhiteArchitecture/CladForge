@@ -6,7 +6,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 
 // Edge settings, per chain: offsets (mm) pulling the buildup back from its top, bottom and
 // free-end edges, the gap in every mitre, and how a window or door head is ventilated.
-const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1 };
+const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50 };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -63,7 +63,7 @@ function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' ·
 // The panel's edge fields show the active elevation's chain and write to all of it.
 function syncEdgeFields() {
     const e = state.elevations[state.active], ed = e ? e.chain.edges : EDGE_DEFAULTS;
-    for (const k of ['top', 'side', 'bottom', 'gap', 'air', 'pgap']) {
+    for (const k of ['top', 'side', 'bottom', 'gap', 'air', 'pgap', 'frame']) {
         const el = document.getElementById('edge-' + k);
         if (el && document.activeElement !== el) el.value = ed[k];
     }
@@ -78,7 +78,8 @@ function setEdge(e, key, value) {
     else {
         const v = parseFloat(value);
         if (!isFinite(v)) return false;
-        e.chain.edges[key] = Math.max(0, Math.min(100, v));
+        // the frame setback is behind the wall face, and negative where it stands forward
+        e.chain.edges[key] = key === 'frame' ? Math.max(-300, Math.min(300, v)) : Math.max(0, Math.min(100, v));
     }
     syncEdgeFields();
     return true;
@@ -524,6 +525,29 @@ async function runExtraction(e) {
     if (e._again) { e._again = false; return runExtraction(e); }
 }
 
+// How deep the picked wall is behind its face: a window or door counts as the frame of a
+// reveal only if its face lies within it (cladding_edges.opening_frames).
+function wallDepth(picks) {
+    const n = picks[0].normal, p0 = picks[0].point;
+    if (!p0) return 0;
+    const d = n[0] * p0[0] + n[1] * p0[1] + n[2] * p0[2];
+    let lo = 0;
+    for (const mesh of new Set(picks.map(q => q.mesh)))
+        for (const t of meshTriangles(mesh)) for (const q of t) lo = Math.min(lo, n[0] * q[0] + n[1] * q[1] + n[2] * q[2] - d);
+    return Math.min(1000, Math.round(-lo));
+}
+
+// A frame position typed on one opening (mm behind the wall face, negative forward), or
+// null to go back to the frame in the model or the chain's setting.
+function setOpeningFrame(e, key, value) {
+    e.openingDetails = e.openingDetails || {};
+    const cur = e.openingDetails[key] = Object.assign({}, e.openingDetails[key]);
+    if (value === null || value === undefined || value === '') delete cur.frame;
+    else cur.frame = Math.max(-300, Math.min(300, parseFloat(value)));
+    renderElevationList();
+    onNumeric();
+}
+
 async function extractOnce(e) {
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
@@ -535,7 +559,7 @@ async function extractOnce(e) {
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
     const payload = { name: e.name, faces: tris, outward: e.picks[0].normal, context,
                       seeds: e.picks.map(p => p.point).filter(Boolean),
-                      options: { penetrations: document.getElementById('penetrations').checked } };
+                      options: { penetrations: document.getElementById('penetrations').checked, wall_depth: wallDepth(e.picks) } };
     const json = JSON.stringify(payload);
     log(`${e.name}: extracting — ${tris.length} faces, ${context.length} context elements, `
         + `${nTris} triangles, ${dropped} dropped, payload ${Math.round(json.length / 1024)} kB`);
@@ -620,6 +644,7 @@ function elevationRecords() {
                                                    edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
                                                    head_vent: chain.edges.vent, head_air: chain.edges.air,
                                                    profile_gap: chain.edges.pgap === undefined ? 1 : chain.edges.pgap,
+                                                   frame_setback: chain.edges.frame === undefined ? 50 : chain.edges.frame,
                                                    opening_details: e.openingDetails || {} }));
         }
     }

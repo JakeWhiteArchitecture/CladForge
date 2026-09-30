@@ -26,6 +26,8 @@ from cladding_primitives import clip_bounds, openings
 EDGE_DEFAULTS = {"top": 10.0, "side": 0.0, "bottom": 10.0}
 MITRE_GAP = 10.0        # between two mitred boards, measured straight across the joint
 PROFILE_GAP = 1.0       # a board stops this far short of a corner profile's nose
+FRAME_SETBACK = 50.0    # a window or door frame's outer face, behind the wall face, when not found
+FRAME_REACH = 600.0     # with no wall depth known: how far behind the wall face a frame may be
 HEAD_AIR = 10.0         # vented at the back: air over the head lining, and its gap off the frame
 MAX_EDGE = 100.0
 TOL = 0.6
@@ -169,6 +171,50 @@ def opening_details(elev, p):
     return out
 
 
+def opening_frames(elev, holes, face):
+    """{rect: {"depth", "from", "name", "note"}}: where each opening's reveal linings run
+    back to, the outer face of its window or door frame, as a depth from the wall face
+    (out is positive), tight to it.
+
+      set      typed on the opening (opening_details[key]["frame"], mm behind the wall
+               face; negative is forward of it): always wins
+      model    the window or door the extractor found in the opening: an IfcWindow or
+               IfcDoor only, covering most of the opening, and its face within the
+               reveal, behind the cladding face and in front of the back of the wall
+      default  the chain's frame setback (elev["frame_setback"], 50 mm behind the wall
+               face by default), with a note where a frame was found but rejected"""
+    chosen = elev.get("opening_details") or {}
+    try:
+        default = -float(elev.get("frame_setback") if elev.get("frame_setback") is not None else FRAME_SETBACK)
+    except (TypeError, ValueError):
+        default = -FRAME_SETBACK
+    back = float(elev.get("wall_depth") or 0.0) or FRAME_REACH
+    out = {}
+    for rect in holes:
+        u0, u1, v0, v1 = rect
+        typed = (chosen.get(opening_key(rect)) or {}).get("frame")
+        if isinstance(typed, (int, float)) and not isinstance(typed, bool):
+            out[rect] = {"depth": -float(typed), "from": "set", "name": None, "note": None}
+            continue
+        best, area = None, (u1 - u0) * (v1 - v0)
+        for fr in elev.get("frames") or []:
+            a0, a1, b0, b1 = fr["rect"]
+            ov = max(0.0, min(u1, a1) - max(u0, a0)) * max(0.0, min(v1, b1) - max(v0, b0))
+            if ov >= 0.5 * area or ov >= 0.5 * max(1.0, (a1 - a0) * (b1 - b0)):
+                if best is None or ov > best[0]:
+                    best = (ov, fr)
+        note = None
+        if best:
+            f = float(best[1]["face"])
+            if -back - 1.0 <= f < face - 1.0:
+                out[rect] = {"depth": f, "from": "model", "name": best[1].get("name"), "note": None}
+                continue
+            note = "%s found %.0f mm %s the wall face, outside the reveal: the chain's frame position is used" % (
+                best[1].get("name") or "a window or door", abs(f), "behind" if f < 0 else "in front of")
+        out[rect] = {"depth": default, "from": "default", "name": None, "note": note}
+    return out
+
+
 def reveal_treatment(detail, master, face, pull, board, gap, pgap=0.0):
     """How the face board and the lining meet at a jamb or head: (w, lining).
 
@@ -185,7 +231,12 @@ def reveal_treatment(detail, master, face, pull, board, gap, pgap=0.0):
                the arris
       square   both stop square at the opening line (a placeholder)"""
     if detail == "mitre":
-        return (face - pull, -1.0), (-1.0, -pull)
+        # One cut on the bisector through the outer arris (the lining's opening face at the
+        # cladding face) and the inner corner (its back face at the board's back), each
+        # side pulled off it by half the mitre gap: the board's edge runs from -pull at its
+        # back to board - pull at its face; the lining's front end from board + pull (in
+        # from the cladding face) at its back to pull at its opening face.
+        return (board - face - pull, 1.0), (1.0, -(board + pull))
     if detail == "lap":
         return ((board, 0.0), (0.0, -(board + gap))) if master == "face" else ((-gap, 0.0), None)
     if detail == "profile":
@@ -242,8 +293,10 @@ def _split(ring, holes):
 
 def _ring_shifts(ring, holes, treatments, air):
     """(ring, shifts) with a shift per vertex. A vertex between two mitred edges takes
-    both (the corner of an opening); one between a mitred edge and a plain one is
-    doubled, one copy for each edge, so the end steps rather than slopes."""
+    both (the corner of an opening). One between a mitred edge and a plain one takes the
+    shift where the plain edge runs the way the shift moves it (it just gets longer or
+    shorter along itself); otherwise it is doubled, one copy for each edge, so the end
+    steps rather than slopes."""
     ring = _split([list(p) for p in ring], holes)
     n = len(ring)
     edge = [_opening_shift(ring[i], ring[(i + 1) % n], treatments, air) for i in range(n)]
@@ -256,8 +309,16 @@ def _ring_shifts(ring, holes, treatments, air):
             shifts.append(before if same else tuple(x + y for x, y in zip(before, after)))
             pts.append(ring[i])
         elif before or after:
-            pts += [ring[i], ring[i]]
-            shifts += [before or (0.0, 0.0, 0.0, 0.0), after or (0.0, 0.0, 0.0, 0.0)]
+            sh = before or after
+            plain = (ring[i - 1], ring[i]) if after else (ring[i], ring[(i + 1) % n])
+            along_u = abs(plain[1][1] - plain[0][1]) < TOL          # plain edge horizontal
+            along_v = abs(plain[1][0] - plain[0][0]) < TOL          # plain edge vertical
+            if (along_u and not (sh[2] or sh[3])) or (along_v and not (sh[0] or sh[1])):
+                pts.append(ring[i])
+                shifts.append(sh)
+            else:
+                pts += [ring[i], ring[i]]
+                shifts += [before or (0.0, 0.0, 0.0, 0.0), after or (0.0, 0.0, 0.0, 0.0)]
         else:
             pts.append(ring[i])
             shifts.append((0.0, 0.0, 0.0, 0.0))

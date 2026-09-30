@@ -473,6 +473,29 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (!asked || toAll !== 'lap,lap' || openingsNow.jambs.split(',').sort().join() !== 'lap,profile'
         || openingsNow.profiles.split(',').length !== 2 || /[1-9]/.test(openingsNow.others))
         throw new Error('opening corner details did not apply as asked: ' + JSON.stringify({ asked, toAll, openingsNow }));
+    // Each opening's box says where its linings run back to (no window in the sample model:
+    // the chain's setback, 50 mm behind the wall face); a value typed there wins, and Clear
+    // goes back. The linings follow.
+    const reach = () => page.evaluate(() => {
+        const m = window._lastPreview.geometry.find(g => g.ifc_type === 'reveal' && / Reveal 1L$/.test(g.name) && g.elevation === 'Elevation A');
+        return m ? Math.round(Math.max(...m.profile.map(q => q[0]))) : null;
+    });
+    const face0 = await page.evaluate(() => Math.round(window._lastPreview.info[0].total_depth));
+    const reachDefault = await reach();
+    await (await jambBadges())[0].click();
+    const frameText = await page.evaluate(() => document.querySelector('#dim2d-editor .d2-row').textContent.trim());
+    await page.fill('#o2-frame', '20');
+    await page.press('#o2-frame', 'Enter');
+    await page.waitForTimeout(1800);
+    const reachSet = await reach();
+    await (await jambBadges())[0].click();
+    await page.click('#o2-frame-clear');
+    await page.waitForTimeout(1800);
+    const reachBack = await reach();
+    console.log('opening frame:', JSON.stringify({ frameText, face0, reachDefault, reachSet, reachBack }));
+    if (!/50 mm behind the wall face · Chain \d+'s frame setback/.test(frameText) || reachDefault !== face0 + 50
+        || reachSet !== face0 + 20 || reachBack !== reachDefault)
+        throw new Error('opening frame position wrong: ' + JSON.stringify({ frameText, face0, reachDefault, reachSet, reachBack }));
     // "Every window and door in this chain" reaches every member of the chain and no other chain.
     const scopeOnly = await page.evaluate(() => {
         const saved = window._lastPreview;

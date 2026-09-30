@@ -81,9 +81,14 @@ function cornerBadges(e, layer) {
         D2.items.push(item);
     });
     // Each window and door: a badge on its left jamb (both jambs share it) and one on its head.
+    const info = (window._lastPreview.info || []).find(i => i.elevation === e.result.name) || {};
     for (const o of openingsOf(e)) {
         const [u0, u1, v0, v1] = o.rect;
-        for (const [part, u, v] of [['jamb', u0, (v0 + v1) / 2], ['head', (u0 + u1) / 2, v1]]) {
+        // a window or door can cross the clad top or bottom: its badges sit on what is clad
+        const lo = Math.max(v0, info.base_level || 0), hi = Math.min(v1, info.clad_top === undefined ? v1 : info.clad_top);
+        const parts = [['jamb', u0, (lo + hi) / 2]];
+        if (info.clad_top === undefined || v1 < info.clad_top - 0.5) parts.push(['head', (u0 + u1) / 2, v1]);
+        for (const [part, u, v] of parts) {
             const el = document.createElement('button');
             el.className = 'dim2d corner-badge opening-badge';
             el.dataset.key = 'opening:' + o.key + ':' + part;
@@ -282,7 +287,28 @@ function detailBlock(e, item, box) {
         document.getElementById('o2-yes').onclick = () => { setOpeningDetail(e, o.key, kind, pending.detail, pending.master, 'chain'); closeDimEditor(); };
         document.getElementById('o2-no').onclick = () => { setOpeningDetail(e, o.key, kind, pending.detail, pending.master, 'one'); closeDimEditor(); };
     };
-    return `<div class="d2-row">${kind === 'jamb' ? 'Both jambs' : 'Head'} <select id="o2-detail">${cornerOptions(o[kind], toggleValue('cladding-type') === 'panel', false)}</select></div>
+    // Where this opening's linings run back to: the frame in the model, a position typed
+    // here, or the chain's setting (cladding_edges.opening_frames).
+    const fd = o.frame_depth === undefined ? null : Math.round(o.frame_depth);
+    const where = fd === null ? '' : fd <= 0 ? `${-fd} mm behind the wall face` : `${fd} mm forward of the wall face`;
+    const source = { model: `frame in the model${o.frame_name ? ' (' + o.frame_name + ')' : ''}`, set: 'set here',
+                     default: `${e.chain.name}'s frame setback` }[o.frame_from] || '';
+    const bindDetail = item.bind;
+    item.bind = () => {
+        bindDetail();
+        const input = document.getElementById('o2-frame');
+        input.onkeydown = ev => {
+            ev.stopPropagation();
+            if (ev.key === 'Enter') { ev.preventDefault(); if (input.value !== '') { setOpeningFrame(e, o.key, input.value); closeDimEditor(); } }
+            else if (ev.key === 'Escape') { ev.preventDefault(); closeDimEditor(); }
+        };
+        const clear = document.getElementById('o2-frame-clear');
+        if (clear) clear.onclick = () => { setOpeningFrame(e, o.key, null); closeDimEditor(); };
+    };
+    const frameRow = `<div class="d2-row" title="${o.frame_note || ''}">Frame ${where} · ${source}</div>
+        <div class="d2-row">Set <input id="o2-frame" type="number" step="5" placeholder="mm behind" style="width:70px">
+            ${o.frame_from === 'set' ? '<button class="mini" id="o2-frame-clear">Clear</button>' : ''}</div>`;
+    return frameRow + `<div class="d2-row">${kind === 'jamb' ? 'Both jambs' : 'Head'} <select id="o2-detail">${cornerOptions(o[kind], toggleValue('cladding-type') === 'panel', false)}</select></div>
         <div class="d2-scope turn-toggle" id="o2-master" style="${o[kind] === 'lap' ? '' : 'display:none'}">
             <button class="turn-btn ${o[kind + '_master'] === 'face' ? 'active' : ''}" data-master="face">Face board over</button>
             <button class="turn-btn ${o[kind + '_master'] === 'reveal' ? 'active' : ''}" data-master="reveal">Lining over</button></div>
