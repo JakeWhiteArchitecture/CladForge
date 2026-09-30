@@ -136,6 +136,11 @@ A demo model is in `tests/sample_house.ifc` (regenerate with
    and elevation, the wall surfaces they are attached to, and every setting. **Load
    state** puts it all back, ready to carry on. The file loads without the IFC; open the
    IFC first to see the host model, since opening a model starts afresh.
+12. To get at a face behind something, press **H** (or **Hide elements**, over the
+   model) and click whatever is in the way: it hides, and clicks pass through to what
+   is behind. The row under the model hides a whole type at once (every slab, say),
+   lists what is hidden (click one to bring it back) and has **Show all**. **H** again
+   returns to picking. Hiding is only for the view: extraction still sees every element.
 
 ## Decisions on open items
 
@@ -145,6 +150,7 @@ default. Each is one place in the code, so any of them can be flipped.
 | Item | Decision | Where |
 |---|---|---|
 | Region definition [ASSUMED] | Yes. A region is coplanar; openings are interior holes and never split a region. Separate patches on one plane merge into one elevation (one frame, one coursing, boards clipped to the union). | `fabric_extract._union_faces` |
+| Hiding elements | A third viewer mode beside *Pick faces* and *Orbit only*, toggled by **H**. A click hides the element under it; raycasts skip hidden meshes, so the next click reaches what was behind. Types can be hidden in one go. Hiding changes nothing but the view: context for extraction, openings and frames still come from every element, and a new model starts with nothing hidden. | `viewer.hideElement`, `app.renderHidden` |
 | Selection mode [OPEN] | Both. One click grows the connected coplanar patch (SunForm's flood fill), and further clicks merge more patches into the same elevation. Each click's position is kept as a seed: if the cuts leave the region in pieces, only the pieces a seed falls in are clad, so a slab or roof crossing a face does not carry the cladding past it. A face that is already clad is not a selection any more — clicking it opens that chain's setting-out over the view instead. | `viewer.coplanarFaces`, `app.onViewportClick` |
 | Openings source [OPEN] | Mesh voids. web-ifc punches `IfcRelVoidsElement` openings into the wall mesh, so they arrive free as holes. A window or door is an opening wherever it sits: an interior hole, a notch where a door breaks the outline at the foot, or a gap open at top and bottom where one runs the full height of the face and splits it. They are found on the face as picked, before the chain's top and bottom levels clip it, so one that crosses the clad top or bottom keeps its jambs (closed, lined, mitred, never taken for a free end); its closers and jamb linings stop at the clad band, and it has a head lining only if its head is within the cladding. Penetrations (anything else crossing the face plane: pipes, beams, windows if the void was not punched) are sectioned and subtracted as convex-hull holes. Switch off with the *Subtract penetrations* checkbox. | `fabric_extract.extract_elevation` |
 | Splash zone at the base [ASSUMED] | The synthetic "Elevation base" line is an assumption, not a detected intersection, so the wizard asks: **at the foot of the wall** (the default — the boards run all the way down) or **above a splash zone**. Every detected slab or roof keeps its own splash zone either way, and the base line stays on the elevation card to tick back on. | `cladding_primitives.base_level`, `wizard.wizBuild` |

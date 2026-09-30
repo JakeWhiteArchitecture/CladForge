@@ -34,9 +34,16 @@
             <div class="section">
                 <h2>2 · Elevations</h2>
                 <div id="pick-toggle" class="turn-toggle">
-                    <button class="turn-btn active" data-value="pick" onclick="setPickMode(true)">Pick faces</button>
-                    <button class="turn-btn" data-value="orbit" onclick="setPickMode(false)">Orbit only</button>
+                    <button class="turn-btn active" data-value="pick" onclick="setPickMode('pick')">Pick faces</button>
+                    <button class="turn-btn" data-value="hide" onclick="setPickMode('hide')" title="Click an element to hide it (H)">Hide elements</button>
+                    <button class="turn-btn" data-value="orbit" onclick="setPickMode('orbit')">Orbit only</button>
                 </div>
+                <div class="row hide-row">
+                    <span class="hint" id="hidden-count">None hidden</span>
+                    <select id="hide-type" onchange="onHideType(this)"><option value="">Hide all of a type…</option></select>
+                    <button class="btn btn-secondary btn-sm" id="show-all" onclick="onShowAll()" disabled>Show all</button>
+                </div>
+                <div id="hidden-list" class="hidden-list"></div>
                 <p class="hint">Click a wall face to add its coplanar patch to the active elevation; click again to remove it. Click a face round a corner and it becomes the next elevation in the chain, with the coursing carried round. Faces that don't meet the chain start a new one. Openings punched by the importer become holes.</p>
                 <p class="hint">Stuck or misbehaving? Run <b>cladforge()</b> in the browser console for the engine state and a log of every extraction.</p>
                 <p class="hint">Picking generates nothing on its own. When the chain is complete, press <b>Enter</b> or use <b>Make chain</b> at the top right of the view to choose the cladding and build it. After that the whole panel edits live.</p>
@@ -198,7 +205,7 @@
     </div>
 
     <div class="viewport" id="viewport">
-        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall face to pick · E: 2D elevation</div>
+        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall face to pick · H: hide elements · E: 2D elevation</div>
         <div class="legend">
             <label><input type="checkbox" checked onchange="setLayerVisible('sheathing', this.checked)"><i style="background:#d9c9a3"></i> Sheathing</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('insulation', this.checked)"><i style="background:#e8d86a"></i> Insulation</label>

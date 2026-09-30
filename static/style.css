@@ -208,3 +208,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .waste-readout #wr-optimise { margin-left: 6px; padding: 1px 6px; font-size: 10px; }
 .waste-readout #wr-sizes, .waste-readout .wr-key { font-size: 10px; white-space: nowrap; }
 .waste-readout .wr-key span:first-child { margin-left: 0; }
+
+/* Hiding elements to get round the model */
+.hide-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.hide-row select { flex: 1; min-width: 0; font-size: 11px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 3px; }
+.hide-row .btn { flex: 0 0 auto; width: auto; padding: 4px 10px; }
+.hidden-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
