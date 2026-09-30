@@ -473,6 +473,29 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (!asked || toAll !== 'lap,lap' || openingsNow.jambs.split(',').sort().join() !== 'lap,profile'
         || openingsNow.profiles.split(',').length !== 2 || /[1-9]/.test(openingsNow.others))
         throw new Error('opening corner details did not apply as asked: ' + JSON.stringify({ asked, toAll, openingsNow }));
+    // Each opening's box says where its linings run back to (no window in the sample model:
+    // the chain's setback, 50 mm behind the wall face); a value typed there wins, and Clear
+    // goes back. The linings follow.
+    const reach = () => page.evaluate(() => {
+        const m = window._lastPreview.geometry.find(g => g.ifc_type === 'reveal' && / Reveal 1L$/.test(g.name) && g.elevation === 'Elevation A');
+        return m ? Math.round(Math.max(...m.profile.map(q => q[0]))) : null;
+    });
+    const face0 = await page.evaluate(() => Math.round(window._lastPreview.info[0].total_depth));
+    const reachDefault = await reach();
+    await (await jambBadges())[0].click();
+    const frameText = await page.evaluate(() => document.querySelector('#dim2d-editor .d2-row').textContent.trim());
+    await page.fill('#o2-frame', '20');
+    await page.press('#o2-frame', 'Enter');
+    await page.waitForTimeout(1800);
+    const reachSet = await reach();
+    await (await jambBadges())[0].click();
+    await page.click('#o2-frame-clear');
+    await page.waitForTimeout(1800);
+    const reachBack = await reach();
+    console.log('opening frame:', JSON.stringify({ frameText, face0, reachDefault, reachSet, reachBack }));
+    if (!/50 mm behind the wall face · Chain \d+'s frame setback/.test(frameText) || reachDefault !== face0 + 50
+        || reachSet !== face0 + 20 || reachBack !== reachDefault)
+        throw new Error('opening frame position wrong: ' + JSON.stringify({ frameText, face0, reachDefault, reachSet, reachBack }));
     // "Every window and door in this chain" reaches every member of the chain and no other chain.
     const scopeOnly = await page.evaluate(() => {
         const saved = window._lastPreview;
@@ -568,13 +591,31 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('joints dropped:', JSON.stringify(pruned));
     if (pruned.kept !== 2 || pruned.left !== 0 || !/^2 dissolved joints dropped/.test(pruned.status))
         throw new Error('joints under a changed grid were not dropped and reported: ' + JSON.stringify(pruned));
-    await page.evaluate(async () => { const e = d2Elev(view2d.name); e.panelRows = null; e.panelJoints = null; await updatePreview(); });
+    await page.evaluate(async () => { window._smokePlan = window._lastPlan; const e = d2Elev(view2d.name); e.panelRows = null; e.panelJoints = null; await updatePreview(); });
+    // Flat, every panel is tinted by how well its board is used; back in 3D they are not.
+    await page.waitForFunction(() => window._lastPlan && window._lastPlan !== window._smokePlan
+                                     && document.getElementById('wr-key').style.display !== 'none', null, { timeout: 20000 });
+    const tint = await page.evaluate(() => {
+        const panels = cladGroup.children.flatMap(l => l.children).filter(o => o.isMesh && / Panel R\d/.test(o.userData.name || '') && o.visible);
+        const hex = panels.map(o => o.material.color.getHex());
+        const bands = [0x22c55e, 0xf59e0b, 0xef4444];
+        const right = panels.filter(o => { const f = window._lastPlan.fills[o.userData.name];
+            return f === undefined || o.material.color.getHex() === (f >= 0.9 ? bands[0] : f >= 0.75 ? bands[1] : bands[2]); }).length;
+        const oversize = panels.filter(o => window._lastPlan.oversize.includes(o.userData.name)).length;
+        return { panels: panels.length, tinted: hex.filter(h => bands.includes(h)).length, right, oversize };
+    });
+    console.log('board use tint:', JSON.stringify(tint));
+    if (!tint.panels || tint.tinted !== tint.panels - tint.oversize || tint.right !== tint.panels) throw new Error('panels not tinted by board use: ' + JSON.stringify(tint));
     await page.keyboard.press('Escape');
     await page.waitForTimeout(1200);
     const back = await page.evaluate(() => ({ ortho: !!activeCamera().isOrthographicCamera, rotate: controls.enableRotate,
         pose: [camera.position.toArray(), controls.target.toArray()].map(v => v.map(Math.round).join(',')).join(' → '),
         opacity: modelGroup.children[0].material.opacity }));
+    back.tinted = await page.evaluate(() => cladGroup.children.flatMap(l => l.children)
+        .filter(o => o.isMesh && / Panel R\d/.test(o.userData.name || '') && [0x22c55e, 0xf59e0b, 0xef4444].includes(o.material.color.getHex())).length);
+    back.key = await page.evaluate(() => document.getElementById('wr-key').style.display);
     console.log('back to 3D:', JSON.stringify(back), '| was', pose3d);
+    if (back.tinted || back.key !== 'none') throw new Error('panels still tinted in 3D: ' + JSON.stringify(back));
     if (back.ortho || !back.rotate || back.pose !== pose3d)
         throw new Error('3D pose not restored: ' + JSON.stringify(back) + ' vs ' + pose3d);
 
@@ -587,12 +628,11 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         const real = { text: box.innerText.replace(/\n/g, ' | '), waste: +(100 * plan.waste).toFixed(1), over: box.classList.contains('over'),
                        colour: red(), boards: plan.n_boards, lower: plan.lower_bound, pieces: plan.n_pieces, ms: plan.ms };
         // the colour follows the 5% line either way
-        const chain = state.elevations[0].chain;
-        renderReadout(chain, Object.assign({}, plan, { waste: 0.04 }));
+        renderReadout(Object.assign({}, plan, { waste: 0.04 }));
         const at4 = { over: box.classList.contains('over'), colour: red() };
-        renderReadout(chain, Object.assign({}, plan, { waste: 0.06 }));
+        renderReadout(Object.assign({}, plan, { waste: 0.06 }));
         const at6 = { over: box.classList.contains('over'), colour: red() };
-        renderReadout(chain, plan);
+        renderReadout(plan);
         return { real, at4, at6 };
     });
     console.log('waste readout:', JSON.stringify(readout));
@@ -600,6 +640,36 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || readout.at6.colour !== 'rgb(239, 68, 68)' || readout.at4.colour === readout.at6.colour
         || readout.real.over !== (readout.real.waste > 5) || readout.real.ms > 1000)
         throw new Error('waste readout wrong: ' + JSON.stringify(readout));
+    // The whole job is packed together (every built chain), and Optimise boards runs the
+    // full search: never more boards than the quick check, and the readout says which it is.
+    const optimised = await page.evaluate(async () => {
+        const quick = window._lastPlan, builtNames = state.chains.filter(c => c.built)
+            .flatMap(c => c.members.filter(m => m.result && m.result.ok).map(m => m.result.name));
+        const pieces = window._lastPreview.geometry.filter(m => m.ifc_type === 'panel' && builtNames.includes(m.elevation)).length;
+        await optimiseBoards();
+        const deep = window._lastPlan;
+        return { quick: [quick.n_boards, quick.strategies, quick.deep], deep: [deep.n_boards, deep.strategies, deep.deep],
+                 pooled: quick.n_pieces === pieces, chains: state.chains.filter(c => c.built).length, ms: deep.ms,
+                 title: document.getElementById('wr-title').textContent, sizes: document.getElementById('wr-sizes').textContent,
+                 button: getComputedStyle(document.getElementById('wr-optimise')).display, status: document.getElementById('status-chip').textContent };
+    });
+    console.log('optimise boards:', JSON.stringify(optimised));
+    if (!optimised.pooled || optimised.quick[1] !== 16 || optimised.quick[2] || !optimised.deep[2] || optimised.deep[0] > optimised.quick[0]
+        || !/optimised$/.test(optimised.title) || !/^Divides the board: 1250 · 623 · 414 × 2500 · 1248/.test(optimised.sizes)
+        || optimised.button !== 'none' || !/^Optimised: /.test(optimised.status) || optimised.ms > 15000)
+        throw new Error('Optimise boards wrong: ' + JSON.stringify(optimised));
+    // Edge trim comes off the board before packing: never fewer boards, and the readout says so.
+    const trimmed = await page.evaluate(async () => {
+        const before = window._lastPlan.n_boards;
+        document.getElementById('board_trim').value = 10; await updatePreview();
+        await new Promise(r => setTimeout(r, 900));
+        const plan = window._lastPlan, note = document.getElementById('wr-note').textContent;
+        document.getElementById('board_trim').value = 0; await updatePreview();
+        await new Promise(r => setTimeout(r, 900));
+        return { before, after: plan.n_boards, trim: plan.trim, note };
+    });
+    console.log('edge trim:', JSON.stringify(trimmed));
+    if (trimmed.trim !== 10 || !/10 mm edge trim/.test(trimmed.note)) throw new Error('edge trim not applied: ' + JSON.stringify(trimmed));
     // A board as big as two panels side by side packs them two to a board.
     const bigger = await page.evaluate(async () => {
         document.getElementById('board_w').value = 2500; await updatePreview();
@@ -738,6 +808,11 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         const out = { detail: cornerDetailInForce(c),
                       meshes: window._lastPreview.geometry.filter(m => m.ifc_type === 'corner_profile').map(m => m.name),
                       badges: Array.from(document.querySelectorAll('.corner-badge:not(.opening-badge)')).map(b => b.textContent),
+                      // the battens there meet in a solid L of timber, one twice as wide
+                      timbers: window._lastPreview.geometry.filter(m => m.corner_timber).map(m => m.corner_timber).sort().join(','),
+                      flanges: (window._lastPreview.geometry.find(m => m.ifc_type === 'corner_profile') || {}).profile_info,
+                      gaskets: window._lastPreview.geometry.filter(m => m.ifc_type === 'gasket').length,
+                      pgap: document.getElementById('edge-pgap').value,
                       reentrantOffered: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(-1), true)),
                       externalOffered: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true)) };
         toggle2D();
@@ -747,7 +822,9 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     });
     console.log('corner profile:', JSON.stringify(profiled));
     if (profiled.detail !== 'profile' || profiled.meshes.length !== 1 || !profiled.badges.includes('P')
-        || profiled.reentrantOffered || !profiled.externalOffered)
+        || profiled.reentrantOffered || !profiled.externalOffered || !/narrow/.test(profiled.timbers) || !/wide/.test(profiled.timbers)
+        || !profiled.flanges || profiled.flanges.flange_a !== 35 || profiled.flanges.flange_b !== 35
+        || !(profiled.gaskets > 0) || profiled.pgap !== '1')
         throw new Error('corner profile not placed or offered wrongly: ' + JSON.stringify(profiled));
     await page.waitForTimeout(1200);
     await page.evaluate(async () => { setActive(4); deleteElevation(); await new Promise(r => setTimeout(r, 1500)); });
@@ -936,6 +1013,53 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('Master and Profile disabled for planks:', JSON.stringify(plankCorners));
     if (!plankCorners.lap || !plankCorners.profile || !plankCorners.options || plankCorners.active !== 'mitre')
         throw new Error('Master or Profile offered for planks: ' + JSON.stringify(plankCorners));
+
+    // Save state: every chain, its surfaces and the settings to XML. Change things, load the
+    // file back, and the cladding is exactly what it was, from the surfaces in the file.
+    const snapshotOf = () => page.evaluate(() => ({
+        geometry: JSON.stringify(window._lastPreview.geometry.map(m => [m.name, m.profile, m.frame.origin])),
+        panel_w: document.getElementById('panel_w').value, type: toggleValue('cladding-type'),
+        elevations: state.elevations.map(e => `${e.name}@${e.chain.name}${e.chain.built ? '+' : ''}`).join(','),
+        offsets: state.elevations.map(e => e.offset).join(',') }));
+    const savedLook = await snapshotOf();
+    const [stateFile] = await Promise.all([page.waitForEvent('download'), page.click('#save-state')]);
+    const statePath = path.join(__dirname, 'smoke_out.state.xml');
+    await stateFile.saveAs(statePath);
+    const stateText = fs.readFileSync(statePath, 'utf8');
+    await page.evaluate(async () => {
+        document.getElementById('panel_w').value = 900;
+        selectToggle('cladding-type', 'panel'); onTypeChange();
+        state.elevations.forEach(e => { e.offset = 321; });
+        await updatePreview();
+    });
+    const changedLook = await snapshotOf();
+    await page.setInputFiles('#state-file', statePath);
+    await page.waitForFunction(() => /^Loaded /.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
+    const loadedLook = await snapshotOf();
+    const loaded = await page.evaluate(() => ({ status: document.getElementById('status-chip').textContent,
+        restored: state.elevations.every(e => e.restored && !e.picks.length && e.savedPicks.length && e.result.ok) }));
+    // A file that is not a state is refused with a reason, and leaves the session alone.
+    await page.setInputFiles('#state-file', { name: 'drawing.xml', mimeType: 'application/xml', buffer: Buffer.from('<svg/>') });
+    await page.waitForFunction(() => /^Not loaded/.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
+    const refusedState = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    // With no host model open the surfaces still load, onto the offset they were saved with.
+    const noModel = await page.evaluate(async xml => {
+        const meshes = allMeshes, offset = modelOffset.slice();
+        allMeshes = []; modelOffset = [0, 0, 0];
+        const ok = await loadState(xml, 'no-model.xml');
+        const back = modelOffset.join(',') === offset.join(',');
+        allMeshes = meshes;
+        return { ok, back, panels: window._lastPreview.geometry.length };
+    }, stateText);
+    const sameAgain = (await snapshotOf()).geometry === savedLook.geometry;
+    console.log('save state:', stateFile.suggestedFilename(), stateText.length, 'bytes |', loaded.status, '|', refusedState,
+                '| no model:', JSON.stringify(noModel), '| elevations', savedLook.elevations, '→', loadedLook.elevations);
+    if (!/^<\?xml[^>]*>\s*<CladForgeState format="cladforge-state" version="1">/.test(stateText) || !stateText.includes('<surface t="object">')
+        || changedLook.geometry === savedLook.geometry || loadedLook.geometry !== savedLook.geometry
+        || loadedLook.panel_w !== savedLook.panel_w || loadedLook.type !== savedLook.type
+        || loadedLook.elevations !== savedLook.elevations || loadedLook.offsets !== savedLook.offsets
+        || !loaded.restored || !/Not loaded: not a CladForge state file/.test(refusedState) || !noModel.ok || !noModel.back || !sameAgain)
+        throw new Error('save and load state did not round-trip: ' + JSON.stringify({ savedLook: savedLook.elevations, loadedLook, loaded, refusedState, noModel, sameAgain }));
 
     // The server importer, the fallback for models web-ifc cannot build.
     await page.evaluate(() => loadModel(state.file, 'server'));

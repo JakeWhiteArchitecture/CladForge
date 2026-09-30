@@ -40,6 +40,7 @@ _IFC_TYPE_MAP = {
     "closer":         ("IfcMember",   "USERDEFINED", "Cavity closer"),
     "reveal":         ("IfcCovering", "CLADDING",    "Reveal lining"),
     "corner_profile": ("IfcMember",   "USERDEFINED", "Corner profile"),
+    "gasket":         ("IfcCovering", "MEMBRANE",    "EPDM gasket"),
 }
 _MATERIALS = {
     "batten": ("Timber (softwood) batten", "wood"), "counter_batten": ("Timber (softwood) batten", "wood"),
@@ -47,6 +48,7 @@ _MATERIALS = {
     "insulation": ("External insulation", "insulation"), "panel": ("Cladding panel", "cladding"),
     "plank": ("Cladding plank", "cladding"), "closer": ("Timber (solid) cavity closer", "wood"),
     "reveal": ("Reveal lining", "cladding"), "corner_profile": ("Aluminium corner profile", "aluminium"),
+    "gasket": ("EPDM foam gasket", "rubber"),
 }
 
 

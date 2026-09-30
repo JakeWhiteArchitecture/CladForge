@@ -3,10 +3,10 @@
 An aluminium profile for external corners of panel cladding. In plan section it is a
 hollow square nose at the outer corner, D × D with 1.1 mm walls and a small outer
 radius, whose outside faces are flush with the two panel faces, and two flanges lying
-in the plane of the back of the panels, on the batten face: flange A (35 mm) behind the
-panel before the corner in the run, flange B (10 mm) behind the one after it. Fixed
-handing. D is the panel thickness, and the panels butt tight to the nose, each stopping
-D short of the outer corner line.
+in the plane of the back of the panels, on the batten face: flange A behind the panel
+before the corner in the run, flange B behind the one after it, both 35 mm. D is the
+panel thickness, and each panel stops D plus the chain's profile gap (1 mm by default)
+short of the outer corner line.
 
 The profile is a prism in the general frame (cladding_constants.frame_to_world): its
 section lies in plan and it is extruded along world Z over the clad height of the
@@ -25,7 +25,7 @@ from cladding_constants import _prism, frame_to_world
 
 PROFILE_NAME = "Outer corner profile (Rockpanel Profile D type)"
 WALL = 1.1                  # mm, aluminium
-FLANGE_A, FLANGE_B = 35.0, 10.0
+FLANGE_A, FLANGE_B = 35.0, 35.0      # both legs the long one
 OUTER_RADIUS = 1.0          # mm, the nose's outer arris
 PANEL_SIZES = (6.0, 8.0, 10.0)
 RIGHT_ANGLE_K = 0.05        # |k - 1| within this is a right-angled external corner

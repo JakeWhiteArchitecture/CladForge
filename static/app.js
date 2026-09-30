@@ -6,7 +6,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 
 // Edge settings, per chain: offsets (mm) pulling the buildup back from its top, bottom and
 // free-end edges, the gap in every mitre, and how a window or door head is ventilated.
-const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10 };
+const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50 };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -22,7 +22,10 @@ function newChain() {
 
 function newElevation(chain) {
     const n = state.elevations.length;
-    const name = 'Elevation ' + String.fromCharCode(65 + (n % 26)) + (n >= 26 ? Math.floor(n / 26) : '');
+    const label = k => 'Elevation ' + String.fromCharCode(65 + (k % 26)) + (k >= 26 ? Math.floor(k / 26) : '');
+    let k = n;           // the next free name: a loaded state or a deletion can leave gaps
+    while (state.elevations.some(m => m.name === label(k))) k++;
+    const name = label(k);
     const e = { name, picks: [], result: null, manual: [], disabled: {},
                 storey: null, highlights: [], chain: chain || newChain(), start: 0, rev: false, link: null,
                 offset: 0,
@@ -60,7 +63,7 @@ function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' ·
 // The panel's edge fields show the active elevation's chain and write to all of it.
 function syncEdgeFields() {
     const e = state.elevations[state.active], ed = e ? e.chain.edges : EDGE_DEFAULTS;
-    for (const k of ['top', 'side', 'bottom', 'gap', 'air']) {
+    for (const k of ['top', 'side', 'bottom', 'gap', 'air', 'pgap', 'frame']) {
         const el = document.getElementById('edge-' + k);
         if (el && document.activeElement !== el) el.value = ed[k];
     }
@@ -75,7 +78,8 @@ function setEdge(e, key, value) {
     else {
         const v = parseFloat(value);
         if (!isFinite(v)) return false;
-        e.chain.edges[key] = Math.max(0, Math.min(100, v));
+        // the frame setback is behind the wall face, and negative where it stands forward
+        e.chain.edges[key] = key === 'frame' ? Math.max(-300, Math.min(300, v)) : Math.max(0, Math.min(100, v));
     }
     syncEdgeFields();
     return true;
@@ -480,6 +484,10 @@ function onViewportClick(event) {
     // Coplanar with an elevation anywhere: merge into it. Otherwise start a new elevation
     // in the active chain; after extraction it links at a corner or moves to its own chain.
     if (!samePlane(hit, e)) e = owner || newElevation(e.chain);
+    if (e.restored) {
+        setStatus(`${e.name} was loaded from a saved state, so faces cannot be added to it: delete it and pick its faces again to change its surface`, 'busy');
+        return;
+    }
     const existing = e.picks.findIndex(p => p.mesh === hit.mesh && p.faces.includes(hit.faceIndex));
     if (existing >= 0) e.picks.splice(existing, 1);
     else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal), point: toIfc(hit.point) });
@@ -490,6 +498,7 @@ function onViewportClick(event) {
 }
 
 async function runExtraction(e) {
+    if (e.restored && !e.picks.length) return;       // loaded from a saved state: its surface stays
     if (!e.picks.length) { e.result = null; renderElevationList(); updatePreview(); return; }
     if (!pyReady) {   // engine loading or rebuilding: queue it, initPyodide picks it up
         e.pending = true;
@@ -516,6 +525,29 @@ async function runExtraction(e) {
     if (e._again) { e._again = false; return runExtraction(e); }
 }
 
+// How deep the picked wall is behind its face: a window or door counts as the frame of a
+// reveal only if its face lies within it (cladding_edges.opening_frames).
+function wallDepth(picks) {
+    const n = picks[0].normal, p0 = picks[0].point;
+    if (!p0) return 0;
+    const d = n[0] * p0[0] + n[1] * p0[1] + n[2] * p0[2];
+    let lo = 0;
+    for (const mesh of new Set(picks.map(q => q.mesh)))
+        for (const t of meshTriangles(mesh)) for (const q of t) lo = Math.min(lo, n[0] * q[0] + n[1] * q[1] + n[2] * q[2] - d);
+    return Math.min(1000, Math.round(-lo));
+}
+
+// A frame position typed on one opening (mm behind the wall face, negative forward), or
+// null to go back to the frame in the model or the chain's setting.
+function setOpeningFrame(e, key, value) {
+    e.openingDetails = e.openingDetails || {};
+    const cur = e.openingDetails[key] = Object.assign({}, e.openingDetails[key]);
+    if (value === null || value === undefined || value === '') delete cur.frame;
+    else cur.frame = Math.max(-300, Math.min(300, parseFloat(value)));
+    renderElevationList();
+    onNumeric();
+}
+
 async function extractOnce(e) {
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
@@ -527,7 +559,7 @@ async function extractOnce(e) {
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
     const payload = { name: e.name, faces: tris, outward: e.picks[0].normal, context,
                       seeds: e.picks.map(p => p.point).filter(Boolean),
-                      options: { penetrations: document.getElementById('penetrations').checked } };
+                      options: { penetrations: document.getElementById('penetrations').checked, wall_depth: wallDepth(e.picks) } };
     const json = JSON.stringify(payload);
     log(`${e.name}: extracting — ${tris.length} faces, ${context.length} context elements, `
         + `${nTris} triangles, ${dropped} dropped, payload ${Math.round(json.length / 1024)} kB`);
@@ -583,7 +615,7 @@ _json.dumps(_ex(_pl))`);
 const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
              'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
-             'plank_len', 'closer_w', 'board_w', 'board_h', 'kerf'];
+             'plank_len', 'closer_w', 'board_w', 'board_h', 'kerf', 'board_trim'];
 function val(id) { return document.getElementById(id).value; }
 function toggleValue(id) { const b = document.querySelector('#' + id + ' .turn-btn.active'); return b ? b.dataset.value : null; }
 function selectToggle(id, value) {
@@ -611,6 +643,8 @@ function elevationRecords() {
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
                                                    edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
                                                    head_vent: chain.edges.vent, head_air: chain.edges.air,
+                                                   profile_gap: chain.edges.pgap === undefined ? 1 : chain.edges.pgap,
+                                                   frame_setback: chain.edges.frame === undefined ? 50 : chain.edges.frame,
                                                    opening_details: e.openingDetails || {} }));
         }
     }
@@ -785,6 +819,142 @@ function setStatus(text, cls) {
     chip.textContent = text; chip.className = 'status-chip ' + (cls || '');
 }
 
+// ─── SAVED STATE ───
+// Save writes every chain, its elevations, the wall surfaces they are attached to (as
+// extracted: frame, outline, openings, abutments) and every setting to an XML file
+// (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
+// state loads without the IFC and without extracting again. Open the IFC first to see
+// the host model: opening a model starts afresh and clears the chains.
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations'];
+const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient'];
+
+function snapshotState() {
+    const settings = {};
+    for (const k of NUM) settings[k] = parseFloat(val(k));
+    for (const k of STATE_CHECKS) settings[k] = document.getElementById(k).checked;
+    for (const k of STATE_TOGGLES) settings[k] = toggleValue(k);
+    settings.counter_batten = val('counter_batten');
+    const elevation = e => ({
+        name: e.name, storey: e.storey || null, start: e.start || 0, rev: !!e.rev, link: e.link || null, offset: e.offset || 0,
+        cornerLo: e.cornerLo || 0, cornerHi: e.cornerHi || 0, masterLo: !!e.masterLo, masterHi: !!e.masterHi,
+        detailLo: e.detailLo || null, detailHi: e.detailHi || null, clipLo: e.clipLo || 0,
+        clipHi: e.clipHi === undefined ? null : e.clipHi, cover: e.cover || null,
+        panelRows: e.panelRows || null, panelJoints: e.panelJoints || null, openingDetails: e.openingDetails || {},
+        manual: e.manual || [], disabled: e.disabled || {},
+        // the faces it was picked from, for reference: the surface below is what loads
+        picks: e.picks.length ? e.picks.map(q => ({ element: (q.mesh && q.mesh.userData.name) || null, faces: q.faces.length,
+                                                    normal: q.normal, point: q.point }))
+                              : (e.savedPicks || []),
+        surface: e.result });
+    const chains = state.chains.map(c => ({
+        name: c.name, built: !!c.built, topZ: c.topZ, bottomZ: c.bottomZ, edges: Object.assign({}, c.edges),
+        datumFrom: c.datumFrom ? c.datumFrom.name : null,
+        members: c.members.filter(e => e.result && e.result.ok).map(elevation) }));
+    const act = state.elevations[state.active];
+    return { app: 'CladForge', saved: new Date().toISOString(),
+             model: { file: (state.file && state.file.name) || state.savedModelFile || null, offset: modelOffset.slice(),
+                      context: Object.assign({}, modelContext) },
+             seq: state.seq, active: act ? act.name : null, settings, chains };
+}
+
+async function saveState() {
+    if (!pyReady) { setStatus('The engine is still loading — try again in a moment', 'busy'); return; }
+    const snap = snapshotState();
+    if (!snap.chains.some(c => c.members.length)) { setStatus('Nothing to save yet: pick a wall face first', 'busy'); return; }
+    const skipped = state.elevations.filter(e => !(e.result && e.result.ok)).length;
+    try {
+        pyodide.globals.set('_state_json', JSON.stringify(snap));
+        const xml = await pyodide.runPythonAsync(`
+import json as _json
+from cladding_state import to_xml as _to_xml
+_to_xml(_json.loads(_state_json))`);
+        const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' })), a = document.createElement('a');
+        a.href = url; a.download = downloadName('state.xml'); document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+        const n = snap.chains.reduce((k, c) => k + c.members.length, 0);
+        setStatus(`State saved: ${snap.chains.filter(c => c.members.length).length} chain(s), ${n} elevation(s)`
+                  + (skipped ? ` · ${skipped} not yet extracted left out` : ''), 'ready');
+    } catch (err) {
+        console.error(err);
+        setStatus('Save failed: ' + err.message, 'busy');
+    }
+}
+
+async function onStateChosen(input) {
+    if (!input.files.length) return;
+    const file = input.files[0];
+    input.value = '';                        // choosing the same file again still loads it
+    await loadState(await file.text(), file.name);
+}
+
+async function loadState(xml, fileName) {
+    if (!pyReady) { setStatus('The engine is still loading — try again in a moment', 'busy'); return false; }
+    let res;
+    try {
+        pyodide.globals.set('_state_xml', xml);
+        res = JSON.parse(await pyodide.runPythonAsync(`
+import json as _json
+from cladding_state import load as _load
+_json.dumps(_load(_state_xml))`));
+    } catch (err) { res = { ok: false, error: err.message }; }
+    if (!res.ok) { setStatus('Not loaded: ' + res.error, 'busy'); return false; }
+    restoreState(res.state);
+    await updatePreview();
+    if (!allMeshes.length) fitCameraTo(cladGroup.children.length ? cladGroup : outlineGroup);
+    const n = state.elevations.length;
+    setStatus(`Loaded ${fileName || 'state'}: ${state.chains.length} chain(s), ${n} elevation(s)`
+              + (allMeshes.length ? '' : ' · no host model open'), 'ready');
+    return true;
+}
+
+function restoreState(st) {
+    closeEditWidget();
+    if (in2D()) { exit2D(); update2DButton(); }
+    state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
+    state.elevations = []; state.chains = []; state.active = -1;
+    // Surfaces are stored in scene coordinates, which sit on the model offset they were
+    // saved with. With no model open that offset comes back too, so exports land on the
+    // host model's coordinates; with one open, the surfaces move onto its offset.
+    const saved = (st.model && st.model.offset) || [0, 0, 0];
+    let d = [0, 0, 0];
+    if (allMeshes.length) d = saved.map((x, k) => x - modelOffset[k]);
+    else { modelOffset = saved.slice(); modelContext = (st.model && st.model.context) || {}; }
+    state.savedModelFile = st.model && st.model.file;
+    const s = st.settings || {};
+    for (const k of NUM) if (s[k] !== undefined && s[k] !== null) document.getElementById(k).value = s[k];
+    for (const k of STATE_CHECKS) if (typeof s[k] === 'boolean') document.getElementById(k).checked = s[k];
+    for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
+    if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
+    const byName = {};
+    for (const c of st.chains || []) {
+        const chain = { name: c.name, members: [], length: 0, built: !!c.built,
+                        topZ: c.topZ === null || c.topZ === undefined ? null : c.topZ + d[2],
+                        bottomZ: c.bottomZ === null || c.bottomZ === undefined ? null : c.bottomZ + d[2],
+                        edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}) };
+        for (const m of c.members || []) {
+            const surface = m.surface;
+            if (!surface || !surface.ok) continue;
+            surface.frame.origin = surface.frame.origin.map((x, k) => x + d[k]);
+            const e = { name: m.name, picks: [], savedPicks: m.picks || [], restored: true, result: surface,
+                        manual: m.manual || [], disabled: m.disabled || {}, storey: m.storey || null, highlights: [], chain,
+                        start: m.start || 0, rev: !!m.rev, link: m.link || null, offset: m.offset || 0,
+                        cornerLo: m.cornerLo || 0, cornerHi: m.cornerHi || 0, masterLo: !!m.masterLo, masterHi: !!m.masterHi,
+                        detailLo: m.detailLo || null, detailHi: m.detailHi || null, clipLo: m.clipLo || 0,
+                        clipHi: m.clipHi === undefined ? null : m.clipHi, cover: m.cover || null,
+                        panelRows: m.panelRows || null, panelJoints: m.panelJoints || null, openingDetails: m.openingDetails || {} };
+            chain.members.push(e);
+            state.elevations.push(e);
+            byName[e.name] = e;
+        }
+        chain.datumFrom = byName[c.datumFrom] && byName[c.datumFrom].chain === chain ? byName[c.datumFrom] : null;
+        if (chain.members.length) { relayoutChain(chain); state.chains.push(chain); }
+    }
+    state.seq = Math.max(st.seq || 0, state.chains.length);
+    onTypeChange();
+    const active = state.elevations.findIndex(e => e.name === st.active);
+    setActive(active >= 0 ? active : state.elevations.length ? 0 : -1);
+}
+
 // ─── MODEL LOADING ───
 async function onFileChosen(input) {
     if (!input.files.length) return;
@@ -882,54 +1052,74 @@ import ifc_generator`);
 }
 
 // ─── BOARDS AND WASTE ───
-// Every panel of the active chain packed onto stock boards (cladding_nesting.py), after
-// each finished rebuild and debounced like a typed field, never on a slider frame.
+// Every panel of every built chain is packed onto stock boards together
+// (cladding_nesting.py), so an offcut from one chain can feed another. The quick check
+// (16 strategies, a few ms) runs after each finished rebuild, debounced like a typed
+// field and never on a slider frame. Optimise boards runs the full search on demand; the
+// cutting plan always uses it.
 let _nestTimer = null, _nestSeq = 0;
 function scheduleNesting() {
     if (_nestTimer) clearTimeout(_nestTimer);
-    _nestTimer = setTimeout(runNesting, 300);
+    _nestTimer = setTimeout(() => runNesting(false), 300);
 }
 
-function chainRecords(chain, params) {
-    const names = chain.members.filter(m => m.result && m.result.ok).map(m => m.result.name);
-    return { names, area: (window._lastPreview.info || []).filter(i => names.includes(i.elevation))
-                            .reduce((a, i) => a + (i.clad_area || 0), 0) };
+function jobRecords() {
+    const chains = state.chains.filter(c => c.built && c.members.some(m => m.result && m.result.ok));
+    const names = chains.flatMap(c => c.members.filter(m => m.result && m.result.ok).map(m => m.result.name));
+    const area = (window._lastPreview.info || []).filter(i => names.includes(i.elevation)).reduce((a, i) => a + (i.clad_area || 0), 0);
+    return { names, area, title: chains.length === 1 ? chains[0].name : `All ${chains.length} chains` };
 }
 
-async function runNesting() {
+async function runNesting(deep) {
     const box = document.getElementById('waste-readout');
-    const e = state.elevations[state.active];
-    if (!pyReady || !window._lastPreview || !e || !e.chain.built || toggleValue('cladding-type') !== 'panel') {
+    if (!pyReady || !window._lastPreview || !state.chains.some(c => c.built) || toggleValue('cladding-type') !== 'panel') {
         box.style.display = 'none';
-        return;
+        window._lastPlan = null;
+        tintPanels();
+        return null;
     }
-    const seq = ++_nestSeq, { names, area } = chainRecords(e.chain);
+    const seq = ++_nestSeq, job = jobRecords();
     try {
-        pyodide.globals.set('_nest_json', JSON.stringify({ names, area }));
+        pyodide.globals.set('_nest_json', JSON.stringify({ names: job.names, area: job.area, deep: !!deep }));
         const out = await pyodide.runPythonAsync(`
 import json as _json, time as _time
 from cladding_nesting import chain_plan as _cp
 from cladding_constants import _parse as _prs
 _n = _json.loads(_nest_json)
 _t0 = _time.perf_counter()
-_plan = _cp(_o["geometry"], _prs(_p), _n["names"], _n["area"])
+_plan = _cp(_o["geometry"], _prs(_p), _n["names"], _n["area"], _n["deep"])
 _plan["ms"] = round((_time.perf_counter() - _t0) * 1000)
 _plan.pop("boards")
 _json.dumps(_plan)`);
-        if (seq !== _nestSeq) return;
+        if (seq !== _nestSeq) return null;
         const plan = JSON.parse(out);
+        plan.title = job.title;
         window._lastPlan = plan;
-        renderReadout(e.chain, plan);
+        renderReadout(plan);
+        return plan;
     } catch (err) {
         console.warn('packing failed', err);
         box.style.display = 'none';
+        return null;
     }
 }
 
-function renderReadout(chain, plan) {
+async function optimiseBoards() {
+    const btn = document.getElementById('wr-optimise');
+    btn.disabled = true; btn.textContent = 'Optimising…';
+    await new Promise(r => setTimeout(r, 30));          // let the label paint before Python blocks
+    const before = window._lastPlan;
+    const plan = await runNesting(true);
+    btn.disabled = false; btn.textContent = 'Optimise boards';
+    if (plan) setStatus(`Optimised: ${plan.n_boards} board${plan.n_boards === 1 ? '' : 's'}, ${(100 * plan.waste).toFixed(1)}% waste`
+        + (before && !before.deep && before.n_boards > plan.n_boards ? ` — ${before.n_boards - plan.n_boards} fewer than the quick check` : '')
+        + ` (${plan.strategies} strategies, ${(plan.ms / 1000).toFixed(1)} s)`, 'ready');
+}
+
+function renderReadout(plan) {
     const box = document.getElementById('waste-readout'), set = (id, v) => document.getElementById(id).textContent = v;
     box.style.display = '';
-    set('wr-title', `${chain.name} · panels`);
+    set('wr-title', `${plan.title || 'Panels'} · panels · ${plan.deep ? 'optimised' : 'quick check'}`);
     set('wr-area', `${plan.clad_area.toFixed(1)} m²`);
     set('wr-boards', `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
     set('wr-lower', `lower bound ${plan.lower_bound}`);
@@ -939,8 +1129,17 @@ function renderReadout(chain, plan) {
     const notes = [];
     if (plan.oversize.length) notes.push(`${plan.oversize.length} panel(s) larger than the board`);
     if (plan.capped) notes.push(`only the first ${plan.n_pieces} pieces packed`);
+    if (plan.trim) notes.push(`${plan.trim} mm edge trim`);
     set('wr-note', notes.join(' · '));
-    box.title = `Packed by ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, ${plan.ms} ms`;
+    // Cut sizes that divide the board exactly, kerf and trim allowed for: where the design
+    // can move, these are the sizes that waste nothing.
+    const f = plan.friendly;
+    set('wr-sizes', f ? `Divides the board: ${f.across.join(' · ')} × ${f.along.join(' · ')}` : '');
+    document.getElementById('wr-sizes').title = 'Cut widths (across) and heights (along) that divide the board with nothing over, kerf and edge trim allowed for';
+    document.getElementById('wr-optimise').style.display = plan.deep ? 'none' : '';
+    box.title = `Packed by ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, `
+        + `${plan.strategies} strateg${plan.strategies === 1 ? 'y' : 'ies'}, ${plan.ms} ms`;
+    tintPanels();
 }
 
 async function downloadCuttingPlan() {
@@ -948,13 +1147,12 @@ async function downloadCuttingPlan() {
     const params = getParams(); params.trim = true;
     if (!params.elevations.length || params.cladding_type !== 'panel') { alert('The cutting plan is for panel cladding: build a panel chain first.'); return; }
     const btn = document.getElementById('plan-btn');
-    busy(btn, true, 'Packing…');
+    busy(btn, true, 'Optimising boards…');
+    await new Promise(r => setTimeout(r, 30));
     try {
-        const chains = state.chains.filter(c => c.built).map(c => ({
-            name: c.name, names: c.members.filter(m => m.result && m.result.ok).map(m => m.result.name) }))
-            .filter(c => c.names.length);
+        const job = jobRecords();
         pyodide.globals.set('_params_json', JSON.stringify(params));
-        pyodide.globals.set('_chains_json', JSON.stringify(chains));
+        pyodide.globals.set('_job_json', JSON.stringify(job));
         const dxf = await pyodide.runPythonAsync(`
 import json as _json
 from cladding_preview import generate_preview as _gp
@@ -962,10 +1160,8 @@ from cladding_constants import _parse as _prs
 from cladding_nesting import chain_plan as _cp, plan_dxf as _pd
 _p = _json.loads(_params_json)
 _o = _gp(_p)
-_area = {i["elevation"]: i.get("clad_area", 0) for i in _o["info"]}
-_pp = _prs(_p)
-_pd([(c["name"], _cp(_o["geometry"], _pp, c["names"], sum(_area.get(n, 0) for n in c["names"])))
-     for c in _json.loads(_chains_json)])`);
+_job = _json.loads(_job_json)
+_pd([(_job["title"], _cp(_o["geometry"], _prs(_p), _job["names"], _job["area"], True))])`);
         showReminder(new Blob([dxf], { type: 'application/dxf' }), 'cutting-plan.dxf');
     } catch (err) { alert('Cutting plan failed: ' + err.message); }
     finally { busy(btn, false); }
@@ -1043,7 +1239,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_geometry', 'cladding_booleans',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();
