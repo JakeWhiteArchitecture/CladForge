@@ -21,7 +21,8 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "sheathing": ("#d9c9a3", 0.35), "insulation": ("#e8d86a", 0.30), "counter_batten": ("#8b7355", 1.0),
     "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
     "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
-    "corner_profile": ("#c0c6cc", 1.0)}
+    "corner_profile": ("#c0c6cc", 1.0), "gasket": ("#1c1c1c", 1.0)}
+EPDM_T, EPDM_LAP = 2.0, 15.0    # EPDM gasket on vertical timbers: thickness, and past the timber each side
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
     "batten_w": (50, 25, 100), "batten_d": (38, 19, 100), "batten_centres": (400, 300, 600),

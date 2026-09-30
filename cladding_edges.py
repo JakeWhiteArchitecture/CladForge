@@ -25,6 +25,7 @@ from cladding_primitives import clip_bounds, openings
 
 EDGE_DEFAULTS = {"top": 10.0, "side": 0.0, "bottom": 10.0}
 MITRE_GAP = 10.0        # between two mitred boards, measured straight across the joint
+PROFILE_GAP = 1.0       # a board stops this far short of a corner profile's nose
 HEAD_AIR = 10.0         # vented at the back: air over the head lining, and its gap off the frame
 MAX_EDGE = 100.0
 TOL = 0.6
@@ -41,7 +42,8 @@ def settings(elev):
             return default
     return {"top": num("edge_top", EDGE_DEFAULTS["top"]), "side": num("edge_side", EDGE_DEFAULTS["side"]),
             "bottom": num("edge_bottom", EDGE_DEFAULTS["bottom"]), "gap": num("mitre_gap", MITRE_GAP),
-            "vent": "back" if elev.get("head_vent") == "back" else "front", "air": num("head_air", HEAD_AIR)}
+            "vent": "back" if elev.get("head_vent") == "back" else "front", "air": num("head_air", HEAD_AIR),
+            "pgap": num("profile_gap", PROFILE_GAP)}
 
 
 def mitre_pullback(gap, k):
@@ -167,7 +169,7 @@ def opening_details(elev, p):
     return out
 
 
-def reveal_treatment(detail, master, face, pull, board, gap):
+def reveal_treatment(detail, master, face, pull, board, gap, pgap=0.0):
     """How the face board and the lining meet at a jamb or head: (w, lining).
 
     *w* = (e, k) is how far the face board's edge moves into the opening at depth s,
@@ -179,14 +181,15 @@ def reveal_treatment(detail, master, face, pull, board, gap):
                lining stops a panel joint gap short of the board's back;
                "reveal": the lining runs out flush to the face board's outside face,
                and the face board stops a panel joint gap short of the lining
-      profile  both stop the profile's nose (D = board thickness) short of the arris
+      profile  both stop the profile's nose (D = board thickness) and *pgap* short of
+               the arris
       square   both stop square at the opening line (a placeholder)"""
     if detail == "mitre":
         return (face - pull, -1.0), (-1.0, -pull)
     if detail == "lap":
         return ((board, 0.0), (0.0, -(board + gap))) if master == "face" else ((-gap, 0.0), None)
     if detail == "profile":
-        return (0.0, 0.0), (0.0, -board)
+        return (-pgap, 0.0), (0.0, -(board + pgap))
     return (0.0, 0.0), None
 
 
@@ -276,8 +279,8 @@ def mitre_to_linings(meshes, p, infos):
         if details:
             s = settings(elev)
             face, pull = face_by.get(elev.get("name", ""), 0.0), mitre_pullback(s["gap"], 1.0)
-            treat = [(rect, reveal_treatment(d["jamb"], d["jamb_master"], face, pull, board, p["panel_gap"])[0],
-                      reveal_treatment(d["head"], d["head_master"], face, pull, board, p["panel_gap"])[0])
+            treat = [(rect, reveal_treatment(d["jamb"], d["jamb_master"], face, pull, board, p["panel_gap"], s["pgap"])[0],
+                      reveal_treatment(d["head"], d["head_master"], face, pull, board, p["panel_gap"], s["pgap"])[0])
                      for rect, d in details]
             per[elev.get("name", "")] = ([r for r, _d in details], treat, s["air"] if s["vent"] == "back" else 0.0)
     for m in meshes:

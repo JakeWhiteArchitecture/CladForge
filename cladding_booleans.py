@@ -21,7 +21,7 @@ from shapely.prepared import prep
 from cladding_primitives import clip_bounds, clip_bounds_v, splash_rings
 from cladding_edges import offset_region
 
-TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel"})
+TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel", "gasket"})
 _MIN_AREA = 25.0   # mm² – slivers smaller than this are discarded
 
 
@@ -196,7 +196,16 @@ def apply_boolean_ops(meshes, p):
                 continue
         except Exception:
             pass
-        clipped = _intersection(poly, region)
+        at = mesh.get("clip_v_at")
+        if at:
+            # A corner timber runs past its own outline on purpose: trim it in height only,
+            # to where the face is clad just inside the corner.
+            bands = strip_intervals(region, at[0], at[1], across=True)
+            us = [q[0] for q in mesh["profile"]]
+            keep = unary_union([box(min(us) - 1.0, v0, max(us) + 1.0, v1) for v0, v1 in bands]) if bands else None
+            clipped = _intersection(poly, keep) if keep is not None else None
+        else:
+            clipped = _intersection(poly, region)
         parts = [pg for pg in iter_polygons(clipped) if pg.area > _MIN_AREA]
         if not parts:
             continue

@@ -26,12 +26,13 @@ LAYERS = {
     "CLADDING":       {"color": 5, "linetype": "CONTINUOUS"},
     "CLOSER":         {"color": 1, "linetype": "CONTINUOUS"},
     "CORNER_PROFILE": {"color": 9, "linetype": "CONTINUOUS"},
+    "GASKET":         {"color": 250, "linetype": "CONTINUOUS"},
     "DIMS":           {"color": 7, "linetype": "CONTINUOUS"},
     "NOTES":          {"color": 7, "linetype": "CONTINUOUS"},
 }
 _LAYER_FOR_TYPE = {"batten": "BATTEN", "cross_batten": "BATTEN", "counter_batten": "COUNTER_BATTEN",
                    "sheathing": "SHEATHING", "insulation": "INSULATION", "panel": "CLADDING",
-                   "plank": "CLADDING", "closer": "CLOSER"}
+                   "plank": "CLADDING", "closer": "CLOSER", "gasket": "GASKET"}
 _ELEV_GAP = 2500.0     # mm between elevations on the sheet
 _TEXT = 50.0           # mm dimension / note text height
 _TITLE = 120.0

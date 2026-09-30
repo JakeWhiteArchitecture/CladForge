@@ -6,7 +6,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 
 // Edge settings, per chain: offsets (mm) pulling the buildup back from its top, bottom and
 // free-end edges, the gap in every mitre, and how a window or door head is ventilated.
-const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10 };
+const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1 };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -63,7 +63,7 @@ function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' ·
 // The panel's edge fields show the active elevation's chain and write to all of it.
 function syncEdgeFields() {
     const e = state.elevations[state.active], ed = e ? e.chain.edges : EDGE_DEFAULTS;
-    for (const k of ['top', 'side', 'bottom', 'gap', 'air']) {
+    for (const k of ['top', 'side', 'bottom', 'gap', 'air', 'pgap']) {
         const el = document.getElementById('edge-' + k);
         if (el && document.activeElement !== el) el.value = ed[k];
     }
@@ -619,6 +619,7 @@ function elevationRecords() {
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
                                                    edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
                                                    head_vent: chain.edges.vent, head_air: chain.edges.air,
+                                                   profile_gap: chain.edges.pgap === undefined ? 1 : chain.edges.pgap,
                                                    opening_details: e.openingDetails || {} }));
         }
     }

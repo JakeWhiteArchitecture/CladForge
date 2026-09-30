@@ -116,6 +116,8 @@
                     <div class="field"><label><i class="edge-key" style="background:#22c55e"></i>Free-end offset <span class="unit">mm</span></label><input type="number" id="edge-side" value="0" min="0" max="100" step="5" oninput="onEdgeField('side', this.value)"></div>
                     <div class="field"><label><i class="edge-key" style="background:#ff9800"></i>Mitre gap <span class="unit">mm</span></label><input type="number" id="edge-gap" value="10" min="0" max="100" step="1" oninput="onEdgeField('gap', this.value)"></div>
                 </div>
+                <div class="field"><label>Profile gap <span class="unit">mm, board short of a corner profile's nose</span></label>
+                    <input type="number" id="edge-pgap" value="1" min="0" max="10" step="0.5" oninput="onEdgeField('pgap', this.value)"></div>
                 <div class="field"><label><i class="edge-key" style="background:#ef4444"></i>Head ventilation</label>
                     <div id="head-vent" class="turn-toggle">
                         <button class="turn-btn active" data-value="front" onclick="onEdgeField('vent', 'front')">At front</button>
