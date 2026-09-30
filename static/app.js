@@ -1,6 +1,6 @@
 /* CladForge app — elevation state, Pyodide engine, live preview, downloads. */
 
-const state = { elevations: [], chains: [], active: -1, pickMode: true, sliderDragging: false,
+const state = { elevations: [], chains: [], active: -1, pickMode: true, mode: 'pick', sliderDragging: false,
                model: null, seq: 0, editing: null, levels: null };
 let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = null, _restarting = false;
 
@@ -454,9 +454,49 @@ function nudgeOffset(step) {
 }
 
 // ─── PICKING → EXTRACTION ───
-function setPickMode(on) {
-    state.pickMode = on;
-    document.querySelectorAll('#pick-toggle .turn-btn').forEach(b => b.classList.toggle('active', (b.dataset.value === 'pick') === on));
+// Three modes for a click in the model: pick a wall face, hide the element under it, or
+// nothing (orbit only). true / false still mean pick / orbit.
+function setPickMode(mode) {
+    if (mode === true) mode = 'pick';
+    else if (mode === false) mode = 'orbit';
+    state.mode = mode;
+    state.pickMode = mode === 'pick';
+    document.querySelectorAll('#pick-toggle .turn-btn').forEach(b => b.classList.toggle('active', b.dataset.value === mode));
+    if (mode === 'hide') setStatus('Hide elements: click one to hide it, clicks then pass through to what is behind · H to go back to picking', 'ready');
+}
+
+function renderHidden() {
+    const hidden = hiddenElements(), types = elementTypes();
+    document.getElementById('hidden-count').textContent = hidden.length ? `${hidden.length} hidden` : 'None hidden';
+    document.getElementById('show-all').disabled = !hidden.length;
+    const sel = document.getElementById('hide-type'), keep = sel.value;
+    sel.innerHTML = '<option value="">Hide all of a type…</option>'
+        + types.map(([t, n]) => `<option value="${t}">${t.replace(/^Ifc/i, '')} (${n})</option>`).join('');
+    sel.value = types.some(([t]) => t === keep) ? keep : '';
+    document.getElementById('hidden-list').innerHTML = hidden.slice(0, 12).map(m =>
+        `<button class="mini" title="Show it again" onclick="showElement(${m.mesh.userData.index})">${(m.name || m.type).slice(0, 24)} ×</button>`).join(' ')
+        + (hidden.length > 12 ? ` <span class="hint">and ${hidden.length - 12} more</span>` : '');
+}
+
+function showElement(index) {
+    const m = meshMeta[index];
+    if (m) m.mesh.visible = true;
+    renderHidden();
+}
+
+function onHideType(select) {
+    if (!select.value) return;
+    const n = elementTypes().find(([t]) => t === select.value);
+    hideElementType(select.value);
+    setStatus(`Hidden every ${select.value.replace(/^Ifc/i, '')} (${n ? n[1] : 0})`, 'ready');
+    select.value = '';
+    renderHidden();
+}
+
+function onShowAll() {
+    showAllElements();
+    setStatus('Every element shown again', 'ready');
+    renderHidden();
 }
 
 function onViewportClick(event) {
@@ -467,6 +507,15 @@ function onViewportClick(event) {
     if (state.levels) {
         const snap = snapPick(event);
         if (snap) levelPicked(toIfc(snap.point)[2]);
+        return;
+    }
+    if (state.mode === 'hide') {
+        const hit = pickAt(event);
+        if (!hit) return;
+        const meta = meshMeta[hit.mesh.userData.index] || {};
+        hideElement(hit.mesh);
+        setStatus(`Hidden ${meta.name || meta.type || 'element'}${meta.type ? ' (' + meta.type.replace(/^Ifc/i, '') + ')' : ''} · Show all brings everything back`, 'ready');
+        renderHidden();
         return;
     }
     if (!state.pickMode) return;
@@ -974,6 +1023,7 @@ async function loadModel(file, force) {
         state.elevations = []; state.chains = []; state.active = -1; state.seq = 0; renderElevationList();
         const summary = await loadIFC(file, t => setStatus(t, 'busy'), force);
         state.model = summary;
+        renderHidden();                     // a new model starts with nothing hidden
         const notes = (summary.warnings || []).filter(Boolean);
         info.innerHTML = `<b>${file.name}</b><br>${summary.meshes} elements · ${summary.storeys} storeys · `
             + `${summary.context.project || 'unnamed project'}<br><span class="hint">Read by ${summary.reader}.</span>`
@@ -1295,6 +1345,10 @@ function initApp() {
         const el = document.activeElement, typing = el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
         const modal = ['chain-wizard', 'course-dialog', 'download-reminder'].some(id => document.getElementById(id).classList.contains('open'));
         if ((e.key === 'e' || e.key === 'E') && !typing && !modal && !e.ctrlKey && !e.metaKey && !e.altKey) { toggle2D(); return; }
+        if ((e.key === 'h' || e.key === 'H') && !typing && !modal && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            setPickMode(state.mode === 'hide' ? 'pick' : 'hide');
+            return;
+        }
         if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
         if (document.getElementById('course-dialog').classList.contains('open')) { closeCourseDialog(); return; }
         if (state.levels) { dismissLevels(); return; }

@@ -290,6 +290,20 @@ function fitCameraTo(obj) {
 
 function setModelVisible(on) { layerVisible.model = on; modelGroup.visible = on; }
 
+// ─── HIDING ELEMENTS ───
+// For getting round the model: a hidden element is not drawn and clicks pass through it,
+// so the face behind can be picked. It still counts for extraction (abutments, openings
+// and penetrations come from the whole model), and a new model starts with none hidden.
+function hideElement(mesh) { mesh.visible = false; }
+function hideElementType(type) { for (const m of meshMeta) if (m.type === type) m.mesh.visible = false; }
+function showAllElements() { for (const m of meshMeta) m.mesh.visible = true; }
+function hiddenElements() { return meshMeta.filter(m => !m.mesh.visible); }
+function elementTypes() {             // [[type, count]], most common first
+    const n = {};
+    for (const m of meshMeta) n[m.type] = (n[m.type] || 0) + 1;
+    return Object.entries(n).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
 // ─── PICKING ───
 function pickDim(event) {
     if (!dimLabels.length || !dimGroup.visible || view2d.on) return null;    // flat, labels are HTML
@@ -350,7 +364,7 @@ function pickAt(event) {
                                     -((event.clientY - rect.top) / rect.height) * 2 + 1);
     const rc = new THREE.Raycaster();
     rc.setFromCamera(mouse, activeCamera());
-    const hits = rc.intersectObjects(allMeshes, false);
+    const hits = rc.intersectObjects(allMeshes.filter(m => m.visible), false);   // hidden elements let clicks through
     if (!hits.length) return null;
     const hit = hits[0];
     const normal = hit.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize();

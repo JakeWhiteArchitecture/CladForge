@@ -1061,11 +1061,42 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || !loaded.restored || !/Not loaded: not a CladForge state file/.test(refusedState) || !noModel.ok || !noModel.back || !sameAgain)
         throw new Error('save and load state did not round-trip: ' + JSON.stringify({ savedLook: savedLook.elevations, loadedLook, loaded, refusedState, noModel, sameAgain }));
 
+    // Hide elements (H): a click hides the element under it, and clicks then pass through
+    // it; a whole type can be hidden; Show all brings everything back. Picking stays off.
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await page.keyboard.press('h');
+    const hideBefore = await page.evaluate(() => ({ mode: state.mode, elevations: state.elevations.length }));
+    await lookAt('Wing south wall', [0, 0.3, 1]);
+    const hid = await page.evaluate(() => {
+        const r = renderer.domElement.getBoundingClientRect();
+        const hit = pickAt({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
+        return { hidden: hiddenElements().map(m => m.name), elevations: state.elevations.length,
+                 through: hit ? meshMeta[hit.mesh.userData.index].name : null, count: document.getElementById('hidden-count').textContent };
+    });
+    const slabs = await page.evaluate(() => meshMeta.filter(m => /slab/i.test(m.type)).length);
+    const slabType = await page.evaluate(() => (meshMeta.find(m => /slab/i.test(m.type)) || {}).type);
+    await page.selectOption('#hide-type', slabType);
+    const byType = await page.evaluate(() => ({ hidden: hiddenElements().length, slabsHidden: hiddenElements().filter(m => /slab/i.test(m.type)).length }));
+    await page.click('#show-all');
+    const shown = await page.evaluate(() => hiddenElements().length);
+    await page.keyboard.press('h');
+    const modeBack = await page.evaluate(() => state.mode);
+    console.log('hide elements:', JSON.stringify({ hideBefore, hid, slabs, byType, shown, modeBack }));
+    if (hideBefore.mode !== 'hide' || hid.hidden.join() !== 'Wing south wall' || hid.elevations !== hideBefore.elevations
+        || hid.through === 'Wing south wall' || hid.count !== '1 hidden' || !slabs || byType.slabsHidden !== slabs
+        || byType.hidden !== slabs + 1 || shown !== 0 || modeBack !== 'pick')
+        throw new Error('hiding elements wrong: ' + JSON.stringify({ hideBefore, hid, slabs, byType, shown, modeBack }));
+    await page.evaluate(() => hideElement(allMeshes[0]));           // a new model starts with none hidden
+
     // The server importer, the fallback for models web-ifc cannot build.
     await page.evaluate(() => loadModel(state.file, 'server'));
     await page.waitForFunction(() => state.model && state.model.reader.indexOf('server') >= 0, null, { timeout: 180000 });
     console.log('camera moved on a pick:', cameraMoves.length ? cameraMoves : 'never');
     console.log('server import:', await page.evaluate(() => `${state.model.meshes} elements, ${state.model.storeys} storeys, reader ${state.model.reader}`));
+    const hiddenAfterImport = await page.evaluate(() => hiddenElements().length + ' / ' + document.getElementById('hidden-count').textContent);
+    console.log('hidden after re-import:', hiddenAfterImport);
+    if (hiddenAfterImport !== '0 / None hidden') throw new Error('hidden elements survived a new model: ' + hiddenAfterImport);
 
     console.log('SMOKE OK');
     await browser.close();
