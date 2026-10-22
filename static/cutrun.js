@@ -183,17 +183,23 @@ function runGo(i) {
 }
 
 // ─── THE WALL ───
+// Within a board the focus builds up: at piece j, pieces 1 to j of that board are all lit
+// (full colour, glowing, as a group), the rest of the board a little stronger than the
+// other boards. A new board starts again from its first piece.
+const runLit = (t, s) => t.k === s.k && t.j <= s.j;
+
 function paintWall(s) {
+    clearGlow();
+    run.glow = new THREE.Group();
+    scene.add(run.glow);
     run.steps.forEach(t => {
         const m = run.meshes[t.piece.name];
         if (!m) return;
-        const h = runHue(t.k), sl = t === s ? FOCUS : (t.k === s.k ? BOARD_ON : PASTEL);
+        const lit = runLit(t, s), h = runHue(t.k), sl = lit ? FOCUS : (t.k === s.k ? BOARD_ON : PASTEL);
         m.material.color.copy(runColor(h, sl[0], sl[1]));
-        m.material.emissive.copy(t === s ? runColor(h, 80, 22) : new THREE.Color(0x000000));
+        m.material.emissive.copy(lit ? runColor(h, 80, 22) : new THREE.Color(0x000000));
+        if (lit) run.glow.add(glowFor(m, h));
     });
-    clearGlow();
-    const m = run.meshes[s.piece.name];
-    if (m) run.glow = glowFor(m, runHue(s.k));
 }
 
 function clearGlow() {
@@ -202,6 +208,7 @@ function clearGlow() {
 
 // A glowing edge round a panel: bright bands just outside its outline, drawn over its
 // neighbours, in the board's hue. Flat rings on the panel's outer face, so no post-processing.
+// Returned as a group for the caller to add (paintWall gathers a board's lit pieces).
 function glowFor(mesh, hue) {
     const g = new THREE.Group();
     const bb = mesh.geometry.boundingBox || (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
@@ -223,7 +230,6 @@ function glowFor(mesh, hue) {
         ring.renderOrder = 10;
         g.add(ring);
     }
-    scene.add(g);
     return g;
 }
 
@@ -440,13 +446,18 @@ function renderStrip(plan) {
 
 function paintStrip(s) {
     document.querySelectorAll('#run-strip .run-board.focus').forEach(f => f.classList.remove('focus'));
-    document.querySelectorAll('#run-strip .run-piece.focus, #run-strip .run-piece.on').forEach(p => p.classList.remove('focus', 'on'));
+    document.querySelectorAll('#run-strip .run-piece.focus, #run-strip .run-piece.on, #run-strip .run-piece.newest')
+        .forEach(p => p.classList.remove('focus', 'on', 'newest'));
     const fig = document.querySelector(`#run-strip .run-board[data-k="${s.k}"]`);
     if (!fig) return;
     fig.classList.add('focus');
-    fig.querySelectorAll('.run-piece').forEach(p => p.classList.add('on'));
-    const g = fig.querySelector(`.run-piece[data-step="${run.i}"]`);
-    if (g) { g.classList.remove('on'); g.classList.add('focus'); }
+    // pieces 1 to j of the board lit, the one just added outlined; the rest of the board on
+    const first = run.i - s.j;
+    fig.querySelectorAll('.run-piece').forEach(p => {
+        const step = +p.dataset.step;
+        p.classList.add(step >= first && step <= run.i ? 'focus' : 'on');
+        if (step === run.i) p.classList.add('newest');
+    });
     fig.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest', inline: 'center' });
 }
 

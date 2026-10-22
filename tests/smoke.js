@@ -1138,7 +1138,8 @@ _dxf(_o["geometry"], _p, _o["info"])`);
             .getCenter(new THREE.Vector3()).applyMatrix4(run.meshes[t.piece.name].matrix).project(camera))
             .every(q => Math.abs(q.x) < 1 && Math.abs(q.y) < 1 && q.z < 1);
         const a = fig.getBoundingClientRect(), b = document.getElementById('run-strip').getBoundingClientRect();
-        return { focus: focus.length, stripStep: focus[0] && +focus[0].dataset.step, i, boardK: fig && +fig.dataset.k, k: s.k,
+        const newest = document.querySelector('#run-strip .run-piece.newest');
+        return { focus: focus.length, newest: newest && +newest.dataset.step, i, j: s.j, boardK: fig && +fig.dataset.k, k: s.k,
                  wall: mesh.material.color.getHex() === want, emissive: mesh.material.emissive.getHex() !== 0, othersDiffer: others.every(h => h !== want),
                  glow: run.glow ? run.glow.children.length : 0, seen,
                  onScreen: Math.abs(p.x) < 1 && Math.abs(p.y) < 1 && p.z < 1, stripShows: a.left >= b.left - 1 && a.right <= b.right + 1,
@@ -1152,8 +1153,8 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('cutting run views (blocked sight lines, directions tried):', JSON.stringify(views));
     if (!views.length || views.some(([b, t]) => b > 0 && t < 33))
         throw new Error('a board was framed blocked without trying every direction: ' + JSON.stringify(views));
-    if (linked.focus !== 1 || linked.stripStep !== linked.i || linked.boardK !== linked.k || !linked.wall || !linked.emissive || !linked.othersDiffer
-        || linked.glow !== 2 || !linked.seen || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
+    if (linked.focus !== linked.j + 1 || linked.newest !== linked.i || linked.boardK !== linked.k || !linked.wall || !linked.emissive || !linked.othersDiffer
+        || linked.glow !== linked.j + 1 || !linked.seen || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
         || linked.where !== `${linked.elevation} · ${linked.name}`)
         throw new Error('cutting run focus not linked: ' + JSON.stringify(linked));
     // Playing moves on by itself; the keys step, pause and close, and nothing else in the
