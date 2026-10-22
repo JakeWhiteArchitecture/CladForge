@@ -1262,18 +1262,20 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         const i = run.steps.findIndex(t => t.oid !== undefined);
         if (i < 0) { closeCuttingRun(); return { reused: 0 }; }
         runGo(i);
-        await new Promise(r => setTimeout(r, 1200));
+        const flying = !!document.querySelector('#run-strip .run-ghost') && !!document.querySelector('#run-strip .run-reuse.arriving');
+        await new Promise(r => setTimeout(r, 1500));
+        const landed = !document.querySelector('#run-strip .run-ghost') && !document.querySelector('#run-strip .run-reuse.arriving');
         const s = run.steps[i], lit = run.rack && run.rack.items.filter(it => it.oid === s.oid);
         const r = { reused: run.steps.filter(t => t.oid !== undefined).length, counter: document.getElementById('run-board').textContent,
                     rackLit: lit ? lit.length : 0, stripLit: document.querySelectorAll(`#run-strip .run-rack-item.focus[data-oid="${s.oid}"]`).length,
-                    figure: !!document.querySelector('#run-strip .run-reuse.focus'), wall: !!run.meshes[s.piece.name] };
+                    figure: !!document.querySelector('#run-strip .run-reuse.focus'), wall: !!run.meshes[s.piece.name], flying, landed };
         closeCuttingRun();
         return r;
     });
     console.log('offcuts passed on:', JSON.stringify({ shared, sharedRun }));
     if (!shared.share || shared.after > shared.before
         || (sharedRun.reused && (!/^Offcut of length \d+$/.test(sharedRun.counter) || sharedRun.rackLit !== 1 || sharedRun.stripLit !== 1
-                                 || !sharedRun.figure || !sharedRun.wall)))
+                                 || !sharedRun.figure || !sharedRun.wall || !sharedRun.flying || !sharedRun.landed)))
         throw new Error('offcuts passed on wrong: ' + JSON.stringify({ shared, sharedRun }));
     await page.evaluate(async () => { document.getElementById('share_offcuts').checked = false; await updatePreview(); });
     // Optimise splices: every Splices step tried, the current one shown, Apply moves the slider.

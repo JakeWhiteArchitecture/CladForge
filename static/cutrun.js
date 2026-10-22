@@ -28,6 +28,7 @@ const run = { on: false, plan: null, steps: [], i: -1, playing: false, speed: 1,
 const RUN_RACK_T = 25;            // mm: how thick an offcut is drawn on the rack
 const RUN_RACK_GAP = 80;          // mm between offcuts on the rack
 const RUN_RACK_OUT = 900;         // mm in front of the cladding the rack starts
+const RUN_FLY = 1100;             // ms an offcut takes to fly from its rack to the elevation using it, at 1×
 
 // Looking round obstacles: turns of the view to either side (degrees) and rises of the
 // eye, tried nearest first, until every focal piece can be seen.
@@ -137,6 +138,7 @@ function closeCuttingRun() {
     run.on = false;
     clearGlow();
     clearRack();
+    landOffcut();
     if (run.group) { clearGroup(run.group); scene.remove(run.group); run.group = null; }
     for (const m of Object.values(run.meshes)) {
         if (m.userData.runColor !== undefined) m.material.color.setHex(m.userData.runColor);
@@ -690,9 +692,69 @@ function paintStrip(s) {
         p.classList.add(step >= first && step <= run.i ? 'focus' : 'on');
         if (step === run.i) p.classList.add('newest');
     });
-    // a piece cut from an offcut: that offcut on the rack it came from lights up as well
+    // a piece cut from an offcut: that offcut on the rack it came from lights up as well,
+    // and every offcut already taken from that rack is left as an outline
     if (s.oid !== undefined) document.querySelectorAll(`#run-strip .run-rack-item[data-oid="${s.oid}"]`).forEach(p => p.classList.add('focus'));
-    fig.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest', inline: 'center' });
+    const taken = new Set(run.steps.slice(0, run.i + 1).filter(t => t.oid !== undefined && t.oid !== s.oid).map(t => t.oid));
+    document.querySelectorAll('#run-strip .run-rack-item').forEach(p => p.classList.toggle('taken', taken.has(p.dataset.oid)));
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (s.oid !== undefined && s.j === 0 && !reduced && flyOffcut(s, fig)) return;
+    landOffcut();
+    fig.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'nearest', inline: 'center' });
+}
+
+// The first piece cut from a carried offcut: the offcut lifts off the rack it was left on
+// (at the end of an earlier row) and flies across to the start of this elevation's row,
+// the strip scrolling along with it, and lands as the offcut its pieces are drawn on.
+// Returns false when there is nothing to fly from (the offcut was not on a rack).
+function flyOffcut(s, fig) {
+    const strip = document.getElementById('run-strip');
+    const from = document.querySelector(`#run-strip .run-rack-item[data-oid="${s.oid}"] rect`);
+    const to = fig.querySelector('.run-offcut-stock');
+    if (!from || !to) return false;
+    landOffcut();
+    // where each sits in the strip's content, so the flight is unaffected by scrolling
+    const at = el => {
+        const r = el.getBoundingClientRect(), o = strip.getBoundingClientRect();
+        return { x: r.left - o.left + strip.scrollLeft, y: r.top - o.top + strip.scrollTop, w: r.width, h: r.height };
+    };
+    const a = at(from), b = at(to);
+    const ghost = document.createElement('div');
+    ghost.className = 'run-ghost';
+    ghost.style.setProperty('--hue', s.hue.toFixed(1));
+    ghost.textContent = run.plan.kind === 'plank' ? `L${s.board.no}` : `${s.board.no}`;
+    if (run.plan.kind !== 'plank') ghost.style.writingMode = 'horizontal-tb';
+    strip.appendChild(ghost);
+    fig.classList.add('arriving');
+    const centre = (r, axis) => axis === 'x'
+        ? Math.max(0, Math.min(strip.scrollWidth - strip.clientWidth, r.x + r.w / 2 - strip.clientWidth / 2))
+        : Math.max(0, Math.min(strip.scrollHeight - strip.clientHeight, r.y + r.h / 2 - strip.clientHeight / 2));
+    const scroll0 = { x: centre(a, 'x'), y: centre(a, 'y') }, scroll1 = { x: centre(b, 'x'), y: centre(b, 'y') };
+    const lift = 0.18, ms = RUN_FLY / run.speed, t0 = performance.now();
+    const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    const frame = now => {
+        if (!run.on || run.flight !== flight) return;
+        const t = Math.min(1, (now - t0) / ms);
+        // a moment held on the rack, glowing, then across
+        const k = t < lift ? 0 : ease((t - lift) / (1 - lift));
+        const mix = (p, q) => p + (q - p) * k;
+        Object.assign(ghost.style, { left: mix(a.x, b.x) + 'px', top: mix(a.y, b.y) + 'px', width: mix(a.w, b.w) + 'px', height: mix(a.h, b.h) + 'px' });
+        strip.scrollLeft = mix(scroll0.x, scroll1.x);
+        strip.scrollTop = mix(scroll0.y, scroll1.y);
+        if (t < 1) requestAnimationFrame(frame);
+        else landOffcut();
+    };
+    const flight = run.flight = { ghost, fig };
+    requestAnimationFrame(frame);
+    return true;
+}
+
+// End a flight: the ghost goes and the offcut it carried shows where it landed.
+function landOffcut() {
+    if (!run.flight) return;
+    run.flight.ghost.remove();
+    run.flight.fig.classList.remove('arriving');
+    run.flight = null;
 }
 
 function esc(t) { return String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
