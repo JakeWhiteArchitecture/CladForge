@@ -501,6 +501,7 @@ function onShowAll() {
 
 function onViewportClick(event) {
     if (event.target !== renderer.domElement || !allMeshes.length || state._dragged) return;
+    if (inCuttingRun()) return;                // the run is a view: nothing is picked or edited
     const dim = pickDim(event);
     if (dim && !state.levels) { openCourseDialog(dim); return; }
     // While the level picker is open every click is a height, wherever it lands.
@@ -1102,11 +1103,12 @@ import ifc_generator`);
 }
 
 // ─── BOARDS AND WASTE ───
-// Every panel of every built chain is packed onto stock boards together
-// (cladding_nesting.py), so an offcut from one chain can feed another. The quick check
-// (16 strategies, a few ms) runs after each finished rebuild, debounced like a typed
-// field and never on a slider frame. Optimise boards runs the full search on demand; the
-// cutting plan always uses it.
+// Every panel of every built chain is packed onto stock boards (cladding_nesting.py),
+// each elevation on its own so every board is cut for one elevation; the readout says
+// how many more that takes than packing the whole job together. The quick check (16
+// strategies, a few ms) runs after each finished rebuild, debounced like a typed field
+// and never on a slider frame. Optimise boards runs the full search on demand; the
+// cutting plan and the cutting run always use it.
 let _nestTimer = null, _nestSeq = 0;
 function scheduleNesting() {
     if (_nestTimer) clearTimeout(_nestTimer);
@@ -1124,6 +1126,7 @@ async function runNesting(deep) {
     const box = document.getElementById('waste-readout');
     if (!pyReady || !window._lastPreview || !state.chains.some(c => c.built) || toggleValue('cladding-type') !== 'panel') {
         box.style.display = 'none';
+        document.getElementById('run-open').style.display = 'none';
         window._lastPlan = null;
         tintPanels();
         return null;
@@ -1150,6 +1153,7 @@ _json.dumps(_plan)`);
     } catch (err) {
         console.warn('packing failed', err);
         box.style.display = 'none';
+        document.getElementById('run-open').style.display = 'none';
         return null;
     }
 }
@@ -1169,10 +1173,16 @@ async function optimiseBoards() {
 function renderReadout(plan) {
     const box = document.getElementById('waste-readout'), set = (id, v) => document.getElementById(id).textContent = v;
     box.style.display = '';
+    document.getElementById('run-open').style.display = '';
     set('wr-title', `${plan.title || 'Panels'} · panels · ${plan.deep ? 'optimised' : 'quick check'}`);
     set('wr-area', `${plan.clad_area.toFixed(1)} m²`);
     set('wr-boards', `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
-    set('wr-lower', `lower bound ${plan.lower_bound}`);
+    // Packed per elevation; the pooled count shows what keeping elevations apart costs.
+    const extra = plan.n_boards - (plan.whole_job_boards || plan.n_boards);
+    set('wr-lower', `lower bound ${plan.lower_bound}` + (extra > 0 ? ` · +${extra} kept per elevation` : ''));
+    document.getElementById('wr-lower').title = extra > 0
+        ? `Each elevation is packed on its own, so every board is cut for one elevation. Packing the whole job together would need about ${plan.whole_job_boards}.`
+        : 'Each elevation is packed on its own, so every board is cut for one elevation.';
     const w = document.getElementById('wr-waste');
     w.textContent = `${(100 * plan.waste).toFixed(1)}%`;
     box.classList.toggle('over', plan.waste > 0.05);          // red above 5%
@@ -1192,27 +1202,39 @@ function renderReadout(plan) {
     tintPanels();
 }
 
+// The cutting plan exactly as the download makes it: the export geometry (trimmed at
+// openings) and the full search. The cutting run plays this same plan, so what it shows
+// is what the DXF says. asDxf: the DXF text, otherwise the plan with its boards.
+async function cuttingPlan(asDxf) {
+    const params = getParams(); params.trim = true;
+    const job = jobRecords();
+    pyodide.globals.set('_params_json', JSON.stringify(params));
+    pyodide.globals.set('_job_json', JSON.stringify(job));
+    pyodide.globals.set('_as_dxf', !!asDxf);
+    const out = await pyodide.runPythonAsync(`
+import json as _json
+from cladding_preview import generate_preview as _gp
+from cladding_constants import _parse as _prs
+from cladding_nesting import chain_plan as _cp, plan_dxf as _pd
+_xp = _json.loads(_params_json)
+_job = _json.loads(_job_json)
+_xplan = _cp(_gp(_xp)["geometry"], _prs(_xp), _job["names"], _job["area"], True)
+_pd([(_job["title"], _xplan)]) if _as_dxf else _json.dumps(_xplan)`);
+    if (asDxf) return out;
+    const plan = JSON.parse(out);
+    plan.title = job.title;
+    return plan;
+}
+
 async function downloadCuttingPlan() {
     if (!pyReady) { alert('The engine is still loading.'); return; }
-    const params = getParams(); params.trim = true;
+    const params = getParams();
     if (!params.elevations.length || params.cladding_type !== 'panel') { alert('The cutting plan is for panel cladding: build a panel chain first.'); return; }
     const btn = document.getElementById('plan-btn');
     busy(btn, true, 'Optimising boards…');
     await new Promise(r => setTimeout(r, 30));
     try {
-        const job = jobRecords();
-        pyodide.globals.set('_params_json', JSON.stringify(params));
-        pyodide.globals.set('_job_json', JSON.stringify(job));
-        const dxf = await pyodide.runPythonAsync(`
-import json as _json
-from cladding_preview import generate_preview as _gp
-from cladding_constants import _parse as _prs
-from cladding_nesting import chain_plan as _cp, plan_dxf as _pd
-_p = _json.loads(_params_json)
-_o = _gp(_p)
-_job = _json.loads(_job_json)
-_pd([(_job["title"], _cp(_o["geometry"], _prs(_p), _job["names"], _job["area"], True))])`);
-        showReminder(new Blob([dxf], { type: 'application/dxf' }), 'cutting-plan.dxf');
+        showReminder(new Blob([await cuttingPlan(true)], { type: 'application/dxf' }), 'cutting-plan.dxf');
     } catch (err) { alert('Cutting plan failed: ' + err.message); }
     finally { busy(btn, false); }
 }

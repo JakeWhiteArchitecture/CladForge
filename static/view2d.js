@@ -50,10 +50,11 @@ function readoutReserve() {
     return Math.min(0.35, (box.offsetWidth + 20) / c.clientWidth);
 }
 
-// Move the perspective camera from pose a to pose b. The direction turns on the sphere
-// round the target (a slerp), so the camera swings round the model instead of cutting
-// through it; target and distance ease across in step.
-function animatePose(a, b, done) {
+// Move the perspective camera from pose a to pose b over ms. The direction turns on the
+// sphere round the target (a slerp), so the camera swings round the model instead of
+// cutting through it; target and distance ease across in step. The cutting run uses it
+// too, to follow the pieces round the chain.
+function animatePose(a, b, done, ms = VIEW2D_MS) {
     if (view2d.anim) cancelAnimationFrame(view2d.anim);
     const q = new THREE.Quaternion();
     if (a.dir.dot(b.dir) < -0.999) q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);   // straight behind: go round
@@ -64,7 +65,7 @@ function animatePose(a, b, done) {
     controls.enabled = false;
     controls.enableDamping = false;
     const step = now => {
-        const t = easeInOut(Math.min(1, (now - start) / VIEW2D_MS));
+        const t = easeInOut(Math.min(1, (now - start) / ms));
         const dir = a.dir.clone().applyQuaternion(new THREE.Quaternion().slerp(q, t));
         const target = a.target.clone().lerp(b.target, t);
         camera.position.copy(target).addScaledVector(dir, a.dist + (b.dist - a.dist) * t);

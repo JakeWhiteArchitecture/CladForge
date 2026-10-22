@@ -172,6 +172,7 @@ function tintPanels() {
     const key = document.getElementById('wr-key');
     if (key) key.style.display = on ? '' : 'none';
     if (typeof cladGroup === 'undefined' || !cladGroup) return;
+    if (typeof inCuttingRun === 'function' && inCuttingRun()) return;    // the run colours by board
     for (const layer of cladGroup.children) for (const o of layer.children) {
         if (!o.isMesh || !/ Panel R\d/.test(o.userData.name || '')) continue;
         if (o.userData.baseColor === undefined) o.userData.baseColor = o.material.color.getHex();

@@ -225,18 +225,57 @@ def test_emptying_a_board_into_the_others_offcuts():
     assert len(boards) == 1 and sorted(q["name"] for q in boards[0]["pieces"]) == ["A", "B"]
 
 
-def test_pooling_the_job_shares_boards_between_elevations():
-    frame = {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 0, 1], "n": [0, -1, 0]}
-    mesh = lambda name, elev: {"type": "prism", "profile": [[0, 0], [1195, 0], [1195, 1200], [0, 1200]], "holes": [],  # noqa: E731
-                               "depth": 50.0, "thickness": 9.0, "frame": frame, "ifc_type": "panel",
-                               "name": name, "elevation": elev}
-    geometry = [mesh("A Panel R1-1", "A"), mesh("B Panel R1-1", "B")]
-    p = {"board_w": 1250, "board_h": 2500, "kerf": 3, "rotate": True}
-    apart = [nesting.chain_plan(geometry, p, [e], 0)["n_boards"] for e in ("A", "B")]
-    together = nesting.chain_plan(geometry, p, ["A", "B"], 0)
-    assert sum(apart) == 2 and together["n_boards"] == 1
-    assert together["fills"] == {"A Panel R1-1": round(2 * 1195 * 1200 / (1250 * 2500), 4),
-                                 "B Panel R1-1": round(2 * 1195 * 1200 / (1250 * 2500), 4)}
+FRAME = {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 0, 1], "n": [0, -1, 0]}
+P = {"board_w": 1250, "board_h": 2500, "kerf": 3, "rotate": True}
+
+
+def _panel(name, elev, u=0.0, v=0.0, w=1195.0, h=1200.0):
+    return {"type": "prism", "profile": [[u, v], [u + w, v], [u + w, v + h], [u, v + h]], "holes": [],
+            "depth": 50.0, "thickness": 9.0, "frame": FRAME, "ifc_type": "panel", "name": name, "elevation": elev}
+
+
+def test_each_elevation_is_packed_on_its_own():
+    """Two half-board panels on two elevations would share a board if the job were
+    pooled; per elevation each gets its own, and the pooled count is kept to compare."""
+    geometry = [_panel("A Panel R1-1", "A"), _panel("B Panel R1-1", "B")]
+    plan = nesting.chain_plan(geometry, P, ["A", "B"], 0)
+    assert plan["n_boards"] == 2 and plan["whole_job_boards"] == 1 and plan["per_elevation"]
+    assert [r["elevation"] for r in plan["rows"]] == ["A", "B"]
+    assert [(b["no"], b["elevation"], [q["name"] for q in b["pieces"]]) for b in plan["boards"]] == \
+        [(1, "A", ["A Panel R1-1"]), (2, "B", ["B Panel R1-1"])]
+    fill = round(1195 * 1200 / (1250 * 2500), 4)
+    assert plan["fills"] == {"A Panel R1-1": fill, "B Panel R1-1": fill}
+    assert plan["lower_bound"] == 2 and abs(plan["waste"] - (1 - 2 * 1195 * 1200 / (2 * 1250 * 2500))) < 1e-9
+
+
+def test_boards_and_pieces_come_in_wall_order():
+    """Elevations in the order given, boards along each by their leftmost piece, and a
+    board's pieces left to right then bottom up, whatever order the packer filled them."""
+    geometry = []
+    for k in range(6):                             # 600 x 1200 pieces: four to a board
+        for row in range(2):
+            geometry.append(_panel("A Panel R%d-%d" % (row + 1, k + 1), "A", u=k * 610.0, v=row * 1210.0, w=600, h=1200))
+    geometry += [_panel("B Panel R1-1", "B", u=2000.0, w=600), _panel("B Panel R1-2", "B", u=0.0, w=600)]
+    plan = nesting.chain_plan(geometry, P, ["B", "A"], 0, deep=True)
+    assert [b["elevation"] for b in plan["boards"]] == ["B"] + ["A"] * (plan["n_boards"] - 1)
+    assert [b["no"] for b in plan["boards"]] == list(range(1, plan["n_boards"] + 1))
+    at = lambda q: (round(q["u"]), round(q["v"]))  # noqa: E731
+    for b in plan["boards"]:
+        assert [at(q) for q in b["pieces"]] == sorted(at(q) for q in b["pieces"])
+        assert all(q["name"].startswith(b["elevation"] + " ") for q in b["pieces"])
+    a = [b for b in plan["boards"] if b["elevation"] == "A"]
+    assert [at(b["pieces"][0]) for b in a] == sorted(at(b["pieces"][0]) for b in a)
+    assert [q["name"] for q in plan["boards"][0]["pieces"]] == ["B Panel R1-2", "B Panel R1-1"]
+    assert sum(len(b["pieces"]) for b in plan["boards"]) == 14
+
+
+def test_the_cutting_plan_draws_a_row_per_elevation():
+    geometry = [_panel("A Panel R1-1", "A"), _panel("B Panel R1-1", "B")]
+    dxf = plan_dxf([("Chain 1", nesting.chain_plan(geometry, P, ["A", "B"], 0))])
+    assert "A  -  1 board(s), waste" in dxf and "B  -  1 board(s), waste" in dxf
+    assert "Board 1  -  waste" in dxf and "Board 2  -  waste" in dxf
+    assert "Each elevation packed on its own" in dxf and "would need about 1 fewer" in dxf
+    assert dxf.index("A  -  1 board(s)") < dxf.index("B  -  1 board(s)")
 
 
 def test_sizes_that_divide_the_board():
