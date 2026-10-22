@@ -76,6 +76,16 @@ function startRun(plan) {
         m.userData.runColor = m.material.color.getHex();
         m.userData.runEmissive = m.material.emissive.getHex();
     }
+    // The cladding is drawn see-through so the buildup reads behind it, and see-through
+    // surfaces are drawn back to front by each object's centre: from far off that order
+    // can put the big translucent layers behind (insulation, sheathing) over the boards
+    // and wash their colours out. While the run is open the pieces it colours are solid.
+    const solid = new Set(run.steps.map(t => run.meshes[t.piece.name]).filter(Boolean));
+    for (const m of solid) {
+        m.userData.runLook = [m.material.transparent, m.material.opacity, m.material.depthWrite];
+        Object.assign(m.material, { transparent: false, opacity: 1, depthWrite: true });
+        m.material.needsUpdate = true;
+    }
     run.group = new THREE.Group();
     scene.add(run.group);
     run.steps.forEach((s, n) => {
@@ -97,6 +107,12 @@ function closeCuttingRun() {
     for (const m of Object.values(run.meshes)) {
         if (m.userData.runColor !== undefined) m.material.color.setHex(m.userData.runColor);
         if (m.userData.runEmissive !== undefined) m.material.emissive.setHex(m.userData.runEmissive);
+        if (m.userData.runLook) {
+            const [transparent, opacity, depthWrite] = m.userData.runLook;
+            Object.assign(m.material, { transparent, opacity, depthWrite });
+            m.material.needsUpdate = true;
+            delete m.userData.runLook;
+        }
     }
     run.meshes = {};
     document.body.classList.remove('cut-run');
@@ -211,6 +227,15 @@ function glowFor(mesh, hue) {
     return g;
 }
 
+// A label too small on screen to read is noise: from 12 px tall it fades out, gone by 7.
+function fadeSmallLabel(renderer, _scene, cam) {
+    if (!cam.isPerspectiveCamera) { this.material.opacity = 1; return; }
+    const d = cam.position.distanceTo(this.getWorldPosition(_runLabelAt));
+    const px = this.scale.y * renderer.domElement.clientHeight / (2 * d * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2));
+    this.material.opacity = Math.max(0, Math.min(1, (px - 7) / 5));
+}
+const _runLabelAt = new THREE.Vector3();
+
 // "3·1" on each panel: the board it comes off and its place on that board, as on the strip.
 const _runLabelTex = {};
 function runLabel(text, mesh) {
@@ -220,10 +245,14 @@ function runLabel(text, mesh) {
         c.width = Math.ceil(ctx.measureText(text).width) + 16; c.height = 80;
         ctx.font = 'bold 64px sans-serif'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#10202a';
         ctx.fillText(text, 8, 42);
-        _runLabelTex[text] = { tex: new THREE.CanvasTexture(c), w: c.width, h: c.height };
+        const tex = new THREE.CanvasTexture(c);
+        tex.premultiplyAlpha = true;           // shrunk, the clear background must not average towards black
+        _runLabelTex[text] = { tex, w: c.width, h: c.height };
     }
     const t = _runLabelTex[text];
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: t.tex, transparent: true }));
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: t.tex, transparent: true, premultipliedAlpha: true,
+                                                                depthWrite: false }));
+    sprite.onBeforeRender = fadeSmallLabel;
     const bb = mesh.geometry.boundingBox || (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
     const narrow = Math.min(bb.max.x - bb.min.x, bb.max.y - bb.min.y);
     const k = Math.min(240, narrow < 400 ? 0.7 * narrow : 0.22 * narrow) / t.h;   // text height, mm: planks are narrow
