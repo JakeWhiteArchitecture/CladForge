@@ -54,3 +54,43 @@ def test_openings_under_a_zone_keep_their_square_corners():
     elev = _face((1000, 2300, 7000, 2400), [[1000, 2400], [7000, 2400]], [(2000, 900, 3200, 2100)])
     region = clip_region(elev, 150)
     assert abs(region.intersection(box(1000, 0, 7000, 2300)).area - (6000 * 2300 - 1200 * 1200)) < 1.0
+
+
+def test_a_narrow_face_or_pier_below_a_zone_stays_clad():
+    """Only height makes a sliver: a 130 mm wide face (a return in a chain) and a 100 mm
+    pier between two windows, both below a zone, stay clad from top to bottom."""
+    narrow = {"polygons": [{"exterior": [[0, 0], [130, 0], [130, 2115], [0, 2115]], "holes": []}],
+              "abutments": [{"enabled": True, "line": [[0, 1500], [130, 1500]]}]}
+    region = clip_region(narrow, 150)
+    assert abs(region.area - 130 * (2115 - 150)) < 1.0
+    piers = _face((500, 2600, 7500, 2700), [[500, 2700], [7500, 2700]], [(1000, 900, 2000, 2100), (2100, 900, 3100, 2100)])
+    region = clip_region(piers, 150)
+    assert abs(region.intersection(box(2000, 900, 2100, 2100)).area - 100 * 1200) < 1.0
+
+
+def test_a_zone_over_the_whole_face_leaves_nothing_and_does_not_fail():
+    face = {"polygons": [{"exterior": [[0, 0], [600, 0], [600, 200], [0, 200]], "holes": []}],
+            "abutments": [{"enabled": True, "line": [[-100, 0], [700, 0]]},
+                          {"enabled": True, "line": [[-100, 100], [700, 100]]}]}
+    assert clip_region(face, 300).area < 1.0
+
+
+def test_awkward_shapes_never_fail_the_build():
+    """Bands past the face, across it, pitched, over holes: the clad area always comes
+    back (a failure here would fail the chain's whole build)."""
+    import random
+    rng = random.Random(7)
+    for _n in range(400):
+        W, H = rng.choice([130, 600, 3000, 8000]), rng.choice([800, 2115, 3953])
+        holes = []
+        for _h in range(rng.randint(0, 3)):
+            u0, v0 = rng.uniform(1, W - 2), rng.uniform(1, H - 2)
+            u1, v1 = min(W - 1, u0 + rng.uniform(1, 1500)), min(H - 1, v0 + rng.uniform(1, 900))
+            holes.append([[u0, v0], [u1, v0], [u1, v1], [u0, v1]])
+        abuts = []
+        for _a in range(rng.randint(1, 3)):
+            a, b = sorted(rng.uniform(-200, W + 200) for _i in range(2))
+            v = rng.choice([0.0, rng.uniform(-100, H + 100)])
+            abuts.append({"enabled": True, "line": [[a, v], [b, v + rng.choice([0, rng.uniform(-900, 900)])]]})
+        elev = {"polygons": [{"exterior": [[0, 0], [W, 0], [W, H], [0, H]], "holes": holes}], "abutments": abuts}
+        clip_region(elev, rng.choice([0, 150, 3000]))
