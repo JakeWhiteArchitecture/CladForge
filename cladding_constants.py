@@ -53,6 +53,7 @@ def _parse(params):
     p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))
     p["rotate"] = bool(params.get("rotate", True))          # a piece may be cut turned 90 degrees
+    p["plank_align"] = bool(params.get("plank_align", True))   # line plank joints up where it costs no lengths
     # Derived: battens perpendicular to boards; horizontal battens on vertical counter-battens.
     vertical_planks = p["cladding_type"] == "plank" and p["plank_orient"] == "vertical"
     p["boards_run"] = "vertical" if vertical_planks else "horizontal"

@@ -450,6 +450,50 @@ def _horizontal_battens(p, vs, meshes, name, frame, depth, W, ifc_type="batten",
     return depth + d
 
 
+ALIGN_SLACK = 2      # battens: how far a joint may move, either way, to land on a line
+ALIGN_CLEAR = 2      # battens: a joint stays at least this far from one in the course alongside
+
+
+def _set_out_planks(p, courses, battens, gap, info):
+    """Split every course's runs into pieces: [(j, [segments per run])], in course order.
+    *courses* is [(j, [(a, b) runs])]. With *plank_align* on, each course lines its
+    joints up with those already used by the courses of the same stagger (every other
+    course), moving a joint up to ALIGN_SLACK battens either way to do so but keeping
+    ALIGN_CLEAR battens from the joints of the course alongside, so the joints read as
+    a few deliberate lines rather than scattered. Whether the cutting list can afford it
+    is settled on the finished pieces (cladding_preview.generate_preview)."""
+    pitch = p["batten_centres"]
+
+    def set_out(align):
+        lines, joints, out, bad = ([], []), {}, [], 0
+        for j, runs in courses:
+            own, per_run = [], []
+            for a, b in runs:
+                segs, unsup = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"],
+                                        lines[j % 2] if align else (), joints.get(j - 1, []),
+                                        ALIGN_CLEAR * pitch - 1.0, ALIGN_SLACK * pitch + 1.0)
+                bad += len(unsup)
+                own += [(e + s2) / 2.0 for (_s, e), (s2, _e) in zip(segs, segs[1:])]
+                per_run.append(segs)
+            joints[j] = sorted(own)
+            lines[j % 2][:] = sorted(set(lines[j % 2]) | {round(x, 3) for x in own})
+            out.append((j, per_run))
+        return out, bad, joints
+
+    plain, bad, plain_joints = set_out(False)
+    info["joints_lined_up"] = 0
+    if not p.get("plank_align", True):
+        return plain, bad
+    lined, lined_bad, lined_joints = set_out(True)
+    if lined == plain or lined_bad > bad:
+        return plain, bad
+    # Kept here; generate_preview puts the plain set-out back if the finished pieces
+    # need more stock lengths this way.
+    info["lined_up"] = True
+    info["joints_lined_up"] = sum(len(set(map(round, lined_joints[j])) ^ set(map(round, plain_joints[j]))) for j in lined_joints)
+    return lined, lined_bad
+
+
 def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Horizontal boards on vertical battens (optionally on horizontal counter-battens)."""
     name, frame = elev["name"], elev["frame"]
@@ -461,21 +505,22 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
     courses = _courses(elev, v0, H, cover)
+    band, runs = {}, []
     for j, v in enumerate(courses):
         # Set each course out along the part of the face it actually crosses, so a run
         # broken by a gable or an opening gets no seam it does not need.
         lo = max(v, v0)          # a course set out from the chain datum is cut at the base
         if v + face - lo < 1.0:
             continue
-        runs = strip_intervals(region, lo, v + face) if region is not None else [(0.0, W)]
-        piece = 0
-        for a, b in runs:
-            segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"])
-            info["unsupported_joints"] += len(bad)
-            for s, e in segs:
-                piece += 1
-                meshes.append(_prism(_rect(s, lo, e, v + face), depth, p["plank_t"], frame, "plank",
-                                     "%s Plank C%d-%d" % (name, j + 1, piece), name))
+        band[j] = (lo, v + face)
+        runs.append((j, strip_intervals(region, lo, v + face) if region is not None else [(0.0, W)]))
+    pieces, bad = _set_out_planks(p, runs, battens, gap, info)
+    info["unsupported_joints"] += bad
+    for j, per_run in pieces:
+        lo, hi = band[j]
+        for piece, (s, e) in enumerate((seg for segs in per_run for seg in segs), 1):
+            meshes.append(_prism(_rect(s, lo, e, hi), depth, p["plank_t"], frame, "plank",
+                                 "%s Plank C%d-%d" % (name, j + 1, piece), name))
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
@@ -500,16 +545,15 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
     starts = centred_positions(W, cover, offset, face)
-    for j, u in enumerate(starts):
-        runs = strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)]
-        piece = 0
-        for a, b in runs:
-            segs, bad = split_run(max(a, v0), b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"])
-            info["unsupported_joints"] += len(bad)
-            for s, e in segs:
-                piece += 1
-                meshes.append(_prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
-                                     "%s Plank C%d-%d" % (name, j + 1, piece), name))
+    runs = [(j, [(max(a, v0), b) for a, b in (strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)])])
+            for j, u in enumerate(starts)]
+    pieces, bad = _set_out_planks(p, runs, battens, gap, info)
+    info["unsupported_joints"] += bad
+    for j, per_run in pieces:
+        u = starts[j]
+        for piece, (s, e) in enumerate((seg for segs in per_run for seg in segs), 1):
+            meshes.append(_prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
+                                 "%s Plank C%d-%d" % (name, j + 1, piece), name))
     left_cut = (starts[0] + face) if starts and starts[0] < 0 else 0.0
     right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0
     info.update(n_courses=len(starts), cover=cover, batten_centres=p["batten_centres"],

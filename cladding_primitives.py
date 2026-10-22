@@ -7,6 +7,7 @@ routines set out vertical battens across an elevation and horizontal battens
 up it. All functions return sorted lists.
 """
 
+import bisect
 import math
 
 
@@ -225,7 +226,14 @@ def panel_bays(length, panel, gap, offset):
     return panels, sorted(joints)
 
 
-def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, target=None):
+def _near(xs, x, tol):
+    """Whether sorted *xs* holds a value within *tol* of *x*."""
+    i = bisect.bisect_left(xs, x - tol)
+    return i < len(xs) and xs[i] <= x + tol
+
+
+def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, target=None,
+              lines=(), avoid=(), clear=0.0, slack=0.0):
     """Split the run [a, b] into board lengths no longer than *max_len* (the stock).
 
     *target* is the length a piece is set out to (*max_len* when not given): shorter
@@ -238,6 +246,12 @@ def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, tar
     target and the joint is reported as unsupported. Returns (segments,
     unsupported_joints) with segments as (start, end) already shortened by half the
     joint gap at each internal joint.
+
+    *lines* are joint lines to line up with (sorted): a joint moves to the nearest of them
+    within *slack* of where it would have gone (the first piece of a run may take any
+    line within the target, since the lines already carry the stagger), never nearer
+    than *clear* to a joint in *avoid* (the course alongside), never past the stock and
+    never leaving a piece under *min_piece*.
     """
     target = max_len if target is None else max(min(target, max_len), min(min_piece, max_len))
     if b - a <= target + 1e-6:
@@ -255,6 +269,17 @@ def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, tar
         if candidates:
             # within the target, the furthest batten; past it, the nearest one beyond
             cut = candidates[-1] if candidates[-1] <= cur + want else candidates[0]
+            if lines:
+                # The first piece of a run may reach any line within the target: the
+                # lines already carry the stagger. After that a joint moves at most
+                # *slack* either way. Never past the stock, never under the minimum.
+                first = cur == a
+                lo = cur + min_piece if first else cut - slack
+                hi = min(cur + max_len, (max(cut, cur + target) if first else cut) + slack)
+                on_line = [s for s in stops if lo - 1e-6 <= s <= hi + 1e-6 and ok(s, max_len)
+                           and _near(lines, s, 1.0) and not _near(avoid, s, clear)]
+                if on_line:
+                    cut = min(on_line, key=lambda s: (abs(s - cut), s))
         elif b - cur <= max_len + 1e-6:
             segs.append((cur, b))    # no batten leaves both pieces long enough: one length
             break

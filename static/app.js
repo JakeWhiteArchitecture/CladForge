@@ -726,6 +726,7 @@ function getParams() {
     p.set_out_from_openings = document.getElementById('set_out_from_openings').checked;
     p.cladding_type = toggleValue('cladding-type');
     p.rotate = document.getElementById('rotate').checked;
+    p.plank_align = document.getElementById('plank_align').checked;
     p.plank_orient = toggleValue('plank-orient');
     p.counter_batten = val('counter_batten');
     return p;
@@ -890,7 +891,7 @@ function setStatus(text, cls) {
 // (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
-const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations'];
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'plank_align'];
 const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient'];
 
 function snapshotState() {

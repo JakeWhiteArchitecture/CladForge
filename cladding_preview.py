@@ -37,14 +37,55 @@ def _build_all(p):
     return meshes, dims, infos
 
 
-def generate_preview(params):
-    p = _parse(params)
+def _generate(p):
     meshes, dims, infos = _build_all(p)
     if p["trim"]:
         meshes = apply_boolean_ops(meshes, p)
     # Boards are mitred to the reveal linings on the finished outline, so the edges of
     # holes left by trimming are mitred as well as the ends that land on a jamb.
     meshes = mitre_to_linings(meshes, p, infos)
+    return meshes, dims, infos
+
+
+def _worse(lined, plain, p, names, changed):
+    """The elevations of *changed* whose finished planks need more stock lengths in
+    *lined* than in *plain*, packed as the app packs them (every elevation of the job
+    together, so each gets the same share of the full search). The full search never
+    needs more than the quick check, so lined's quick count no more than plain's full
+    one settles it without running the full search on lined."""
+    from cladding_nesting import chain_plan
+    rows = lambda meshes, deep: {r["elevation"]: r["n_boards"] for r in chain_plan(meshes, p, names, 0.0, deep)["rows"]}  # noqa: E731
+    lq, pq = rows(lined, False), rows(plain, False)
+    worse = {e for e in changed if lq.get(e, 0) > pq.get(e, 0)}
+    left = [e for e in changed if e not in worse]
+    if left:
+        pd = rows(plain, True)
+        unsure = [e for e in left if lq.get(e, 0) > pd.get(e, 0)]
+        if unsure:
+            ld = rows(lined, True)
+            worse |= {e for e in unsure if ld.get(e, 0) > pd.get(e, 0)}
+    return worse
+
+
+def generate_preview(params):
+    p = _parse(params)
+    meshes, dims, infos = _generate(p)
+    lined = [i["elevation"] for i in infos if i.get("lined_up")]
+    if lined:
+        # Lining joints up is for looks, so it must not cost a stock length: on any
+        # elevation where the finished pieces need more, with the readout's quick check
+        # or the cutting plan's full search, the plain set-out goes back.
+        plain_meshes, plain_dims, plain_infos = _generate(dict(p, plank_align=False))
+        worse = _worse(meshes, plain_meshes, p, [e.get("name") for e in p["elevations"]], lined)
+        if worse:
+            meshes = [m for m in meshes if m.get("elevation") not in worse] + \
+                     [m for m in plain_meshes if m.get("elevation") in worse]
+            dims = [d for d in dims if d.get("elevation") not in worse] + \
+                   [d for d in plain_dims if d.get("elevation") in worse]
+            infos = [pi if pi["elevation"] in worse else i for i, pi in zip(infos, plain_infos)]
+            for i in infos:
+                if i["elevation"] in worse:
+                    i["joints_kept_plain"] = True
     return {"geometry": _ensure_unique_names(meshes), "dimensions": dims, "info": infos}
 
 
