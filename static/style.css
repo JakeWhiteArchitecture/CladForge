@@ -263,3 +263,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .run-boards.planks { gap: 10px; }
 .run-boards.planks .run-board { padding: 4px 2px; }
 .run-boards.planks figcaption { font-size: 10px; line-height: 1.2; }
+.waste-readout .wr-splices { font-size: 11px; line-height: 1.7; white-space: nowrap; }
+.waste-readout .wr-splices .mini { padding: 0 6px; font-size: 10px; margin-left: 4px; }
+.waste-readout .wr-warn { color: #f59e0b; }
+.waste-readout #wr-splices-btn { margin: 2px 0; }

@@ -1217,6 +1217,10 @@ function renderReadout(plan) {
     document.getElementById('wr-sizes').title = plank ? 'Piece lengths that divide a stock length with nothing over, kerf and end trim allowed for'
         : 'Cut widths (across) and heights (along) that divide the board with nothing over, kerf and edge trim allowed for';
     document.getElementById('wr-optimise').style.display = plan.deep ? 'none' : '';
+    // Optimise splices is for planks; its proposals are for the setting-out they were
+    // worked out on, so a rebuild clears them.
+    document.getElementById('wr-splice-row').style.display = plank ? '' : 'none';
+    document.getElementById('wr-splices').innerHTML = '';
     box.title = `Packed ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, `
         + `${plan.strategies} strateg${plan.strategies === 1 ? 'y' : 'ies'}, ${plan.ms} ms`;
     tintPanels();
@@ -1244,6 +1248,84 @@ _pd([(_job["title"], _xplan)]) if _as_dxf else _json.dumps(_xplan)`);
     const plan = JSON.parse(out);
     plan.title = job.title;
     return plan;
+}
+
+// ─── OPTIMISE SPLICES ───
+// Planks only: the Splices slider tried from Fewer to More in 10% steps (and where it is
+// now), each a full rebuild of the setting-out packed onto stock lengths by the quick
+// check (cladding_preview.splice_trial). Stock length and shortest piece stay as set.
+// One trial per call, so the button can say how far it has got. The settings that do
+// better than the current one are proposed, each with Apply.
+const SPLICE_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+async function optimiseSplices() {
+    if (!pyReady || toggleValue('cladding-type') !== 'plank' || !window._lastPreview) return;
+    const btn = document.getElementById('wr-splices-btn'), box = document.getElementById('wr-splices');
+    const params = getParams(), job = jobRecords(), current = parseFloat(val('plank_splice')) || 0;
+    const settings = [...new Set(SPLICE_STEPS.concat([current]))].sort((a, b) => a - b);
+    btn.disabled = true;
+    box.innerHTML = '';
+    const trials = [];
+    try {
+        for (let i = 0; i < settings.length; i++) {
+            btn.textContent = `Trying splices ${settings[i]}% (${i + 1} of ${settings.length})…`;
+            await new Promise(r => setTimeout(r, 20));          // let the label paint before Python blocks
+            pyodide.globals.set('_st_json', JSON.stringify({ params: Object.assign({}, params, { plank_splice: settings[i] }),
+                                                             names: job.names, area: job.area }));
+            trials.push(JSON.parse(await pyodide.runPythonAsync(`
+import json as _json
+from cladding_preview import splice_trial as _st
+_stj = _json.loads(_st_json)
+_json.dumps(_st(_stj["params"], _stj["names"], _stj["area"]))`)));
+        }
+        pyodide.globals.set('_st_all', JSON.stringify({ trials, current }));
+        const ranked = JSON.parse(await pyodide.runPythonAsync(`
+import json as _json
+from cladding_preview import rank_splices as _rs
+_sta = _json.loads(_st_all)
+_json.dumps(_rs(_sta["trials"], _sta["current"]))`));
+        renderSpliceOptions(ranked, current);
+    } catch (err) {
+        setStatus('Optimise splices failed: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Optimise splices';
+    }
+}
+
+// The current setting, then up to three that do better: fewer planks too long for the
+// stock, else fewer lengths, else the same with less waste. Fewer lengths can cost more
+// pieces to cut and fix, so each offer shows both.
+function renderSpliceOptions(ranked, current) {
+    const box = document.getElementById('wr-splices');
+    const now = ranked.find(t => t.splice === current) || ranked[0];
+    const better = t => t.too_long < now.too_long || (t.too_long === now.too_long
+        && (t.n_boards < now.n_boards || (t.n_boards === now.n_boards && t.waste < now.waste - 0.0005)));
+    const line = t => `<b>${t.splice}%</b> · ${t.piece} mm: ${t.n_boards} lengths`
+        + (t === now ? '' : ` (${t.n_boards - now.n_boards >= 0 ? '+' : '−'}${Math.abs(t.n_boards - now.n_boards)})`)
+        + ` · ${(100 * t.waste).toFixed(1)}% · ${t.n_pieces} pieces`
+        + (t.too_long ? ` · <span class="wr-warn">${t.too_long} too long for the stock</span>` : '');
+    // Each offer trades something for something: one no better than an earlier offer on
+    // lengths, waste and pieces all at once (the same outcome, or more pieces for nothing)
+    // is left out, so the list runs from fewest lengths to fewest pieces.
+    const offers = [];
+    for (const t of ranked) {
+        if (offers.length === 3) break;
+        if (t === now || !better(t)) continue;
+        if (offers.some(o => o.too_long <= t.too_long && o.n_boards <= t.n_boards
+                             && o.waste <= t.waste + 0.0005 && o.n_pieces <= t.n_pieces)) continue;
+        offers.push(t);
+    }
+    box.innerHTML = `<div class="wr-muted">Now ${line(now)}</div>` + (offers.length
+        ? offers.map(t => `<div>${line(t)} <button class="mini" onclick="applySplice(${t.splice})">Apply</button></div>`).join('')
+        : `<div class="wr-muted">Your setting is the best of the ${ranked.length} tried.</div>`);
+    window._spliceOptions = { ranked, current, offers };
+}
+
+function applySplice(s) {
+    document.getElementById('plank_splice').value = s;
+    onNumeric();                                       // rebuilds, repacks, and clears the proposals
+    setStatus(`Splices set to ${s}%: the pieces are now set out to ${splicePiece()}`, 'ready');
 }
 
 async function downloadCuttingPlan() {

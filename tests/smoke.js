@@ -1224,6 +1224,21 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || !/^Length 1 of \d+$/.test(plankRun.counter) || plankRun.onWall !== plankRun.steps || plankRun.figures !== plankRun.boards
         || !/lengths of 3600/.test(plankRun.summary))
         throw new Error('plank cutting list or trim wrong: ' + JSON.stringify({ planks, plankRun }));
+    // Optimise splices: every Splices step tried, the current one shown, Apply moves the slider.
+    const splices = await page.evaluate(async () => {
+        await optimiseSplices();
+        const o = window._spliceOptions;
+        return { tried: o.ranked.length, offers: o.offers.map(t => t.splice), now: o.current,
+                 text: document.getElementById('wr-splices').innerText.replace(/\n/g, ' | ') };
+    });
+    console.log('optimise splices:', JSON.stringify(splices));
+    if (splices.tried < 11 || !/^Now 30% · \d+ mm: \d+ lengths/.test(splices.text))
+        throw new Error('optimise splices wrong: ' + JSON.stringify(splices));
+    if (splices.offers.length) {
+        await page.click('#wr-splices button');
+        await page.waitForFunction(s => +document.getElementById('plank_splice').value === s, splices.offers[0], { timeout: 10000 });
+        await page.waitForFunction(() => document.getElementById('wr-splices').innerHTML === '', null, { timeout: 30000 });
+    }
     // The floor grid toggles from the legend and with G.
     await page.evaluate(() => document.activeElement && document.activeElement.blur());
     await page.keyboard.press('g');
