@@ -1133,17 +1133,21 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         const want = runColor(runHue(s.k), FOCUS[0], FOCUS[1]).getHex();
         const others = run.steps.filter(t => t.k !== s.k && run.meshes[t.piece.name]).map(t => run.meshes[t.piece.name].material.color.getHex());
         const c = mesh.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(mesh.matrix), p = c.clone().project(camera);
+        // every piece cut from the board in focus is on screen at once
+        const seen = run.steps.filter(t => t.k === s.k).map(t => run.meshes[t.piece.name].geometry.boundingBox
+            .getCenter(new THREE.Vector3()).applyMatrix4(run.meshes[t.piece.name].matrix).project(camera))
+            .every(q => Math.abs(q.x) < 1 && Math.abs(q.y) < 1 && q.z < 1);
         const a = fig.getBoundingClientRect(), b = document.getElementById('run-strip').getBoundingClientRect();
         return { focus: focus.length, stripStep: focus[0] && +focus[0].dataset.step, i, boardK: fig && +fig.dataset.k, k: s.k,
                  wall: mesh.material.color.getHex() === want, emissive: mesh.material.emissive.getHex() !== 0, othersDiffer: others.every(h => h !== want),
-                 glow: run.glow ? run.glow.children.length : 0, targetOff: Math.round(controls.target.distanceTo(c)),
+                 glow: run.glow ? run.glow.children.length : 0, seen,
                  onScreen: Math.abs(p.x) < 1 && Math.abs(p.y) < 1 && p.z < 1, stripShows: a.left >= b.left - 1 && a.right <= b.right + 1,
                  counter: document.getElementById('run-board').textContent, no: s.board.no, where: document.getElementById('run-where').textContent,
                  elevation: s.board.elevation, name: s.piece.name };
     });
     console.log('cutting run focus:', JSON.stringify(linked));
     if (linked.focus !== 1 || linked.stripStep !== linked.i || linked.boardK !== linked.k || !linked.wall || !linked.emissive || !linked.othersDiffer
-        || linked.glow !== 2 || linked.targetOff > 5 || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
+        || linked.glow !== 2 || !linked.seen || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
         || linked.where !== `${linked.elevation} · ${linked.name}`)
         throw new Error('cutting run focus not linked: ' + JSON.stringify(linked));
     // Playing moves on by itself; the keys step, pause and close, and nothing else in the
@@ -1177,6 +1181,51 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (played.moved < 2 || keys.i !== iBefore + 1 || !keys.playing || keys.flat || keys.wizard || closed.on || !closed.pane
         || closed.sidePanel === 'none' || !closed.restored || closed.glow || closed.labels || closed.view < 1000)
         throw new Error('cutting run playback wrong: ' + JSON.stringify({ played, iBefore, keys, closed }));
+
+    // Planks: the same run over stock lengths, a 1200 shortest piece with some splicing,
+    // and Profile as the square timber corner trim wherever a chain turns a right angle.
+    const planks = await page.evaluate(async () => {
+        selectToggle('cladding-type', 'plank'); onTypeChange();
+        selectToggle('corner-type', 'profile');
+        document.getElementById('plank_min').value = 1200;
+        document.getElementById('plank_splice').value = 30;
+        await updatePreview();
+        await new Promise(r => setTimeout(r, 1500));
+        const geo = window._lastPreview.geometry, plan = window._lastPlan;
+        const short = geo.filter(m => m.ifc_type === 'plank').map(m => {
+            const us = m.profile.map(q => q[0]), vs = m.profile.map(q => q[1]);
+            return Math.max(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs));
+        }).filter(L => L < 1199).length;
+        return { kind: plan && plan.kind, board: plan && plan.board, label: document.getElementById('wr-boards-label').textContent,
+                 trims: geo.filter(m => m.ifc_type === 'corner_trim').length, profiles: geo.filter(m => m.ifc_type === 'corner_profile').length,
+                 short, piece: document.getElementById('plank_splice_val').textContent,
+                 trimLabel: document.getElementById('trim-label').textContent };
+    });
+    await page.click('#run-open');
+    await page.waitForFunction(() => inCuttingRun() && run.i >= 0 && run.plan.kind === 'plank', null, { timeout: 120000 });
+    const plankRun = await page.evaluate(() => {
+        runPlay(false); runGo(0);
+        const r = { counter: document.getElementById('run-board').textContent + ' ' + document.getElementById('run-of').textContent,
+                    steps: run.steps.length, onWall: run.steps.filter(s => run.meshes[s.piece.name]).length,
+                    figures: document.querySelectorAll('#run-strip .run-board').length, boards: run.plan.n_boards,
+                    summary: document.getElementById('run-summary').textContent };
+        closeCuttingRun();
+        return r;
+    });
+    console.log('planks:', JSON.stringify({ planks, plankRun }));
+    if (planks.kind !== 'plank' || planks.label !== 'Lengths' || planks.board[0] !== 3600 || !planks.trims || planks.profiles
+        || !/^\d+ mm$/.test(planks.piece) || !/^End trim/.test(planks.trimLabel)
+        || !/^Length 1 of \d+$/.test(plankRun.counter) || plankRun.onWall !== plankRun.steps || plankRun.figures !== plankRun.boards
+        || !/lengths of 3600/.test(plankRun.summary))
+        throw new Error('plank cutting list or trim wrong: ' + JSON.stringify({ planks, plankRun }));
+    // The floor grid toggles from the legend and with G.
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await page.keyboard.press('g');
+    const gridOff = await page.evaluate(() => [gridHelper.visible, document.getElementById('layer-grid').checked]);
+    await page.keyboard.press('g');
+    const gridOn = await page.evaluate(() => [gridHelper.visible, document.getElementById('layer-grid').checked]);
+    console.log('grid:', JSON.stringify({ gridOff, gridOn }));
+    if (gridOff.join() !== 'false,false' || gridOn.join() !== 'true,true') throw new Error('grid toggle wrong: ' + JSON.stringify({ gridOff, gridOn }));
 
     await page.evaluate(() => hideElement(allMeshes[0]));           // a new model starts with none hidden
 

@@ -212,8 +212,9 @@ function chainCorners(chain) {
 const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master', profile: 'Profile', butt: 'Square' };
 const CORNER_LETTER = { mitre: 'M', lap: 'L', profile: 'P', butt: 'S' };
 
-// The corner profile is for right-angled external corners of panel cladding only.
-function profileOffered(k) { return toggleValue('cladding-type') === 'panel' && k > 0 && Math.abs(k - 1) < 0.05; }
+// Profile is for right-angled external corners only: the aluminium profile with panels,
+// the square timber corner trim with planks (cladding_corners.py).
+function profileOffered(k) { return k > 0 && Math.abs(k - 1) < 0.05; }
 
 function cornerDetailInForce(c) {
     const job = toggleValue('corner-type') || 'mitre';
@@ -229,7 +230,8 @@ function cornerOptions(own, profileOk, withDefault) {
     return (withDefault ? [['', 'Job default']] : []).concat([['mitre', 'Mitred'], ['lap', 'Master'], ['profile', 'Profile'], ['butt', 'Square']])
         .map(([v, t]) => {
             const off = (v === 'lap' && !panel) || (v === 'profile' && !profileOk);
-            const why = v === 'lap' ? 'panel cladding only' : 'right-angled external corners of panel cladding only';
+            const why = v === 'lap' ? 'panel cladding only' : (panel ? 'right-angled external corners only'
+                                                                       : 'right-angled external chain corners only');
             return `<option value="${v}" ${v === own ? 'selected' : ''} ${off ? 'disabled' : ''}>${t}${off ? ' (' + why + ')' : ''}</option>`;
         }).join('');
 }
@@ -665,7 +667,14 @@ _json.dumps(_ex(_pl))`);
 const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
              'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
-             'plank_len', 'closer_w', 'board_w', 'board_h', 'kerf', 'board_trim'];
+             'plank_len', 'plank_min', 'plank_splice', 'closer_w', 'board_w', 'board_h', 'kerf', 'board_trim'];
+
+// The piece length the splices slider sets out to: the stock length at Fewer, the
+// shortest piece at More (cladding_constants._parse, plank_target).
+function splicePiece() {
+    const len = +val('plank_len') || 3600, min = Math.min(+val('plank_min') || 300, len), s = +val('plank_splice') || 0;
+    return Math.round(len - s / 100 * (len - min)) + ' mm';
+}
 function val(id) { return document.getElementById(id).value; }
 function toggleValue(id) { const b = document.querySelector('#' + id + ' .turn-btn.active'); return b ? b.dataset.value : null; }
 function selectToggle(id, value) {
@@ -725,7 +734,8 @@ function getParams() {
 function onTypeChange() {
     const panel = toggleValue('cladding-type') === 'panel';
     // The master-lap needs a board to run past the corner, so it is a panel detail.
-    for (const v of ['lap', 'profile']) {          // Master and Profile are panel details
+    // Profile is offered either way: with planks it is the timber corner trim.
+    for (const v of ['lap']) {
         const b = document.querySelector('#corner-type .turn-btn[data-value="' + v + '"]');
         b.disabled = !panel;
         b.title = panel ? '' : 'Panel cladding only';
@@ -734,6 +744,10 @@ function onTypeChange() {
     }
     document.getElementById('panel-section').style.display = panel ? '' : 'none';
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
+    // kerf and trim serve both: a panel board is squared on all four edges, a plank length at its ends
+    document.getElementById('trim-label').innerHTML = panel ? 'Edge trim <span class="unit">mm off each board edge</span>'
+                                                            : 'End trim <span class="unit">mm off each end of a length</span>';
+    document.getElementById('plank_splice_val').textContent = splicePiece();
     document.getElementById('batten_centres').readOnly = panel;
     renderElevationList();              // the corner rows say which detail is in force
     updateSliderRange();
@@ -767,6 +781,7 @@ function onSlider(value) {
 }
 
 function onNumeric() {   // 300 ms debounce on typed numbers
+    document.getElementById('plank_splice_val').textContent = splicePiece();
     if (_numTimer) clearTimeout(_numTimer);
     _numTimer = setTimeout(() => { updateSliderRange(); updatePreview(); }, 300);
 }
@@ -1124,7 +1139,7 @@ function jobRecords() {
 
 async function runNesting(deep) {
     const box = document.getElementById('waste-readout');
-    if (!pyReady || !window._lastPreview || !state.chains.some(c => c.built) || toggleValue('cladding-type') !== 'panel') {
+    if (!pyReady || !window._lastPreview || !state.chains.some(c => c.built)) {
         box.style.display = 'none';
         document.getElementById('run-open').style.display = 'none';
         window._lastPlan = null;
@@ -1174,30 +1189,35 @@ function renderReadout(plan) {
     const box = document.getElementById('waste-readout'), set = (id, v) => document.getElementById(id).textContent = v;
     box.style.display = '';
     document.getElementById('run-open').style.display = '';
-    set('wr-title', `${plan.title || 'Panels'} · panels · ${plan.deep ? 'optimised' : 'quick check'}`);
+    const plank = plan.kind === 'plank';
+    set('wr-title', `${plan.title || 'Panels'} · ${plank ? 'planks' : 'panels'} · ${plan.deep ? 'optimised' : 'quick check'}`);
     set('wr-area', `${plan.clad_area.toFixed(1)} m²`);
-    set('wr-boards', `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
+    set('wr-boards-label', plank ? 'Lengths' : 'Boards');
+    set('wr-boards', plank ? `${plan.n_boards} of ${plan.board[0]}` : `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
     // Packed per elevation; the pooled count shows what keeping elevations apart costs.
     const extra = plan.n_boards - (plan.whole_job_boards || plan.n_boards);
     set('wr-lower', `lower bound ${plan.lower_bound}` + (extra > 0 ? ` · +${extra} kept per elevation` : ''));
+    const unit = plan.kind === 'plank' ? 'length' : 'board';
     document.getElementById('wr-lower').title = extra > 0
-        ? `Each elevation is packed on its own, so every board is cut for one elevation. Packing the whole job together would need about ${plan.whole_job_boards}.`
-        : 'Each elevation is packed on its own, so every board is cut for one elevation.';
+        ? `Each elevation is packed on its own, so every ${unit} is cut for one elevation. Packing the whole job together would need about ${plan.whole_job_boards}.`
+        : `Each elevation is packed on its own, so every ${unit} is cut for one elevation.`;
     const w = document.getElementById('wr-waste');
     w.textContent = `${(100 * plan.waste).toFixed(1)}%`;
     box.classList.toggle('over', plan.waste > 0.05);          // red above 5%
     const notes = [];
-    if (plan.oversize.length) notes.push(`${plan.oversize.length} panel(s) larger than the board`);
+    if (plan.oversize.length) notes.push(plank ? `${plan.oversize.length} piece(s) longer than the stock less trim`
+                                               : `${plan.oversize.length} panel(s) larger than the board`);
     if (plan.capped) notes.push(`only the first ${plan.n_pieces} pieces packed`);
-    if (plan.trim) notes.push(`${plan.trim} mm edge trim`);
+    if (plan.trim) notes.push(`${plan.trim} mm ${plank ? 'end' : 'edge'} trim`);
     set('wr-note', notes.join(' · '));
     // Cut sizes that divide the board exactly, kerf and trim allowed for: where the design
     // can move, these are the sizes that waste nothing.
     const f = plan.friendly;
-    set('wr-sizes', f ? `Divides the board: ${f.across.join(' · ')} × ${f.along.join(' · ')}` : '');
-    document.getElementById('wr-sizes').title = 'Cut widths (across) and heights (along) that divide the board with nothing over, kerf and edge trim allowed for';
+    set('wr-sizes', !f ? '' : plank ? `Divides the length: ${f.along.join(' · ')}` : `Divides the board: ${f.across.join(' · ')} × ${f.along.join(' · ')}`);
+    document.getElementById('wr-sizes').title = plank ? 'Piece lengths that divide a stock length with nothing over, kerf and end trim allowed for'
+        : 'Cut widths (across) and heights (along) that divide the board with nothing over, kerf and edge trim allowed for';
     document.getElementById('wr-optimise').style.display = plan.deep ? 'none' : '';
-    box.title = `Packed by ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, `
+    box.title = `Packed ${plan.heuristic}, kerf ${plan.kerf} mm${plan.rotate ? ', rotation allowed' : ''}, `
         + `${plan.strategies} strateg${plan.strategies === 1 ? 'y' : 'ies'}, ${plan.ms} ms`;
     tintPanels();
 }
@@ -1229,7 +1249,7 @@ _pd([(_job["title"], _xplan)]) if _as_dxf else _json.dumps(_xplan)`);
 async function downloadCuttingPlan() {
     if (!pyReady) { alert('The engine is still loading.'); return; }
     const params = getParams();
-    if (!params.elevations.length || params.cladding_type !== 'panel') { alert('The cutting plan is for panel cladding: build a panel chain first.'); return; }
+    if (!params.elevations.length) { alert('Build a chain first: the cutting plan packs its boards or planks.'); return; }
     const btn = document.getElementById('plan-btn');
     busy(btn, true, 'Optimising boards…');
     await new Promise(r => setTimeout(r, 30));
@@ -1367,6 +1387,12 @@ function initApp() {
         const el = document.activeElement, typing = el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
         const modal = ['chain-wizard', 'course-dialog', 'download-reminder'].some(id => document.getElementById(id).classList.contains('open'));
         if ((e.key === 'e' || e.key === 'E') && !typing && !modal && !e.ctrlKey && !e.metaKey && !e.altKey) { toggle2D(); return; }
+        if ((e.key === 'g' || e.key === 'G') && !typing && !modal && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            const box = document.getElementById('layer-grid');
+            box.checked = !box.checked;
+            setLayerVisible('grid', box.checked);
+            return;
+        }
         if ((e.key === 'h' || e.key === 'H') && !typing && !modal && !e.ctrlKey && !e.metaKey && !e.altKey) {
             setPickMode(state.mode === 'hide' ? 'pick' : 'hide');
             return;

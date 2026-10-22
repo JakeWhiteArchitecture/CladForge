@@ -21,7 +21,7 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "sheathing": ("#d9c9a3", 0.35), "insulation": ("#e8d86a", 0.30), "counter_batten": ("#8b7355", 1.0),
     "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
     "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
-    "corner_profile": ("#c0c6cc", 1.0), "gasket": ("#1c1c1c", 1.0)}
+    "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#a8c66c", 1.0), "gasket": ("#1c1c1c", 1.0)}
 EPDM_T, EPDM_LAP = 2.0, 15.0    # EPDM gasket on vertical timbers: thickness, and past the timber each side
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
@@ -31,6 +31,7 @@ _NUMERIC = {  # name: (default, min, max)
     "panel_t": (9, 6, 20), "panel_w": (1200, 600, 1500), "panel_h": (2400, 1200, 3000),
     "panel_gap": (10, 0, 15), "plank_w": (150, 75, 250), "plank_t": (20, 12, 32),
     "plank_lap": (0, 0, 50), "plank_gap": (8, 0, 15), "plank_len": (3600, 1800, 6000),
+    "plank_min": (300, 100, 3000), "plank_splice": (0, 0, 100),   # shortest piece a splice may leave; 0-100 fewer to more splices
     "closer_w": (50, 25, 150),
     "board_w": (1250, 300, 3000), "board_h": (2500, 300, 5000), "kerf": (3, 0, 10), "board_trim": (0, 0, 50),   # stock and saw
 }
@@ -60,6 +61,10 @@ def _parse(params):
     p["has_cb"] = {"yes": True, "no": False}.get(p["counter_batten"], vertical_planks)
     p["cover"] = (max(25.0, p["plank_w"] - p["plank_lap"]) if p["plank_lap"] > 0
                   else p["plank_w"] + p["plank_gap"])          # lapped profiles cover less than face
+    # Splices: pieces are set out to a target between the stock length (fewest splices)
+    # and the shortest piece a splice may leave (most); never shorter than that minimum.
+    p["plank_min"] = min(p["plank_min"], p["plank_len"])
+    p["plank_target"] = p["plank_len"] - p["plank_splice"] / 100.0 * (p["plank_len"] - p["plank_min"])
     if p["cladding_type"] == "panel":                          # joints on battens: width drives centres
         bay = p["panel_w"] + p["panel_gap"]
         p["batten_centres"] = bay / max(1, int(-(-bay // MAX_BATTEN_SPAN)))

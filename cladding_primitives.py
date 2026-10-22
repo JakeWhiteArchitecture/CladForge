@@ -225,35 +225,45 @@ def panel_bays(length, panel, gap, offset):
     return panels, sorted(joints)
 
 
-def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0):
-    """Split the run [a, b] into board lengths no longer than *max_len*.
+def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, target=None):
+    """Split the run [a, b] into board lengths no longer than *max_len* (the stock).
 
-    End joints land on the nearest *stop* (batten centreline) at or before the
-    maximum length. Odd courses start with a half-length piece so joints stagger.
-    Where no stop lies within reach the board is cut at max_len and the joint is
-    reported as unsupported. Returns (segments, unsupported_joints) with segments
-    as (start, end) already shortened by half the joint gap at each internal joint.
+    *target* is the length a piece is set out to (*max_len* when not given): shorter
+    means more splices. End joints land on the nearest *stop* (batten centreline) at or
+    before it, and no splice leaves a piece shorter than *min_piece*, either side of it:
+    when no batten within the target does, the piece may run on towards the stock
+    length; a run that fits the stock whole is then left whole. Only a run shorter than
+    *min_piece* itself gives a shorter piece. Odd courses start with a half-length
+    piece so joints stagger. Where no stop lies within reach the board is cut at the
+    target and the joint is reported as unsupported. Returns (segments,
+    unsupported_joints) with segments as (start, end) already shortened by half the
+    joint gap at each internal joint.
     """
-    if b - a <= max_len + 1e-6:
+    target = max_len if target is None else max(min(target, max_len), min(min_piece, max_len))
+    if b - a <= target + 1e-6:
         return [(a, b)], []          # one whole board reaches: no seam to show
     stops = sorted(s for s in stops if a < s < b)
     segs, unsupported = [], []
     cur = a
-    target = max_len / 2.0 if stagger else max_len
+    want = max(target / 2.0, min(min_piece, target)) if stagger else target
     while b - cur > 1e-6:
-        if b - cur <= target + 1e-6:
+        if b - cur <= want + 1e-6:
             segs.append((cur, b))
             break
-        limit = cur + target
-        candidates = [s for s in stops if cur + min_piece <= s <= limit]
+        ok = lambda s, reach: cur + min_piece <= s <= cur + reach and b - s >= min_piece  # noqa: E731
+        candidates = [s for s in stops if ok(s, want)] or [s for s in stops if ok(s, max_len)]
         if candidates:
-            cut = candidates[-1]
+            # within the target, the furthest batten; past it, the nearest one beyond
+            cut = candidates[-1] if candidates[-1] <= cur + want else candidates[0]
+        elif b - cur <= max_len + 1e-6:
+            segs.append((cur, b))    # no batten leaves both pieces long enough: one length
+            break
         else:
-            cut = limit
+            cut = max(cur + min(min_piece, want), min(cur + want, b - min_piece))
             unsupported.append(cut)
         segs.append((cur, cut))
         cur = cut
-        target = max_len
+        want = target
     if joint_gap > 0 and len(segs) > 1:
         g = joint_gap / 2.0
         segs = [(s + (g if i > 0 else 0.0), e - (g if i < len(segs) - 1 else 0.0))
@@ -310,15 +320,15 @@ def corner_detail(p, override=None, k=None):
     """The corner detail in force: *override* when a corner sets its own, else the job
     setting. Master ("lap") is a panel detail: one board runs past the corner and the
     other stops a joint gap clear of it. Plank cladding has no master board to lap, so
-    it falls back to a mitre. Profile is a panel detail for right-angled external corners
-    (cladding_corners.offered); at a re-entrant corner (k <= 0), any other angle or with
-    planks it falls back to a mitre too."""
+    it falls back to a mitre. Profile is for right-angled external corners: the aluminium
+    profile with panels, the square timber trim with planks (cladding_corners); at a
+    re-entrant corner (k <= 0) or any other angle it falls back to a mitre too."""
     detail = override if override in CORNER_DETAILS else p.get("corner", "mitre")
     detail = detail if detail in CORNER_DETAILS else "mitre"
     panel = p["cladding_type"] == "panel"
     if detail == "lap" and not panel:
         return "mitre"
-    if detail == "profile" and (not panel or (k is not None and not (k > 0 and abs(k - 1.0) < 0.05))):
+    if detail == "profile" and k is not None and not (k > 0 and abs(k - 1.0) < 0.05):
         return "mitre"
     return detail
 

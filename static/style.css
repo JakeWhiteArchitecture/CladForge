@@ -260,3 +260,6 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .run-no { font-weight: 700; }
 @media (prefers-reduced-motion: reduce) { .run-board, .run-piece rect, .run-bar span { transition: none; } }
 @media (max-width: 900px) { .run-pane { flex: 0 0 55%; border-left: none; border-top: 1px solid var(--border); } }
+.run-boards.planks { gap: 10px; }
+.run-boards.planks .run-board { padding: 4px 2px; }
+.run-boards.planks figcaption { font-size: 10px; line-height: 1.2; }

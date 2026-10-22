@@ -163,8 +163,8 @@ function edgeLines(e, layer) {
 }
 
 // ─── BOARD USE ───
-// Flat, each panel is tinted by how well the board it is cut from is used, from the last
-// packing: green 90% and over, amber 75–90%, red under that. The red ones are where the
+// Flat, each panel (or plank) is tinted by how well the board (or length) it is cut from
+// is used, from the last packing: green 90% and over, amber 75–90%, red under that. The red ones are where the
 // design is costing boards. In 3D the panels keep their own colour.
 const BOARD_USE = [[0.9, 0x22c55e], [0.75, 0xf59e0b], [-1, 0xef4444]];
 function tintPanels() {
@@ -174,7 +174,7 @@ function tintPanels() {
     if (typeof cladGroup === 'undefined' || !cladGroup) return;
     if (typeof inCuttingRun === 'function' && inCuttingRun()) return;    // the run colours by board
     for (const layer of cladGroup.children) for (const o of layer.children) {
-        if (!o.isMesh || !/ Panel R\d/.test(o.userData.name || '')) continue;
+        if (!o.isMesh || !/ (Panel R|Plank C)\d/.test(o.userData.name || '')) continue;
         if (o.userData.baseColor === undefined) o.userData.baseColor = o.material.color.getHex();
         const f = on ? plan.fills[o.userData.name] : undefined;
         o.material.color.setHex(f === undefined ? o.userData.baseColor : BOARD_USE.find(c => f >= c[0])[1]);

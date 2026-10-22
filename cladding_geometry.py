@@ -137,36 +137,75 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
     in a solid L of timber (_corner_timbers); the layers behind them stay mitred. The face
     before the corner in the run carries the profile itself, over the clad height of the
     corner less the top and bottom offsets; both faces show its strip, and where there is
-    no L to carry them, check their flange lies over a batten."""
-    name, frame, D = elev["name"], elev["frame"], p["panel_t"]
+    no L to carry them, check their flange lies over a batten.
+
+    With planks it is the square timber corner trim (cladding_corners.trim_section): the
+    planks stop TRIM_BACK and the profile gap short of where the two batten faces meet,
+    square, and the trim's back lies on the batten face, its legs TRIM_LEG thick. The same
+    L of timber goes behind it where the battens are vertical; horizontal battens run on
+    to the corner mitred, under the trim's legs."""
+    name, frame = elev["name"], elev["frame"]
+    plank = p["cladding_type"] != "panel"
+    D = p["plank_t"] if plank else p["panel_t"]
+    kind = "plank" if plank else "panel"
     s = edge_settings(elev)
     for u_end, (k, _ext), detail, side in ends:
         if detail != "profile":
             continue
-        for m in meshes:
+        # where the boards stop, along u from the wall's corner line
+        stop = k * (face - D) - profiles.TRIM_BACK - s["pgap"] if plank else k * face - D - s["pgap"]
+        toward = 1.0 if side == "r" else -1.0
+        limit = u_end + toward * stop
+        for m in list(meshes):
             c = m.get("corner") or {}
-            if m["ifc_type"] == "panel" and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
-                m["corner"] = dict(c, **{"k_" + side: 0.0, "ext_" + side: k * face - D - s["pgap"]})
+            if m["ifc_type"] == kind and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
+                m["corner"] = dict(c, **{"k_" + side: 0.0, "ext_" + side: stop})
+            elif plank and m["ifc_type"] == "plank" and not m.get("holes"):
+                # Vertical planks are set out across the face and run on past its end:
+                # the ones reaching into the trim's place stop at its end, or go. Past the
+                # wall's corner line they are trimmed in height only, like the corner
+                # timbers, so they run out to the trim rather than stopping on the line.
+                us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+                near, far = (min(us), max(us)) if toward > 0 else (max(us), min(us))
+                if (far - u_end) * toward <= 0.5:
+                    continue
+                if (near - limit) * toward >= -1.0:
+                    meshes.remove(m)
+                    continue
+                if (far - limit) * toward > 0.5:
+                    lo, hi = sorted((near, limit))
+                    m["profile"] = _rect(lo, min(vs), hi, max(vs))
+                m["clip_v_at"] = sorted((u_end - toward * 2.0, u_end - toward * 0.5))
         at = [q[1] for e in edges if e["kind"] == "corner" and abs(e["p1"][0] - u_end) < 1.0 for q in (e["p1"], e["p2"])]
         if not at:
             continue
         v_from, v_to = min(at) + s["bottom"], max(at) - s["top"]
-        toward = 1.0 if side == "r" else -1.0
-        u_c = u_end + toward * k * face                          # the outer corner line
         before = (side == "r") != bool(elev.get("chain_reversed"))
-        timbers = _corner_timbers(p, meshes, u_end, k, side, before, toward, u_end + toward * (k * face - D - s["pgap"]))
+        if not plank or p["battens"] == "vertical":
+            timbers = _corner_timbers(p, meshes, u_end, k, side, before, toward, u_end + toward * stop)
+        else:
+            timbers = _vertical_corner_timbers(p, elev, meshes, u_end, k, side, before, toward, min(at), max(at))
+        if plank:
+            out = face - D + profiles.TRIM_LEG                    # the trim's outer face, as depth
+            u_c = u_end + toward * k * out                         # its outer corner line
+            u_back = u_end + toward * k * (face - D)               # where the batten faces meet
+            label, width = "Corner Trim", profiles.TRIM_SIZE
+            span, plane = sorted((u_back, u_back - toward * profiles.TRIM_BACK)), face - D
+        else:
+            out, u_c = face, u_end + toward * k * face             # the outer corner line
+            label, width = "Corner Profile", D
+            fl = profiles.FLANGE_A if before else profiles.FLANGE_B
+            span, plane = sorted((u_c - toward * D, u_c - toward * (D + fl))), face - D
         if before:
-            m = profiles.vertical_profile(frame, u_c, toward, v_from, v_to, face, D,
-                                          "%s Corner Profile" % name, name)
+            m = profiles.vertical_profile(frame, u_c, toward, v_from, v_to, out, D, "%s %s" % (name, label), name, trim=plank)
             if m:
                 meshes.append(m)
                 prof["count"] += 1
-        prof["strips"].append(profiles.strip(*sorted((u_c, u_c - toward * D)), v_from, v_to))
-        fl = profiles.FLANGE_A if before else profiles.FLANGE_B
-        span = sorted((u_c - toward * D, u_c - toward * (D + fl)))
-        if not timbers and not profiles.flange_supported(meshes, name, span, (v_from, v_to), face - D):
-            prof["warnings"].append("%s: the corner profile's %.0f mm flange at the %s end is not over a batten"
-                                    % (name, fl, "right" if side == "r" else "left"))
+        prof["strips"].append(profiles.strip(*sorted((u_c, u_c - toward * width)), v_from, v_to))
+        if not timbers and not profiles.flange_supported(meshes, name, span, (v_from, v_to), plane):
+            prof["warnings"].append("%s: the corner %s at the %s end is not over a batten"
+                                    % (name, "trim's leg" if plank else "profile's %.0f mm flange" % fl,
+                                       "right" if side == "r" else "left"))
 
 
 def _across_corners(meshes, ends):
@@ -233,6 +272,47 @@ def _corner_timbers(p, meshes, u_end, k, side, before, toward, board_end):
                 meshes.remove(other)
         done += 1
     return done
+
+
+def _vertical_corner_timbers(p, elev, meshes, u_end, k, side, before, toward, v_lo, v_hi):
+    """With vertical planks the battens run across the wall, so at a trimmed corner the
+    trim and the last plank's edge would only meet a batten every few hundred mm. The
+    same solid L of timber as _corner_timbers goes in the batten layer instead, standing
+    up the corner over its clad height: two batten widths on the face before the corner,
+    running on until flush with the other face's batten face, one behind it on the face
+    after. The horizontal battens stop against it. Vertical, so it does not dam the
+    cavity. Returns 1 when it is made."""
+    battens = [m for m in meshes if m["ifc_type"] == "batten" and not m.get("corner_timber")]
+    if not battens or v_hi - v_lo < 1.0:
+        return 0
+    bw, d0, t = p["batten_w"], float(battens[0]["depth"]), float(battens[0]["thickness"])
+    reach, width = (k * (d0 + t), 2 * bw) if before else (k * d0, bw)
+    outer = u_end + toward * reach
+    inner = outer - toward * width
+    a, b = sorted((outer, inner))
+    for m in battens:
+        us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+        if abs(float(m["depth"]) - d0) > 0.5 or (max(us) - min(us)) < (max(vs) - min(vs)):
+            continue                                      # not a horizontal batten of this layer
+        near, far = (min(us), max(us)) if toward > 0 else (max(us), min(us))
+        if (far - inner) * toward <= 0.5:
+            continue                                      # stops short of the timber already
+        if (near - inner) * toward >= -1.0:
+            meshes.remove(m)                              # wholly where the timber is
+            continue
+        lo, hi = sorted((near, inner))
+        m["profile"] = _rect(lo, min(vs), hi, max(vs))
+        c = {key: v for key, v in (m.get("corner") or {}).items() if not key.endswith("_" + side)}
+        if c:
+            m["corner"] = c
+        else:
+            m.pop("corner", None)
+    timber = _prism(_rect(a, v_lo, b, v_hi), d0, t, elev["frame"], "batten",
+                    "%s Corner Timber" % elev["name"], elev["name"])
+    timber["corner_timber"] = "wide" if before else "narrow"
+    timber["clip_v_at"] = sorted((u_end - toward * 2.0, u_end - toward * 0.5))
+    meshes.append(timber)
+    return 1
 
 
 def _gaskets(p, elev, meshes, board_back):
@@ -390,7 +470,7 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
         runs = strip_intervals(region, lo, v + face) if region is not None else [(0.0, W)]
         piece = 0
         for a, b in runs:
-            segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap)
+            segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"])
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1
@@ -424,7 +504,7 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
         runs = strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)]
         piece = 0
         for a, b in runs:
-            segs, bad = split_run(max(a, v0), b, p["plank_len"], battens, j % 2 == 1, gap)
+            segs, bad = split_run(max(a, v0), b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"])
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1

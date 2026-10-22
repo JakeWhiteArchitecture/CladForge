@@ -99,7 +99,7 @@
                         <button class="turn-btn" data-value="profile" onclick="selectToggle('corner-type','profile'); renderElevationList(); updatePreview()">Profile</button>
                         <button class="turn-btn" data-value="butt" onclick="selectToggle('corner-type','butt'); renderElevationList(); updatePreview()">Square</button>
                     </div>
-                    <p class="hint" style="margin:4px 0 0">The default for chain corners; each corner, jamb and head can be set on its own (the corner rows above, or click its edge in 2D). Mitred cuts the whole buildup on the corner's bisector. Master is a panel detail: one board runs out flush to the other's face and the other stops a joint gap clear of it. Profile is an aluminium outer corner profile, for right-angled external corners of panels. Square is a placeholder.</p>
+                    <p class="hint" style="margin:4px 0 0">The default for chain corners; each corner, jamb and head can be set on its own (the corner rows above, or click its edge in 2D). Mitred cuts the whole buildup on the corner's bisector. Master is a panel detail: one board runs out flush to the other's face and the other stops a joint gap clear of it. Profile is for right-angled external corners: an aluminium outer corner profile with panels, and with planks a square timber corner trim, 50 × 50 with 30 mm legs, the planks butting it. Square is a placeholder.</p>
                 </div>
                 <div class="derived">Battens: <span id="d-battens">Vertical</span><br>Cover / bay: <span id="d-cover">158 mm</span></div>
             </div>
@@ -151,12 +151,8 @@
                     <div class="field"><label>Board width <span class="unit">stock, as supplied</span></label><input type="number" id="board_w" value="1250" min="300" max="3000" step="10" oninput="onNumeric()"></div>
                     <div class="field"><label>Board height <span class="unit">stock</span></label><input type="number" id="board_h" value="2500" min="300" max="5000" step="10" oninput="onNumeric()"></div>
                 </div>
-                <div class="row pair">
-                    <div class="field"><label>Kerf <span class="unit">mm per saw cut</span></label><input type="number" id="kerf" value="3" min="0" max="10" step="0.5" oninput="onNumeric()"></div>
-                    <div class="field"><label>Edge trim <span class="unit">mm off each board edge</span></label><input type="number" id="board_trim" value="0" min="0" max="50" step="1" oninput="onNumeric()"></div>
-                </div>
                 <label class="chk"><input type="checkbox" id="rotate" checked onchange="updatePreview()"> Rotation allowed</label>
-                <p class="hint">The cut sizes are the panels as set out; the board is the stock they are cut from, so changing one keeps the other. Edge trim squares up factory edges before any piece is cut. The waste readout, top right of the view, packs every panel of every built chain onto boards together (kerf between pieces, offcuts reused); <b>Optimise boards</b> there runs the full search, and <b>Download cutting plan</b> always uses it.</p>
+                <p class="hint">The cut sizes are the panels as set out; the board is the stock they are cut from, so changing one keeps the other. Edge trim (below) squares up factory edges before any piece is cut. The waste readout, top right of the view, packs every panel of every built chain onto boards, each elevation on its own (kerf between pieces, offcuts reused); <b>Optimise boards</b> there runs the full search, and <b>Download cutting plan</b> always uses it.</p>
                 <p class="hint">Panel width drives batten centres: joints land on a batten, intermediate battens keep spans under 600 mm. Horizontal joints are open joints at the gap. Noggins behind them are only generated where counter-battens are on: between vertical battens a noggin sits on the drainage plane and dams it.</p>
             </div>
 
@@ -175,9 +171,24 @@
                 <div class="row pair">
                     <div class="field"><label>Lap <span class="unit">0 = open joint</span></label><input type="number" id="plank_lap" value="0" min="0" max="50" oninput="onNumeric()"></div>
                     <div class="field"><label>Joint gap <span class="unit">0–15</span></label><input type="number" id="plank_gap" value="8" min="0" max="15" oninput="onNumeric()"></div>
-                    <div class="field"><label>Max length <span class="unit">1800–6000</span></label><input type="number" id="plank_len" value="3600" min="1800" max="6000" step="100" oninput="onNumeric()"></div>
                 </div>
-                <p class="hint">Lap &gt; 0 courses at face width minus lap (lapped profiles); lap = 0 courses at face width plus gap (open-jointed). Courses start at the splash zone and work up. End joints land on battens and stagger course to course.</p>
+                <div class="row pair">
+                    <div class="field"><label>Stock length <span class="unit">1800–6000, as supplied</span></label><input type="number" id="plank_len" value="3600" min="1800" max="6000" step="100" oninput="onNumeric()"></div>
+                    <div class="field"><label>Shortest piece <span class="unit">a splice may leave</span></label><input type="number" id="plank_min" value="300" min="100" max="3000" step="50" oninput="onNumeric()"></div>
+                </div>
+                <div class="field"><label>Splices <span class="unit">fewer: pieces up to the stock length · more: down to the shortest piece</span></label>
+                    <div class="slider-row"><span class="unit" style="min-width:0;color:var(--hint);font-weight:400">Fewer</span>
+                        <input type="range" id="plank_splice" min="0" max="100" step="5" value="0" oninput="document.getElementById('plank_splice_val').textContent = splicePiece(); onNumeric()">
+                        <span class="unit" style="min-width:0;color:var(--hint);font-weight:400">More</span><span id="plank_splice_val">3600 mm</span></div></div>
+                <p class="hint">Lap &gt; 0 courses at face width minus lap (lapped profiles); lap = 0 courses at face width plus gap (open-jointed). Courses start at the splash zone and work up. End joints land on battens and stagger course to course. A run is set out in pieces of the length shown beside the slider, never longer than the stock, and no splice leaves a piece shorter than the shortest piece: only a run shorter than that is one short piece. The waste readout and cutting plan pack the pieces onto stock lengths, each elevation on its own.</p>
+            </div>
+
+            <div class="section" id="cut-section">
+                <h2>Cutting</h2>
+                <div class="row pair">
+                    <div class="field"><label>Kerf <span class="unit">mm per saw cut</span></label><input type="number" id="kerf" value="3" min="0" max="10" step="0.5" oninput="onNumeric()"></div>
+                    <div class="field"><label id="trim-label">Edge trim <span class="unit">mm off each board edge</span></label><input type="number" id="board_trim" value="0" min="0" max="50" step="1" oninput="onNumeric()"></div>
+                </div>
             </div>
 
             <div class="section">
@@ -205,7 +216,7 @@
     </div>
 
     <div class="viewport" id="viewport">
-        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall face to pick · H: hide elements · E: 2D elevation</div>
+        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall face to pick · H: hide elements · G: grid · E: 2D elevation</div>
         <div class="legend">
             <label><input type="checkbox" checked onchange="setLayerVisible('sheathing', this.checked)"><i style="background:#d9c9a3"></i> Sheathing</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('insulation', this.checked)"><i style="background:#e8d86a"></i> Insulation</label>
@@ -216,6 +227,7 @@
             <label><input type="checkbox" checked onchange="setLayerVisible('dims', this.checked)"><i style="background:#00ccff"></i> Dimensions</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('faces', this.checked)"><i style="background:#2a9d8f"></i> Picked wall faces</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('outline', this.checked)"><i style="background:#8ea3b8"></i> Outline &amp; splash</label>
+            <label title="The floor grid (G)"><input type="checkbox" id="layer-grid" checked onchange="setLayerVisible('grid', this.checked)"><i style="background:#222244;outline:1px solid #3a3a6a"></i> Grid</label>
         </div>
         <div class="dim-overlay" id="dim-overlay">
             <div><span class="dim-label">Elevation:</span> <span class="dim-value" id="dim-size">--</span></div>
@@ -230,7 +242,7 @@
         <div class="waste-readout" id="waste-readout" style="display:none">
             <div class="wr-title" id="wr-title">Chain 1 · panels</div>
             <div>Clad area <b id="wr-area">--</b></div>
-            <div>Boards <b id="wr-boards">--</b> <span class="wr-muted" id="wr-lower"></span></div>
+            <div><span id="wr-boards-label">Boards</span> <b id="wr-boards">--</b> <span class="wr-muted" id="wr-lower"></span></div>
             <div>Waste <b id="wr-waste">--</b> <button class="mini" id="wr-optimise" onclick="optimiseBoards()" title="Run the full search: every strategy, shuffled orders, then try to empty a board">Optimise boards</button></div>
             <div class="wr-muted" id="wr-note"></div>
             <div class="wr-muted" id="wr-sizes"></div>

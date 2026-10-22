@@ -59,8 +59,9 @@ class _DxfWriter:
         for a, b in zip(pts, pts[1:] + pts[:1]):
             self.add_line(a, b, layer)
 
-    def add_text(self, text, position, height=_TEXT, layer="0"):
-        self._texts.append((text, position, height, layer))
+    def add_text(self, text, position, height=_TEXT, layer="0", rotation=0.0):
+        """*rotation* in degrees, anticlockwise: 90 runs the text up the page."""
+        self._texts.append((text, position, height, layer, rotation))
 
     def to_string(self):
         lines = []
@@ -90,10 +91,12 @@ class _DxfWriter:
             a("  0"); a("LINE"); a("  8"); a(layer)
             a(" 10"); a("%.4f" % start[0]); a(" 20"); a("%.4f" % start[1]); a(" 30"); a("0.0")
             a(" 11"); a("%.4f" % end[0]); a(" 21"); a("%.4f" % end[1]); a(" 31"); a("0.0")
-        for text, pos, height, tlayer in self._texts:
+        for text, pos, height, tlayer, rotation in self._texts:
             a("  0"); a("TEXT"); a("  8"); a(tlayer)
             a(" 10"); a("%.4f" % pos[0]); a(" 20"); a("%.4f" % pos[1]); a(" 30"); a("0.0")
             a(" 40"); a("%.4f" % height); a("  1"); a(text.replace("\n", " "))
+            if rotation:
+                a(" 50"); a("%.4f" % rotation)
         a("  0"); a("ENDSEC"); a("  0"); a("EOF")
         return "\r\n".join(lines) + "\r\n"
 
@@ -226,7 +229,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for m in by_elev.get(name, []):
             if m["ifc_type"] == "reveal":
                 continue        # a reveal lining is perpendicular to this view
-            if m["ifc_type"] == "corner_profile":
+            if m["ifc_type"] in ("corner_profile", "corner_trim"):
                 continue        # its profile is a plan section; the elevation shows its strip
             layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
             for k in range(1 + len(m.get("holes") or [])):
