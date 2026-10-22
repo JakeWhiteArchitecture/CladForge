@@ -1146,6 +1146,12 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  elevation: s.board.elevation, name: s.piece.name };
     });
     console.log('cutting run focus:', JSON.stringify(linked));
+    // Every board looked at so far was framed from a clear direction where there is one:
+    // the sample house's balcony and roofs stand in front of parts of the walls.
+    const views = await page.evaluate(() => Object.values(run.views).map(v => [v.blocked, v.tried]));
+    console.log('cutting run views (blocked sight lines, directions tried):', JSON.stringify(views));
+    if (!views.length || views.some(([b, t]) => b > 0 && t < 33))
+        throw new Error('a board was framed blocked without trying every direction: ' + JSON.stringify(views));
     if (linked.focus !== 1 || linked.stripStep !== linked.i || linked.boardK !== linked.k || !linked.wall || !linked.emissive || !linked.othersDiffer
         || linked.glow !== 2 || !linked.seen || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
         || linked.where !== `${linked.elevation} · ${linked.name}`)

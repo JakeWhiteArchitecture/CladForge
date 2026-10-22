@@ -18,7 +18,7 @@ from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
-from cladding_primitives import clip_bounds, clip_bounds_v, splash_rings, openings
+from cladding_primitives import clip_bounds, clip_bounds_v, splash_rings, openings, ROW_MIN
 from cladding_edges import offset_region
 
 TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel", "gasket"})
@@ -121,7 +121,15 @@ def _merge_spans(spans, tol):
 
 
 def clip_region(elev, splash):
-    """Outline minus splash-zone bands: the area battens and cladding may occupy."""
+    """Outline minus splash-zone bands: the area battens and cladding may occupy.
+
+    Under each band, across its width, any part of the face thinner than the shortest
+    row (ROW_MIN) is not clad either: between the zone and the roof or slab that sets it
+    (its section taken out as a penetration) the face can leave a strip a few tens of mm
+    high, or a wedge under a pitched line, and every board crossing it would be cut to
+    a sliver. Found by opening (shrink, then grow back, square-cornered) the part of the
+    region below the band: a strip at least a row high, the wall under a balcony and
+    the cladding round a window all come back unchanged."""
     region = region_polygon(elev)
     bands = []
     for ring in splash_rings(elev, splash):
@@ -134,7 +142,28 @@ def clip_region(elev, splash):
         cut = _difference(region, unary_union(bands))
         if cut is not None:
             region = cut
+        for band in bands:
+            region = _drop_slivers_under(region, band)
     return region
+
+
+def _drop_slivers_under(region, band):
+    """*region* less its parts below *band*, within the band's width, too thin to clad."""
+    u0, _v0, u1, v1 = band.bounds
+    _ru0, rv0, _ru1, _rv1 = region.bounds
+    under = _intersection(region, box(u0, rv0 - 1.0, u1, v1))
+    if under is None or under.is_empty:
+        return region
+    half = ROW_MIN / 2.0 - 0.01
+    try:
+        kept = under.buffer(-half, join_style=2).buffer(half, join_style=2)
+    except Exception:
+        return region
+    thin = _difference(under, kept)
+    if thin is None or thin.is_empty or thin.area < 1.0:
+        return region
+    cut = _difference(region, thin)
+    return region if cut is None else cut
 
 
 def iter_polygons(geom):
