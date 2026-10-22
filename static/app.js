@@ -726,6 +726,7 @@ function getParams() {
     p.set_out_from_openings = document.getElementById('set_out_from_openings').checked;
     p.cladding_type = toggleValue('cladding-type');
     p.rotate = document.getElementById('rotate').checked;
+    p.share_offcuts = document.getElementById('share_offcuts').checked;
     p.plank_orient = toggleValue('plank-orient');
     p.counter_batten = val('counter_batten');
     return p;
@@ -890,7 +891,7 @@ function setStatus(text, cls) {
 // (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
-const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations'];
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts'];
 const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient'];
 
 function snapshotState() {
@@ -1196,11 +1197,14 @@ function renderReadout(plan) {
     set('wr-boards', plank ? `${plan.n_boards} of ${plan.board[0]}` : `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
     // Packed per elevation; the pooled count shows what keeping elevations apart costs.
     const extra = plan.n_boards - (plan.whole_job_boards || plan.n_boards);
-    set('wr-lower', `lower bound ${plan.lower_bound}` + (extra > 0 ? ` · +${extra} kept per elevation` : ''));
     const unit = plan.kind === 'plank' ? 'length' : 'board';
-    document.getElementById('wr-lower').title = extra > 0
-        ? `Each elevation is packed on its own, so every ${unit} is cut for one elevation. Packing the whole job together would need about ${plan.whole_job_boards}.`
-        : `Each elevation is packed on its own, so every ${unit} is cut for one elevation.`;
+    set('wr-lower', `lower bound ${plan.lower_bound}`
+        + (plan.share_offcuts && plan.saved > 0 ? ` · ${plan.saved} saved with offcuts` : '')
+        + (extra > 0 ? ` · +${extra} ${plan.share_offcuts ? 'over packing it all together' : 'kept per elevation'}` : ''));
+    document.getElementById('wr-lower').title = (plan.share_offcuts
+        ? `Each elevation cuts what it can from the offcuts the elevations before it leave: ${plan.from_offcuts} piece${plan.from_offcuts === 1 ? '' : 's'}, ${plan.saved} ${unit}${plan.saved === 1 ? '' : 's'} fewer to buy.`
+        : `Each elevation is packed on its own, so every ${unit} is cut for one elevation.`)
+        + (extra > 0 ? ` Packing the whole job together would need about ${plan.whole_job_boards}.` : '');
     const w = document.getElementById('wr-waste');
     w.textContent = `${(100 * plan.waste).toFixed(1)}%`;
     box.classList.toggle('over', plan.waste > 0.05);          // red above 5%
