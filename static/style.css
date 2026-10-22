@@ -268,3 +268,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .waste-readout .wr-splices .mini { padding: 0 6px; font-size: 10px; margin-left: 4px; }
 .waste-readout .wr-warn { color: #f59e0b; }
 .waste-readout #wr-splices-btn { margin: 2px 0; }
+/* offcuts: carried on, on the rack, and cut later from a board's offcut */
+.run-offcut-stock { fill: hsl(var(--hue), 18%, 30%); }
+.run-later { fill: none; stroke: hsl(var(--hue), 60%, 70%); stroke-width: 8; stroke-dasharray: 40 24; }
+.run-later-to { fill: #c9d6e2; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; }
+.run-rack-item rect { fill: hsl(var(--hue), 24%, 62%); stroke: #10202a; stroke-width: 6; transition: fill 0.2s; }
+.run-rack-item rect.run-rack-hatch { fill: url(#run-hatch); opacity: 0.35; stroke: none; }
+.run-rack-item.focus rect:first-child { fill: hsl(var(--hue), 88%, 58%); stroke: #fff; stroke-width: 10; filter: drop-shadow(0 0 30px hsl(var(--hue), 95%, 62%)); }
+.run-rack-item text { fill: #10202a; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 700; }
+.run-rack { border: 1px dashed #5b6b7a; }

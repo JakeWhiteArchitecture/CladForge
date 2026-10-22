@@ -189,6 +189,8 @@
                     <div class="field"><label>Kerf <span class="unit">mm per saw cut</span></label><input type="number" id="kerf" value="3" min="0" max="10" step="0.5" oninput="onNumeric()"></div>
                     <div class="field"><label id="trim-label">Edge trim <span class="unit">mm off each board edge</span></label><input type="number" id="board_trim" value="0" min="0" max="50" step="1" oninput="onNumeric()"></div>
                 </div>
+                <label class="chk"><input type="checkbox" id="share_offcuts" onchange="updatePreview()"> Use offcuts on later elevations</label>
+                <p class="hint">Off, every board is cut for one elevation. On, each elevation cuts what it can from the offcuts the elevations before it leave (in chain order), wherever that buys fewer boards, and keeps those pieces together on the wall. The cutting run shows each elevation's offcuts gathered at its end.</p>
             </div>
 
             <div class="section">

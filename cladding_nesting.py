@@ -349,20 +349,28 @@ def _neighbours(pieces):
     return out
 
 
-def keep_together(bars, cap, kerf, budget=TOGETHER_WORK):
+def keep_together(bars, cap, kerf, budget=TOGETHER_WORK, caps=None, pooled=()):
     """Bring the pieces cut from each stock length together on the wall, so a length's
     pieces go up side by side (two of the same length abutting, the offcut on the best
     fitting piece nearby) rather than scattered over the face. *bars* is [[free, pieces]].
     Moves one piece to another length, or swaps two between lengths, wherever that
     shortens the chains linking each length's pieces (_spread), until nothing does or the
     budget is spent. A length never overfills and none is added: the count can only fall
-    (a move that empties a length saves it), so the waste is never worse. Deterministic."""
+    (a move that empties a length saves it), so the waste is never worse. Deterministic.
+    *caps* gives each bar its own room (an offcut carried on from another elevation has
+    less than a new length), and the pieces on the *pooled* bars (those offcuts) are kept
+    together as one more group as well, so what is cut from offcuts goes up in one place."""
     groups = [list(ps) for _free, ps in bars]
     if len(groups) < 2:
         return bars
+    by_bar = caps is not None or bool(pooled)       # then bar by bar back, empty ones too
+    caps = list(caps) if caps else [cap] * len(groups)
+    pooled = set(pooled)
     need = lambda p: p["length"] + kerf  # noqa: E731
     used = [sum(need(p) for p in g) for g in groups]
+    pool = lambda gs: _spread([q for i in sorted(pooled) for q in gs[i]]) if pooled else 0.0  # noqa: E731
     cost = [_spread(g) for g in groups]
+    pool_cost = pool(groups)
     where = {p["name"]: i for i, g in enumerate(groups) for p in g}
     pieces = sorted((p for g in groups for p in g), key=lambda p: p["name"])
     near, work, improved = _neighbours(pieces), 0, True
@@ -372,14 +380,19 @@ def keep_together(bars, cap, kerf, budget=TOGETHER_WORK):
         best, rest_a = None, [x for x in groups[a] if x is not p]
         for b in bars_b:
             options = []
-            if used[b] + need(p) <= cap + EPS:              # move p over
+            if used[b] + need(p) <= caps[b] + EPS:          # move p over
                 options.append((rest_a, groups[b] + [p], None))
             for r in groups[b]:                              # or swap it for one of b's
-                if used[a] - need(p) + need(r) <= cap + EPS and used[b] - need(r) + need(p) <= cap + EPS:
+                if used[a] - need(p) + need(r) <= caps[a] + EPS and used[b] - need(r) + need(p) <= caps[b] + EPS:
                     options.append((rest_a + [r], [x for x in groups[b] if x is not r] + [p], r))
             for ga, gb, r in options:
                 work += len(ga) ** 2 + len(gb) ** 2
                 delta = _spread(ga) + _spread(gb) - cost[a] - cost[b]
+                if (a in pooled) != (b in pooled):           # in or out of the offcuts: their group changes
+                    trial = list(groups)
+                    trial[a], trial[b] = ga, gb
+                    work += sum(len(groups[i]) for i in pooled) ** 2
+                    delta += pool(trial) - pool_cost
                 key = (delta, b, r["name"] if r else "")
                 if delta < -0.5 and (best is None or key < best[0]):
                     best = (key, b, ga, gb, r)
@@ -399,13 +412,27 @@ def keep_together(bars, cap, kerf, budget=TOGETHER_WORK):
                 groups[a], groups[b] = ga, gb
                 used[a], used[b] = sum(need(x) for x in ga), sum(need(x) for x in gb)
                 cost[a], cost[b] = _spread(ga), _spread(gb)
+                pool_cost = pool(groups)
                 where[p["name"]] = b
                 if r is not None:
                     where[r["name"]] = a
                 improved = True
             if work >= budget:
                 break
+    if by_bar:
+        return [[c - u, g] for c, u, g in zip(caps, used, groups)]
     return [[cap - u, g] for u, g in zip(used, groups) if g]
+
+
+def _on_length(ps, start, kerf, width):
+    """Plank pieces cut one after another along a length from *start*, in wall order."""
+    x, placed = start, []
+    for p in sorted(ps, key=lambda p: (round(p.get("u", 0)), round(p.get("v", 0)), p["name"])):
+        placed.append({"name": p["name"], "x": x, "y": 0.0, "w": p["length"], "h": min(p["width"], width),
+                       "cut_w": p["length"], "cut_h": p["width"], "rotated": False, "area": p["area"],
+                       "u": p.get("u", 0.0), "v": p.get("v", 0.0), "ripped": p["width"] < width - 0.5})
+        x += p["length"] + kerf
+    return placed
 
 
 def pack_lengths(pieces, stock, width, kerf=3.0, trim=0.0, deep=False, work_limit=DEEP_WORK):
@@ -468,15 +495,10 @@ def pack_lengths(pieces, stock, width, kerf=3.0, trim=0.0, deep=False, work_limi
         bars = keep_together(bars, cap, kerf)
         heuristic += ", then cuts kept together" + (" (%d length(s) saved)" % (n - len(bars)) if len(bars) < n else "")
     boards, fills = [], {}
-    for free, ps in bars:
-        x, placed = trim, []
-        for p in sorted(ps, key=lambda p: (round(p.get("u", 0)), round(p.get("v", 0)), p["name"])):   # in wall order
-            placed.append({"name": p["name"], "x": x, "y": 0.0, "w": p["length"], "h": min(p["width"], width),
-                           "cut_w": p["length"], "cut_h": p["width"], "rotated": False, "area": p["area"],
-                           "u": p.get("u", 0.0), "v": p.get("v", 0.0), "ripped": p["width"] < width - 0.5})
-            x += p["length"] + kerf
+    for _free, ps in bars:
+        placed = _on_length(ps, trim, kerf, width)
         used = sum(q["area"] for q in placed)
-        end = x - kerf if placed else trim
+        end = placed[-1]["x"] + placed[-1]["w"] if placed else trim
         offcuts = [(end, 0.0, stock - trim - end, width)] if stock - trim - end > 1.0 else []
         boards.append({"pieces": placed, "waste": 1.0 - used / board_area, "offcuts": offcuts})
         for q in placed:
@@ -500,6 +522,113 @@ def wall_order(boards):
     return boards
 
 
+OFFCUT_KEEP = 150.0     # mm: an offcut shorter or narrower than this is sawdust, not carried on or shown
+
+
+def _stock_states(boards, plank, kerf, trim, uw, uh):
+    """What is left of each board to cut from: a plank length's used run (pieces and
+    kerfs), or a board's free rectangles in packing coordinates (trim off, kerf slack
+    back on the far edges, as _place sees them)."""
+    out = []
+    for b in boards:
+        if plank:
+            out.append({"board": b, "used": sum(q["w"] + kerf for q in b["pieces"])})
+        else:
+            free = []
+            for x, y, w, h in b["offcuts"]:
+                x, y = x - trim, y - trim
+                free.append((x, y, w + (kerf if x + w >= uw - 0.5 else 0.0), h + (kerf if y + h >= uh - 0.5 else 0.0)))
+            out.append({"board": b, "free": free})
+    return out
+
+
+def _state_offcuts(st, plank, kerf, trim, stock_w, uw, uh, least=1.0):
+    """The offcuts left on a board, in board millimetres (x, y, w, h), none under *least*."""
+    if plank:
+        end = trim + st["used"] - kerf if st["board"]["pieces"] or st["board"].get("later") else trim
+        left = stock_w - trim - end
+        return [(end, 0.0, left, st["board"]["width"])] if left >= least else []
+    return [(x + trim, y + trim, min(w, uw - x), min(h, uh - y)) for x, y, w, h in st["free"]
+            if min(w, uw - x) >= least and min(h, uh - y) >= least]
+
+
+def _seeded(pieces, states, plank, kerf, trim, cap, rotate, width, BW, BH, deep, work):
+    """The elevation's pieces packed with the carried offcuts already on the rack, new
+    boards opened only when none takes a piece, under each order and rule: the one
+    opening fewest new boards wins, then the one cutting most from offcuts, then the one
+    whose pieces cut from offcuts lie closest together on the wall (_spread). Returns (the states as they would be, [(state index,
+    placed piece)] for the pieces cut from offcuts, the pieces left for new boards)."""
+    best = None
+    if plank:
+        orders = [sorted(pieces, key=lambda p: (-p["length"], p["name"])),
+                  sorted(pieces, key=lambda p: (round(p.get("u", 0)), round(p.get("v", 0)), p["name"]))]
+        for order in orders:
+            for _name, rule in (LENGTH_PLACEMENTS if deep else LENGTH_PLACEMENTS[:2]):
+                bars = [[cap - st["used"], [], i] for i, st in enumerate(states)]
+                for p in order:
+                    need = p["length"] + kerf
+                    work.n += len(bars)
+                    fit = [(rule(bar[0], need), k) for k, bar in enumerate(bars) if bar[0] + EPS >= need]
+                    if fit:
+                        bars[min(fit)[1]][1].append(p)
+                        bars[min(fit)[1]][0] -= need
+                    else:
+                        bars.append([cap - need, [p], None])
+                reused = [q for bar in bars if bar[2] is not None for q in bar[1]]
+                key = (sum(1 for bar in bars if bar[2] is None), -len(reused), _spread(reused))
+                if best is None or key < best[0]:
+                    best = (key, bars)
+        trial, placed, rest = [dict(st) for st in states], [], []
+        for _free, ps, i in best[1]:
+            if i is None:
+                rest += ps
+                continue
+            for p in sorted(ps, key=lambda p: (round(p.get("u", 0)), round(p.get("v", 0)), p["name"])):
+                placed.append((i, {"name": p["name"], "x": trim + trial[i]["used"], "y": 0.0, "w": p["length"],
+                                   "h": min(p["width"], width), "cut_w": p["length"], "cut_h": p["width"], "rotated": False,
+                                   "area": p["area"], "u": p.get("u", 0.0), "v": p.get("v", 0.0),
+                                   "ripped": p["width"] < width - 0.5}))
+                trial[i]["used"] += p["length"] + kerf
+        return trial, placed, rest
+    useful = _useful(pieces, kerf)
+    for (_s, sort_key), (_pl, score), (_sp, split) in (DEEP if deep else QUICK):
+        boards = [{"pieces": [], "free": list(st["free"]), "scrap": [], "carried": i} for i, st in enumerate(states)]
+        for p in sorted(pieces, key=lambda p: (-sort_key(p), p["name"])):
+            _place(boards, p, kerf, rotate, score, split, useful, work, new_board=(BW, BH))
+        reused = [q for b in boards if "carried" in b for q in b["pieces"]]
+        key = (sum(1 for b in boards if "carried" not in b), -len(reused),
+               _spread([dict(q, w=q["cut_w"], h=q["cut_h"]) for q in reused]))
+        if best is None or key < best[0]:
+            best = (key, boards)
+    trial, placed, rest = [dict(st) for st in states], [], []
+    by_name = {p["name"]: p for p in pieces}
+    for b in best[1]:
+        if "carried" not in b:
+            rest += [by_name[q["name"]] for q in b["pieces"]]
+            continue
+        trial[b["carried"]]["free"] = b["free"] + b["scrap"]
+        placed += [(b["carried"], dict(q, x=q["x"] + trim, y=q["y"] + trim)) for q in b["pieces"]]
+    return trial, placed, rest
+
+
+def _together_with_offcuts(states, placed, new, by_name, cap, kerf, trim, width):
+    """The keep-together pass over an elevation's pieces cut from offcuts (*states* as
+    they were before it) and from new lengths at once: each offcut's pieces close together, all those cut from offcuts in
+    one place on the wall (a pooled group), each new length's together, never a new
+    length more. Returns (states, placed, new boards) as rearranged."""
+    carried = [[] for _ in states]
+    for i, q in placed:
+        carried[i].append(by_name[q["name"]])
+    bars = [[0.0, ps] for ps in carried] + [[0.0, [by_name[q["name"]] for q in b["pieces"]]] for b in new]
+    caps = [cap - st["used"] for st in states] + [cap] * len(new)       # *states* as they were before
+    out = keep_together(bars, cap, kerf, caps=caps, pooled=range(len(states)))
+    trial, placed = [], []
+    for i, (st, (_free, ps)) in enumerate(zip(states, out)):
+        trial.append(dict(st, used=st["used"] + sum(q["length"] + kerf for q in ps)))
+        placed += [(i, q) for q in _on_length(ps, trim + st["used"], kerf, width)]
+    return trial, placed, [{"pieces": _on_length(ps, trim, kerf, width)} for _free, ps in out[len(states):] if ps]
+
+
 def chain_plan(geometry, p, elevations, clad_area, deep=False):
     """The cutting plan for the given elevations' panels (one chain, or the whole job),
     with their clad area (m² net of openings). Each elevation is packed on its own, in the
@@ -507,7 +636,13 @@ def chain_plan(geometry, p, elevations, clad_area, deep=False):
     elevation; boards are numbered through the job in wall order. One row per elevation
     carries its own count and waste. Packing the whole job together could pass an offcut
     from one elevation to another: its board count (quick check) is kept as
-    whole_job_boards, so the cost of keeping elevations apart is on show."""
+    whole_job_boards, so the cost of keeping elevations apart is on show.
+
+    With *share_offcuts*, an elevation may cut pieces from the offcuts of the elevations
+    before it, wherever that saves buying a board (_cut_from_offcuts): such a piece is
+    drawn on the board it comes from (its "later" pieces). Either way each elevation
+    ends with a rack: the offcuts carried on (with sharing, from every board so far; else
+    its own), each marked with the elevation that goes on to cut from it."""
     plank = p.get("cladding_type") == "plank"
     order = list(dict.fromkeys(elevations))
     if plank:
@@ -522,7 +657,15 @@ def chain_plan(geometry, p, elevations, clad_area, deep=False):
         packer = lambda ps, deep=False, work_limit=DEEP_WORK: pack(  # noqa: E731
             ps, bw, bh, p["kerf"], p["rotate"], p.get("board_trim", 0.0), deep, work_limit)
     total = sum(len(v) for v in pieces.values()) or 1
-    boards, rows, fills, oversize, plans = [], [], {}, [], []
+    sharing = bool(p.get("share_offcuts"))
+    trim = max(0.0, float(p.get("board_trim", 0.0) or 0.0))
+    kerf = p["kerf"]
+    uw, uh = bw - 2 * trim, bh - 2 * trim
+    cap = uw + kerf                                   # a plank length: the kerf between pieces only
+    rotate = bool(p["rotate"]) and not plank
+    keep = lambda st: _state_offcuts(st, plank, kerf, trim, bw, uw, uh, OFFCUT_KEEP)  # noqa: E731
+    boards, rows, fills, oversize, plans, states, racks, reuse = [], [], {}, [], [], [], [], []
+    work = _Work()
     for e in order:
         if not pieces[e]:
             continue
@@ -530,18 +673,78 @@ def chain_plan(geometry, p, elevations, clad_area, deep=False):
         share = max(DEEP_WORK // 8, DEEP_WORK * len(pieces[e]) // total)
         pl = packer(pieces[e], deep=deep, work_limit=share)
         plans.append(pl)
-        for b in wall_order(pl["boards"]):
+        new, took = pl["boards"], []
+        if sharing and states and pl["boards"]:
+            # Cut what it can from the offcuts carried on, the rest from new boards, and
+            # keep that only if it buys fewer boards than packing the elevation alone.
+            fit = [q for q in pieces[e] if q["name"] in pl["fills"]]
+            trial, placed, rest = _seeded(fit, states, plank, kerf, trim, cap, rotate, bh, uw + kerf, uh + kerf, deep, work)
+            # Not worth packing what is left unless even its lower bound would buy fewer.
+            bound = math.ceil(sum(q["length"] if plank else q["area"] for q in rest) / (uw if plank else uw * uh) - 1e-9)
+            again = (packer(rest, deep=deep, work_limit=share) if rest else {"boards": [], "n_boards": 0}) \
+                if placed and bound < pl["n_boards"] else {"n_boards": math.inf}
+            if placed and again["n_boards"] < pl["n_boards"]:
+                if plank and deep:
+                    trial, placed, again["boards"] = _together_with_offcuts(
+                        states, placed, again["boards"], {q["name"]: q for q in pieces[e]}, cap, kerf, trim, bh)
+                states, new, took = trial, [b for b in again["boards"] if b["pieces"]], placed
+        for b in new:
+            b["width"] = bh
+        if took:
+            # Cut from an earlier board's offcut: drawn on that board, grouped by the
+            # offcut on the last rack it came from, for the run and the plan.
+            last = racks[-1]["offcuts"] if racks else []
+            groups = {}
+            for i, q in took:
+                b = states[i]["board"]
+                q = dict(q, elevation=e, source=b["no"])
+                b.setdefault("later", []).append(q)
+                at = next((o for o in last if o["no"] == b["no"] and o["rect"][0] - 0.5 <= q["x"] <= o["rect"][0] + o["rect"][2]
+                           and o["rect"][1] - 0.5 <= q["y"] <= o["rect"][1] + o["rect"][3]), None)
+                if at:
+                    at["used_by"] = e
+                key = at["id"] if at else "%s-%d-%.0f-%.0f" % (e, b["no"], q["x"], q["y"])
+                g = groups.setdefault(key, {"elevation": e, "id": key, "no": b["no"], "k": b["no"] - 1,
+                                            "rect": list(at["rect"]) if at else [q["x"], q["y"], q["w"], q["h"]], "pieces": []})
+                g["pieces"].append(q)
+            for g in groups.values():
+                g["pieces"].sort(key=lambda q: (round(q.get("u", 0.0)), round(q.get("v", 0.0)), q["name"]))
+            reuse += sorted(groups.values(), key=lambda g: (g["no"], g["rect"][0], g["rect"][1]))
+        first = len(boards)
+        for b in wall_order(new):
             b["elevation"] = e
             b["no"] = len(boards) + 1
             boards.append(b)
-        fills.update(pl["fills"])
+        own = _stock_states(boards[first:], plank, kerf, trim, uw, uh)
+        states = states + own if sharing else own
+        racks.append({"elevation": e, "offcuts": [
+            {"id": "%d-%d" % (len(racks), n), "no": st["board"]["no"], "k": st["board"]["no"] - 1, "rect": list(r), "used_by": None}
+            for n, (st, r) in enumerate((st, r) for st in states for r in keep(st))]})
         oversize += pl["oversize"]
-        rows.append({"elevation": e, "n_boards": pl["n_boards"], "waste": pl["waste"], "lower_bound": pl["lower_bound"],
-                     "net_area": pl["net_area"], "heuristic": pl["heuristic"], "n_pieces": pl["n_pieces"]})
+        rows.append({"elevation": e, "n_boards": len(boards) - first, "waste": 0.0, "lower_bound": pl["lower_bound"],
+                     "net_area": pl["net_area"], "heuristic": pl["heuristic"], "n_pieces": pl["n_pieces"],
+                     "from_offcuts": len(took), "saved": pl["n_boards"] - (len(boards) - first)})
+    # What every board ends up carrying (its own pieces and those cut later from its
+    # offcuts): its offcuts, waste and the fill each piece's panel is tinted by.
+    board_area = bw * bh
+    if not plank:
+        live = {id(st["board"]): st for st in states}
+    for b in boards:
+        everything = b["pieces"] + b.get("later", [])
+        if plank:
+            used_run = sum(q["w"] + kerf for q in everything)
+            b["offcuts"] = _state_offcuts({"board": b, "used": used_run}, plank, kerf, trim, bw, uw, uh)
+        elif id(b) in live:
+            b["offcuts"] = _state_offcuts(live[id(b)], plank, kerf, trim, bw, uw, uh)
+        used = sum(q["area"] for q in everything)
+        b["waste"] = 1.0 - used / board_area
+        for q in everything:
+            fills[q["name"]] = round(used / board_area, 4)
+    for r in rows:
+        mine = [b for b in boards if b["elevation"] == r["elevation"]]
+        r["waste"] = 1.0 - sum(q["area"] for b in mine for q in b["pieces"] + b.get("later", [])) / (len(mine) * board_area) if mine else 0.0
     whole = packer([q for e in order for q in pieces[e]])
     net = sum(r["net_area"] for r in rows)
-    board_area = bw * bh
-    trim = max(0.0, float(p.get("board_trim", 0.0) or 0.0))
     return {"boards": boards, "rows": rows, "n_boards": len(boards), "net_area": net,
             "lower_bound": sum(r["lower_bound"] for r in rows),
             "waste": 1.0 - net / (len(boards) * board_area) if boards else 0.0,
@@ -552,7 +755,9 @@ def chain_plan(geometry, p, elevations, clad_area, deep=False):
             "emptied": sum(pl["emptied"] for pl in plans), "work": sum(pl["work"] for pl in plans) + whole["work"],
             "fills": fills, "kind": "plank" if plank else "panel",
             "friendly": whole["friendly"] if plank else friendly_sizes(bw, bh, p["kerf"], trim),
-            "per_elevation": True, "whole_job_boards": whole["n_boards"], "clad_area": clad_area}
+            "per_elevation": True, "whole_job_boards": whole["n_boards"], "clad_area": clad_area,
+            "share_offcuts": sharing, "racks": racks, "reuse": reuse,
+            "from_offcuts": sum(r["from_offcuts"] for r in rows), "saved": sum(r["saved"] for r in rows)}
 
 
 # ── the cutting plan drawing ──────────────────────────────────────────────
@@ -600,7 +805,9 @@ def plan_dxf(plans):
             ("  -  %d piece(s) not packed (cap %d)" % (pl["capped"], MAX_PIECES)) if pl["capped"] else ""),
             (0.0, y), 70.0, "NOTES")
         if pl.get("per_elevation"):
-            note = "Each elevation packed on its own: every %s is cut for one elevation." % ("length" if plank else "board")
+            note = ("Offcuts passed on: an elevation cuts what it can from earlier elevations' offcuts, drawn on the %s they come from."
+                    if pl.get("share_offcuts") else
+                    "Each elevation packed on its own: every %s is cut for one elevation.") % ("length" if plank else "board")
             extra = pl["n_boards"] - pl.get("whole_job_boards", pl["n_boards"])
             if extra > 0:
                 note += "  Packing the whole job together would need about %d fewer." % extra
@@ -617,8 +824,10 @@ def plan_dxf(plans):
         ry = y - 450.0                             # the top of the next row
         for row, boards in rows:
             if row:
-                dxf.add_text("%s  -  %d %s, waste %.1f%%" % (row["elevation"], row["n_boards"],
-                             "length(s)" if plank else "board(s)", 100.0 * row["waste"]), (0.0, ry + 60.0), 80.0, "NOTES")
+                dxf.add_text("%s  -  %d %s, waste %.1f%%%s" % (row["elevation"], row["n_boards"],
+                             "length(s)" if plank else "board(s)", 100.0 * row["waste"],
+                             ", %d piece(s) cut from earlier offcuts" % row["from_offcuts"] if row.get("from_offcuts") else ""),
+                             (0.0, ry + 60.0), 80.0, "NOTES")
                 ry -= 250.0
             for i, b in enumerate(boards):         # left to right along the row
                 _draw_board(dxf, pl, b, b.get("no", i + 1), i * gx, ry - dh)
@@ -639,7 +848,7 @@ def _draw_board(dxf, pl, b, no, ox, oy):
         for x0, y0, x1, y1 in ((0, 0, bw, t), (0, bh - t, bw, bh), (0, t, t, bh - t), (bw - t, t, bw, bh - t)):
             _hatch(dxf, ox + x0, oy + y0, ox + x1, oy + y1, step=max(t, 20.0))
     dxf.add_text("Board %d  -  waste %.1f%%" % (no, 100.0 * b["waste"]), (ox, oy + bh + 60.0), 60.0, "NOTES")
-    for q in b["pieces"]:
+    for q in b["pieces"] + b.get("later", []):          # later: cut from its offcut for a later elevation
         dxf.add_ring([(q["x"], q["y"]), (q["x"] + q["w"], q["y"]), (q["x"] + q["w"], q["y"] + q["h"]),
                       (q["x"], q["y"] + q["h"])], "PIECE", ox, oy)
         label = "%s  %.0f x %.0f%s" % (q["name"], q["cut_w"], q["cut_h"], " (rotated)" if q["rotated"] else "")
@@ -662,7 +871,7 @@ def _draw_length(dxf, pl, b, no, ox, oy):
             _hatch(dxf, ox, oy + y0, ox + w, oy + y1, step=max(t, 20.0))
     dxf.add_text("Length %d  -  waste %.1f%%" % (no, 100.0 * b["waste"]), (ox - 40.0, oy), 50.0, "NOTES", rotation=90.0)
     th = min(35.0, 0.3 * w)
-    for q in b["pieces"]:
+    for q in b["pieces"] + b.get("later", []):          # later: cut from its offcut for a later elevation
         x0, y0, x1, y1 = q["y"], q["x"], q["y"] + q["h"], q["x"] + q["w"]
         dxf.add_ring([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "PIECE", ox, oy)
         label = "%s  %.0f%s" % (q["name"], q["cut_w"], ", ripped to %.0f" % q["cut_h"] if q.get("ripped") else "")

@@ -1105,12 +1105,14 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     await page.screenshot({ path: path.join(__dirname, 'smoke_run.png') });
     const runOpen = await page.evaluate(() => {
         const plan = run.plan, view = document.getElementById('viewport').getBoundingClientRect(), pane = document.getElementById('run-pane').getBoundingClientRect();
-        const names = run.steps.map(s => s.piece.name);
-        return { boards: plan.n_boards, figures: document.querySelectorAll('#run-strip .run-board').length,
+        const names = run.steps.filter(s => s.piece).map(s => s.piece.name);
+        return { boards: plan.n_boards, figures: document.querySelectorAll('#run-strip .run-board:not(.run-rack):not(.run-reuse)').length,
+                 racks: document.querySelectorAll('#run-strip .run-rack').length, rackSteps: run.steps.filter(s => s.kind === 'rack').length,
+                 planRacks: plan.racks.filter(r => r.offcuts.length).length,
                  rows: [...document.querySelectorAll('#run-strip .run-row h3')].map(h => h.firstChild.textContent.trim()),
                  planRows: plan.rows.map(r => r.elevation),
                  oneElevationPerBoard: plan.boards.every(b => b.pieces.every(q => q.name.startsWith(b.elevation + ' '))),
-                 steps: run.steps.length, pieces: plan.n_pieces, onWall: names.filter(n => run.meshes[n]).length,
+                 steps: names.length, pieces: plan.n_pieces, onWall: names.filter(n => run.meshes[n]).length,
                  whole: plan.whole_job_boards, view: Math.round(view.width), pane: Math.round(pane.width),
                  sidePanel: getComputedStyle(document.getElementById('panel')).display,
                  counter: document.getElementById('run-board').textContent + ' ' + document.getElementById('run-of').textContent,
@@ -1120,26 +1122,27 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (runOpen.figures !== runOpen.boards || runOpen.rows.join() !== runOpen.planRows.join() || runOpen.planRows.length < 2
         || !runOpen.oneElevationPerBoard || runOpen.steps !== runOpen.pieces || runOpen.onWall !== runOpen.steps
         || runOpen.sidePanel !== 'none' || Math.abs(runOpen.view - runOpen.pane) > 40 || runOpen.counter !== `Board 1 of ${runOpen.boards}`
-        || runOpen.labels !== runOpen.steps || runOpen.boards < runOpen.whole || !/^\d+ boards of 1250 × 2500 · waste /.test(runOpen.summary))
+        || runOpen.labels !== runOpen.steps || runOpen.boards < runOpen.whole || !/^\d+ boards of 1250 × 2500 · waste /.test(runOpen.summary)
+        || runOpen.racks !== runOpen.planRacks || runOpen.rackSteps !== runOpen.racks)
         throw new Error('cutting run did not open right: ' + JSON.stringify(runOpen));
     // The last piece: the same piece glows on its board and on the wall, in the board's
     // hue and no other board's, the strip has scrolled to it and the camera looks at it.
     const linked = await page.evaluate(async () => {
-        const i = run.steps.length - 1;
+        const i = run.steps.map(t => !!t.piece).lastIndexOf(true);         // the last piece (a rack step follows it)
         runGo(i);
         await new Promise(r => setTimeout(r, 1500));
         const s = run.steps[i], mesh = run.meshes[s.piece.name];
         const focus = document.querySelectorAll('#run-strip .run-piece.focus'), fig = document.querySelector('#run-strip .run-board.focus');
-        const want = runColor(runHue(s.k), FOCUS[0], FOCUS[1]).getHex();
-        const others = run.steps.filter(t => t.k !== s.k && run.meshes[t.piece.name]).map(t => run.meshes[t.piece.name].material.color.getHex());
+        const want = runColor(s.hue, FOCUS[0], FOCUS[1]).getHex();
+        const others = run.steps.filter(t => t.piece && t.key !== s.key && run.meshes[t.piece.name]).map(t => run.meshes[t.piece.name].material.color.getHex());
         const c = mesh.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(mesh.matrix), p = c.clone().project(camera);
         // every piece cut from the board in focus is on screen at once
-        const seen = run.steps.filter(t => t.k === s.k).map(t => run.meshes[t.piece.name].geometry.boundingBox
+        const seen = run.steps.filter(t => t.key === s.key).map(t => run.meshes[t.piece.name].geometry.boundingBox
             .getCenter(new THREE.Vector3()).applyMatrix4(run.meshes[t.piece.name].matrix).project(camera))
             .every(q => Math.abs(q.x) < 1 && Math.abs(q.y) < 1 && q.z < 1);
         const a = fig.getBoundingClientRect(), b = document.getElementById('run-strip').getBoundingClientRect();
         const newest = document.querySelector('#run-strip .run-piece.newest');
-        return { focus: focus.length, newest: newest && +newest.dataset.step, i, j: s.j, boardK: fig && +fig.dataset.k, k: s.k,
+        return { focus: focus.length, newest: newest && +newest.dataset.step, i, j: s.j, boardK: fig && fig.dataset.key, k: s.key,
                  wall: mesh.material.color.getHex() === want, emissive: mesh.material.emissive.getHex() !== 0, othersDiffer: others.every(h => h !== want),
                  glow: run.glow ? run.glow.children.length : 0, seen,
                  onScreen: Math.abs(p.x) < 1 && Math.abs(p.y) < 1 && p.z < 1, stripShows: a.left >= b.left - 1 && a.right <= b.right + 1,
@@ -1157,6 +1160,22 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || linked.glow !== linked.j + 1 || !linked.seen || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
         || linked.where !== `${linked.elevation} · ${linked.name}`)
         throw new Error('cutting run focus not linked: ' + JSON.stringify(linked));
+    // Each elevation ends with its rack: the offcuts gathered on the strip and laid out on
+    // the ground in front of the cladding, all in focus, and the camera on them.
+    const racked = await page.evaluate(async () => {
+        const i = run.steps.findIndex(t => t.kind === 'rack');
+        runGo(i);
+        await new Promise(r => setTimeout(r, 1500));
+        const s = run.steps[i], want = run.plan.racks[s.rack].offcuts.length;
+        const items = run.rack ? run.rack.items : [];
+        const onScreen = items.every(it => { const p = it.mesh.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(it.mesh.matrix).project(camera);
+                                             return Math.abs(p.x) < 1 && Math.abs(p.y) < 1 && p.z < 1; });
+        return { want, items: items.length, onStrip: document.querySelectorAll('#run-strip .run-rack.focus .run-rack-item.focus').length,
+                 counter: document.getElementById('run-board').textContent, onScreen };
+    });
+    console.log('cutting run rack:', JSON.stringify(racked));
+    if (!racked.want || racked.items !== racked.want || racked.onStrip !== racked.want || racked.counter !== 'Offcuts' || !racked.onScreen)
+        throw new Error('cutting run rack wrong: ' + JSON.stringify(racked));
     // Playing moves on by itself; the keys step, pause and close, and nothing else in the
     // app sees them (E would go flat, Enter would open the wizard).
     const played = await page.evaluate(async () => {
@@ -1213,8 +1232,8 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     const plankRun = await page.evaluate(() => {
         runPlay(false); runGo(0);
         const r = { counter: document.getElementById('run-board').textContent + ' ' + document.getElementById('run-of').textContent,
-                    steps: run.steps.length, onWall: run.steps.filter(s => run.meshes[s.piece.name]).length,
-                    figures: document.querySelectorAll('#run-strip .run-board').length, boards: run.plan.n_boards,
+                    steps: run.steps.filter(s => s.piece).length, onWall: run.steps.filter(s => s.piece && run.meshes[s.piece.name]).length,
+                    figures: document.querySelectorAll('#run-strip .run-board:not(.run-rack):not(.run-reuse)').length, boards: run.plan.n_boards,
                     summary: document.getElementById('run-summary').textContent };
         closeCuttingRun();
         return r;
@@ -1225,6 +1244,38 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || !/^Length 1 of \d+$/.test(plankRun.counter) || plankRun.onWall !== plankRun.steps || plankRun.figures !== plankRun.boards
         || !/lengths of 3600/.test(plankRun.summary))
         throw new Error('plank cutting list or trim wrong: ' + JSON.stringify({ planks, plankRun }));
+    // Offcuts passed on: never more lengths than without, and what each elevation cuts
+    // from them is played from the offcut, which glows on the rack carried round to it.
+    const shared = await page.evaluate(async () => {
+        const before = window._lastPlan.n_boards;
+        document.getElementById('share_offcuts').checked = true;
+        await updatePreview();
+        await new Promise(r => setTimeout(r, 1500));
+        const plan = window._lastPlan;
+        return { before, after: plan.n_boards, share: plan.share_offcuts, from: plan.from_offcuts,
+                 lower: document.getElementById('wr-lower').textContent };
+    });
+    await page.click('#run-open');
+    await page.waitForFunction(() => inCuttingRun() && run.i >= 0 && run.plan.share_offcuts, null, { timeout: 120000 });
+    const sharedRun = await page.evaluate(async () => {
+        runPlay(false);
+        const i = run.steps.findIndex(t => t.oid !== undefined);
+        if (i < 0) { closeCuttingRun(); return { reused: 0 }; }
+        runGo(i);
+        await new Promise(r => setTimeout(r, 1200));
+        const s = run.steps[i], lit = run.rack && run.rack.items.filter(it => it.oid === s.oid);
+        const r = { reused: run.steps.filter(t => t.oid !== undefined).length, counter: document.getElementById('run-board').textContent,
+                    rackLit: lit ? lit.length : 0, stripLit: document.querySelectorAll(`#run-strip .run-rack-item.focus[data-oid="${s.oid}"]`).length,
+                    figure: !!document.querySelector('#run-strip .run-reuse.focus'), wall: !!run.meshes[s.piece.name] };
+        closeCuttingRun();
+        return r;
+    });
+    console.log('offcuts passed on:', JSON.stringify({ shared, sharedRun }));
+    if (!shared.share || shared.after > shared.before
+        || (sharedRun.reused && (!/^Offcut of length \d+$/.test(sharedRun.counter) || sharedRun.rackLit !== 1 || sharedRun.stripLit !== 1
+                                 || !sharedRun.figure || !sharedRun.wall)))
+        throw new Error('offcuts passed on wrong: ' + JSON.stringify({ shared, sharedRun }));
+    await page.evaluate(async () => { document.getElementById('share_offcuts').checked = false; await updatePreview(); });
     // Optimise splices: every Splices step tried, the current one shown, Apply moves the slider.
     const splices = await page.evaluate(async () => {
         await optimiseSplices();
