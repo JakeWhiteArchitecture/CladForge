@@ -244,6 +244,9 @@
             <div>Clad area <b id="wr-area">--</b></div>
             <div><span id="wr-boards-label">Boards</span> <b id="wr-boards">--</b> <span class="wr-muted" id="wr-lower"></span></div>
             <div>Waste <b id="wr-waste">--</b> <button class="mini" id="wr-optimise" onclick="optimiseBoards()" title="Run the full search: every strategy, shuffled orders, then try to empty a board">Optimise boards</button></div>
+            <div id="wr-splice-row" style="display:none"><button class="mini" id="wr-splices-btn" onclick="optimiseSplices()"
+                title="Try the Splices slider from Fewer to More, rebuild and pack each, and propose the settings that use fewer stock lengths. Stock length and shortest piece stay as set.">Optimise splices</button></div>
+            <div class="wr-splices" id="wr-splices"></div>
             <div class="wr-muted" id="wr-note"></div>
             <div class="wr-muted" id="wr-sizes"></div>
             <div class="wr-key" id="wr-key" style="display:none"><span style="background:#22c55e"></span>90%+ <span style="background:#f59e0b"></span>75–90% <span style="background:#ef4444"></span>&lt;75% board use</div>

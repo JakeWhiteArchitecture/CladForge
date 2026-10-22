@@ -62,3 +62,31 @@ def _ensure_unique_names(meshes):
             seen[m["name"]] = seen.get(m["name"], 0) + 1
             m["name"] = "%s %d" % (m["name"], seen[m["name"]])
     return meshes
+
+
+# ── trying Splices settings (Optimise splices) ───────────────────────────
+
+SPLICE_STEPS = tuple(range(0, 101, 10))     # the Splices slider, % from Fewer to More
+
+
+def splice_trial(params, names, area):
+    """One Splices setting tried: the plank setting-out rebuilt at params["plank_splice"]
+    and packed onto stock lengths (the quick check, each elevation on its own), for the
+    given elevations. The stock length and the shortest piece stay as set, and joints
+    still land on battens. The app runs one per call, so it can say how far it has got."""
+    from cladding_nesting import chain_plan
+    p = _parse(params)
+    out = generate_preview(params)
+    plan = chain_plan(out["geometry"], p, names, area)
+    return {"splice": p["plank_splice"], "piece": round(p["plank_target"]), "n_boards": plan["n_boards"],
+            "waste": plan["waste"], "n_pieces": plan["n_pieces"], "lower_bound": plan["lower_bound"],
+            "too_long": len(plan["oversize"])}
+
+
+def rank_splices(trials, current):
+    """Best first: fewest planks too long to cut from the stock (they are left out of the
+    packing, so a setting with any would look better than it is), then fewest stock
+    lengths, then least waste, then fewest pieces (less cutting and fixing), then nearest
+    the current setting (no change for nothing)."""
+    return sorted(trials, key=lambda t: (t.get("too_long", 0), t["n_boards"], round(t["waste"], 4),
+                                         t.get("n_pieces", 0), abs(t["splice"] - current)))
