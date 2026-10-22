@@ -174,3 +174,63 @@ def test_the_cutting_plan_stands_plank_lengths_up_side_by_side():
     assert all(max(p[1] for p in pts) - min(p[1] for p in pts) in (3000, 2500, 1000, 900) for pts in pieces_drawn)
     assert all(rot == 90.0 for _t, _p, rot in rec.texts)
     assert any(t.startswith("Length 1  -  waste") for t, _p, _r in rec.texts)
+
+
+# ── keeping a length's cuts together ──────────────────────────────────────
+
+def _course(name, u, v, length, w=150.0):
+    """A horizontal plank piece on the wall, *length* long, sitting at (u, v)."""
+    return dict(_piece(name, length, w, u, v), w=length, h=w)
+
+
+def _spread(bars):
+    return sum(nesting._spread(ps) for _free, ps in bars)
+
+
+def test_pieces_from_one_length_are_regrouped_side_by_side():
+    """Two 1700s at each end of a long wall, one course above the other. Paired across the
+    wall they span 10 m; regrouped, each length's two pieces sit one above the other."""
+    a, b = _course("A", 0, 0, 1700), _course("B", 10000, 0, 1700)
+    c, d = _course("C", 0, 160, 1700), _course("D", 10000, 160, 1700)
+    cap = 3600 + 3
+    bars = [[cap - 2 * 1703, [a, b]], [cap - 2 * 1703, [c, d]]]
+    out = nesting.keep_together(bars, cap, 3)
+    assert len(out) == 2 and _spread(out) < _spread(bars)
+    assert sorted(sorted(q["name"] for q in ps) for _f, ps in out) == [["A", "C"], ["B", "D"]]
+    assert _spread(out) == 2 * 10                                         # the 10 mm gap between courses
+
+
+def test_abutting_pieces_cost_nothing():
+    assert nesting._spread([_course("A", 0, 0, 1700), _course("B", 1700, 0, 1700)]) == 0
+    assert nesting._spread([_course("A", 0, 0, 1700), _course("B", 0, 150, 1700)]) == 0
+
+
+def test_an_offcut_still_goes_to_the_closest_place_it_fits():
+    """Lengths are full nearby, so the short piece can't sit beside its neighbours, but a
+    swap still brings it to the nearest place there's room rather than across the wall."""
+    full = [[3, [_course("F1", 0, 0, 1800), _course("F2", 1800, 0, 1797)]]]   # used to the last mm
+    far = _course("S", 30000, 0, 600)
+    near_long = _course("L", 3600, 0, 2900)
+    mid = _course("M", 4000, 160, 600)
+    cap = 3603
+    bars = full + [[cap - 2903 - 603, [near_long, far]], [cap - 603, [mid]]]
+    out = nesting.keep_together(bars, cap, 3)
+    assert len(out) <= len(bars) and _spread(out) < _spread(bars)
+    group = next(ps for _f, ps in out if any(q["name"] == "L" for q in ps))
+    assert "S" not in [q["name"] for q in group]
+
+
+def test_keeping_together_never_adds_a_length_or_overfills_one():
+    import random
+    rnd = random.Random(7)
+    pieces = [_course("P%03d" % i, rnd.uniform(0, 20000), 160 * rnd.randrange(30), rnd.choice([600, 900, 1200, 1700, 2400, 3000]))
+              for i in range(150)]
+    quick = nesting.pack_lengths(pieces, 3600, 150, kerf=3)
+    plan = nesting.pack_lengths(pieces, 3600, 150, kerf=3, deep=True)
+    assert plan["n_boards"] <= quick["n_boards"] and plan["waste"] <= quick["waste"] + 1e-9
+    assert plan["spread"] < quick["spread"]
+    for b in plan["boards"]:
+        xs = sorted((q["x"], q["x"] + q["w"]) for q in b["pieces"])
+        assert xs[-1][1] <= 3600 + 1e-6
+    assert sorted(q["name"] for b in plan["boards"] for q in b["pieces"]) == sorted(p["name"] for p in pieces)
+    assert plan == nesting.pack_lengths(pieces, 3600, 150, kerf=3, deep=True)    # deterministic

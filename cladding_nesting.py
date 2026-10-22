@@ -27,6 +27,7 @@ the cutting plan and the cutting run read either.
 Pure Python: it runs in Pyodide with the rest of the engine.
 """
 
+import bisect
 import math
 
 from shapely.geometry import Polygon
@@ -291,6 +292,9 @@ def friendly_sizes(board_w, board_h, kerf, trim=0.0):
 
 
 MAX_PLANKS = 2000           # plank pieces packed at most, per elevation
+TOGETHER_REACH = 4000.0     # mm: pieces further apart than this (centre to centre, each way) are not neighbours
+TOGETHER_NEAR = 12          # the nearest pieces looked at for each piece
+TOGETHER_WORK = 3_000_000   # spread evaluations the keep-together pass may spend
 LENGTH_PLACEMENTS = (("first fit", lambda free, need: 0), ("best fit", lambda free, need: free - need),
                      ("worst fit", lambda free, need: need - free))
 
@@ -304,6 +308,104 @@ def plank_pieces(geometry, elevations, orient):
         length, width = (q["w"], q["h"]) if orient == "horizontal" else (q["h"], q["w"])
         out.append(dict(q, length=length, width=width))
     return out
+
+
+def _gap(a, b):
+    """Edge to edge distance between two pieces on the wall, 0 where they touch."""
+    aw, ah, bw, bh = a.get("w", 0.0), a.get("h", 0.0), b.get("w", 0.0), b.get("h", 0.0)
+    dx = max(0.0, a["u"] - (b["u"] + bw), b["u"] - (a["u"] + aw))
+    dy = max(0.0, a["v"] - (b["v"] + bh), b["v"] - (a["v"] + ah))
+    return math.hypot(dx, dy)
+
+
+def _spread(ps):
+    """How far apart the pieces cut from one length lie on the wall: the shortest chain
+    linking them edge to edge (a minimum spanning tree), so pieces that abut add nothing."""
+    if len(ps) < 2:
+        return 0.0
+    rest, total = list(ps[1:]), 0.0
+    best = [_gap(ps[0], q) for q in rest]
+    while rest:
+        k = min(range(len(rest)), key=lambda i: (best[i], rest[i]["name"]))
+        total += best[k]
+        q = rest.pop(k)
+        best.pop(k)
+        best = [min(d, _gap(q, r)) for d, r in zip(best, rest)]
+    return total
+
+
+def _neighbours(pieces):
+    """{name: the pieces nearest it on the wall, nearest first}, from those within reach."""
+    centre = {p["name"]: (p["u"] + p.get("w", 0.0) / 2.0, p["v"] + p.get("h", 0.0) / 2.0) for p in pieces}
+    by_x = sorted(pieces, key=lambda p: (centre[p["name"]][0], p["name"]))
+    xs = [centre[p["name"]][0] for p in by_x]
+    out = {}
+    for p in pieces:
+        cx, cy = centre[p["name"]]
+        lo, hi = bisect.bisect_left(xs, cx - TOGETHER_REACH), bisect.bisect_right(xs, cx + TOGETHER_REACH)
+        near = [q for q in by_x[lo:hi] if q is not p and abs(centre[q["name"]][1] - cy) <= TOGETHER_REACH]
+        near.sort(key=lambda q: (_gap(p, q), q["name"]))
+        out[p["name"]] = near[:TOGETHER_NEAR]
+    return out
+
+
+def keep_together(bars, cap, kerf, budget=TOGETHER_WORK):
+    """Bring the pieces cut from each stock length together on the wall, so a length's
+    pieces go up side by side (two of the same length abutting, the offcut on the best
+    fitting piece nearby) rather than scattered over the face. *bars* is [[free, pieces]].
+    Moves one piece to another length, or swaps two between lengths, wherever that
+    shortens the chains linking each length's pieces (_spread), until nothing does or the
+    budget is spent. A length never overfills and none is added: the count can only fall
+    (a move that empties a length saves it), so the waste is never worse. Deterministic."""
+    groups = [list(ps) for _free, ps in bars]
+    if len(groups) < 2:
+        return bars
+    need = lambda p: p["length"] + kerf  # noqa: E731
+    used = [sum(need(p) for p in g) for g in groups]
+    cost = [_spread(g) for g in groups]
+    where = {p["name"]: i for i, g in enumerate(groups) for p in g}
+    pieces = sorted((p for g in groups for p in g), key=lambda p: p["name"])
+    near, work, improved = _neighbours(pieces), 0, True
+
+    def try_bars(p, a, bars_b):
+        nonlocal work
+        best, rest_a = None, [x for x in groups[a] if x is not p]
+        for b in bars_b:
+            options = []
+            if used[b] + need(p) <= cap + EPS:              # move p over
+                options.append((rest_a, groups[b] + [p], None))
+            for r in groups[b]:                              # or swap it for one of b's
+                if used[a] - need(p) + need(r) <= cap + EPS and used[b] - need(r) + need(p) <= cap + EPS:
+                    options.append((rest_a + [r], [x for x in groups[b] if x is not r] + [p], r))
+            for ga, gb, r in options:
+                work += len(ga) ** 2 + len(gb) ** 2
+                delta = _spread(ga) + _spread(gb) - cost[a] - cost[b]
+                key = (delta, b, r["name"] if r else "")
+                if delta < -0.5 and (best is None or key < best[0]):
+                    best = (key, b, ga, gb, r)
+        return best
+
+    while improved and work < budget:
+        improved = False
+        for p in pieces:
+            a = where[p["name"]]
+            best = try_bars(p, a, dict.fromkeys(where[q["name"]] for q in near[p["name"]] if where[q["name"]] != a))
+            if best is None and len(groups[a]) > 1 and _spread([x for x in groups[a] if x is not p]) < cost[a] - 0.5:
+                # Left far from its length's other pieces and nothing nearby has room:
+                # still find the closest place it can go, looking at every length.
+                best = try_bars(p, a, [b for b in range(len(groups)) if b != a and groups[b]])
+            if best:
+                _key, b, ga, gb, r = best
+                groups[a], groups[b] = ga, gb
+                used[a], used[b] = sum(need(x) for x in ga), sum(need(x) for x in gb)
+                cost[a], cost[b] = _spread(ga), _spread(gb)
+                where[p["name"]] = b
+                if r is not None:
+                    where[r["name"]] = a
+                improved = True
+            if work >= budget:
+                break
+    return [[cap - u, g] for u, g in zip(used, groups) if g]
 
 
 def pack_lengths(pieces, stock, width, kerf=3.0, trim=0.0, deep=False, work_limit=DEEP_WORK):
@@ -359,6 +461,12 @@ def pack_lengths(pieces, stock, width, kerf=3.0, trim=0.0, deep=False, work_limi
             if key < best[0]:
                 best = (key, bars, "shuffled order %d, %s" % (k + 1, rule_name))
     bars, heuristic = (best[1], best[2]) if best else ([], "")
+    if deep and len(bars) > 1:
+        # The full search also keeps each length's cuts together on the wall; the quick
+        # check only counts, and the count and waste are the same either way.
+        n = len(bars)
+        bars = keep_together(bars, cap, kerf)
+        heuristic += ", then cuts kept together" + (" (%d length(s) saved)" % (n - len(bars)) if len(bars) < n else "")
     boards, fills = [], {}
     for free, ps in bars:
         x, placed = trim, []
@@ -378,6 +486,7 @@ def pack_lengths(pieces, stock, width, kerf=3.0, trim=0.0, deep=False, work_limi
             "oversize": oversize, "capped": capped, "n_pieces": len(usable_pieces), "board": [stock, width],
             "kerf": kerf, "rotate": False, "trim": trim, "deep": bool(deep), "strategies": tried, "emptied": 0,
             "work": work.n, "fills": fills, "kind": "plank",
+            "spread": round(sum(_spread(b["pieces"]) for b in boards) / 1000.0, 2),   # m, how scattered the cuts are
             "friendly": {"across": [width], "along": friendly_sizes(stock, stock, kerf, trim)["along"]}}
 
 
