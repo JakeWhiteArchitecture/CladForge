@@ -5,13 +5,14 @@
  */
 
 let scene, camera, renderer, controls, ifcApi = null;
+let gridHelper = null;
 let modelGroup = null, cladGroup = null, outlineGroup = null, dimGroup = null, highlightGroup = null, cornerGroup = null;
 let allMeshes = [], meshMeta = [], modelContext = {};
 // The scene works near the origin; modelOffset (IFC mm) puts exports back on the host model.
 let modelOffset = [0, 0, 0];
 const layerVisible = { model: true, sheathing: true, insulation: true, counter_batten: true,
                        batten: true, cladding: true, closer: true, dims: true,
-                       faces: true, outline: true };
+                       faces: true, outline: true, grid: true };
 // One colour for every picked face and one for every wall outline: which elevation a
 // face belongs to is the list's job, not the viewport's.
 const PICK_COLOR = 0x2a9d8f, OUTLINE_COLOR = 0x8ea3b8;
@@ -39,7 +40,9 @@ function initThree() {
     const dir2 = new THREE.DirectionalLight(0x8888ff, 0.3);
     dir2.position.set(-10000, 10000, -20000);
     scene.add(dir2);
-    scene.add(new THREE.GridHelper(40000, 40, 0x222244, 0x111133));
+    gridHelper = new THREE.GridHelper(40000, 40, 0x222244, 0x111133);   // the floor grid: G or the legend toggles it
+    gridHelper.visible = layerVisible.grid !== false;
+    scene.add(gridHelper);
     modelGroup = new THREE.Group(); cladGroup = new THREE.Group(); outlineGroup = new THREE.Group();
     dimGroup = new THREE.Group(); highlightGroup = new THREE.Group(); cornerGroup = new THREE.Group();
     scene.add(modelGroup, cladGroup, outlineGroup, dimGroup, highlightGroup, cornerGroup);
@@ -511,7 +514,7 @@ function shapeFromRings(profile, holes) {
 
 const _layerOf = { sheathing: 'sheathing', insulation: 'insulation', counter_batten: 'counter_batten',
                    batten: 'batten', cross_batten: 'batten', panel: 'cladding', plank: 'cladding',
-                   reveal: 'cladding', closer: 'closer', corner_profile: 'cladding', gasket: 'batten' };
+                   reveal: 'cladding', closer: 'closer', corner_profile: 'cladding', corner_trim: 'cladding', gasket: 'batten' };
 
 function applyCorner(geo, m, tol = 0.6) {
     // Move the vertices on a corner end to u_end -/+ (ext + k x depth): k shears the
@@ -682,6 +685,7 @@ function renderDimensions(dims, elevByName, only) {
 function setLayerVisible(key, on) {
     layerVisible[key] = on;
     if (key === 'model') { modelGroup.visible = on; return; }
+    if (key === 'grid') { if (gridHelper) gridHelper.visible = on; return; }
     if (key === 'dims') { dimGroup.visible = on || view2d.on; return; }
     if (key === 'faces') { highlightGroup.visible = on; return; }     // the picked wall surface
     if (key === 'outline') { outlineGroup.visible = on; return; }     // outline, openings, splash

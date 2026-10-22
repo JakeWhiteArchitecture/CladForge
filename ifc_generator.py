@@ -40,6 +40,7 @@ _IFC_TYPE_MAP = {
     "closer":         ("IfcMember",   "USERDEFINED", "Cavity closer"),
     "reveal":         ("IfcCovering", "CLADDING",    "Reveal lining"),
     "corner_profile": ("IfcMember",   "USERDEFINED", "Corner profile"),
+    "corner_trim":    ("IfcMember",   "USERDEFINED", "Corner trim"),
     "gasket":         ("IfcCovering", "MEMBRANE",    "EPDM gasket"),
 }
 _MATERIALS = {
@@ -48,6 +49,7 @@ _MATERIALS = {
     "insulation": ("External insulation", "insulation"), "panel": ("Cladding panel", "cladding"),
     "plank": ("Cladding plank", "cladding"), "closer": ("Timber (solid) cavity closer", "wood"),
     "reveal": ("Reveal lining", "cladding"), "corner_profile": ("Aluminium corner profile", "aluminium"),
+    "corner_trim": ("Timber (solid) corner trim", "wood"),
     "gasket": ("EPDM foam gasket", "rubber"),
 }
 
@@ -362,6 +364,12 @@ def meshes_to_ifc(meshes, params, infos=None):
                     "FlangeB": ("IfcPositiveLengthMeasure", info["flange_b"]),
                     "Thickness": ("IfcPositiveLengthMeasure", info["thickness"]),
                     "Length": ("IfcPositiveLengthMeasure", info["length"])})
+            elif mesh.get("trim_info"):         # the timber corner trim's
+                t = mesh["trim_info"]
+                _pset(ifc, [elem], "%s_CornerTrim" % TOOL_NAME, {
+                    "TrimName": ("IfcLabel", t["name"]), "Size": ("IfcPositiveLengthMeasure", t["size"]),
+                    "LegThickness": ("IfcPositiveLengthMeasure", t["leg"]),
+                    "Length": ("IfcPositiveLengthMeasure", t["length"])})
             elif ifc_class == "IfcPlate":
                 _pset(ifc, [elem], "Pset_PlateCommon", common)
         if parts:

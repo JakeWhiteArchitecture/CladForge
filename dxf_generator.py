@@ -226,7 +226,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for m in by_elev.get(name, []):
             if m["ifc_type"] == "reveal":
                 continue        # a reveal lining is perpendicular to this view
-            if m["ifc_type"] == "corner_profile":
+            if m["ifc_type"] in ("corner_profile", "corner_trim"):
                 continue        # its profile is a plan section; the elevation shows its strip
             layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
             for k in range(1 + len(m.get("holes") or [])):

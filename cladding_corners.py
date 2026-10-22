@@ -1,4 +1,5 @@
-"""CladForge — the outer corner profile (a Rockpanel Profile D type).
+"""CladForge — the outer corner profile (a Rockpanel Profile D type), and the square
+timber corner trim that plays its part for plank cladding.
 
 An aluminium profile for external corners of panel cladding. In plan section it is a
 hollow square nose at the outer corner, D × D with 1.1 mm walls and a small outer
@@ -13,6 +14,15 @@ section lies in plan and it is extruded along world Z over the clad height of th
 corner — or, under a head, along the wall. Placed at right-angled external corners
 only: chain corners, and the arris of a window or door jamb or head, with flange A on
 the elevation face.
+
+With planks the Profile corner is a square timber corner trim instead (an external
+corner detail like Fig. 8 of the timber cladding guides): in plan an L, TRIM_SIZE ×
+TRIM_SIZE overall with legs TRIM_LEG thick. Its back lies on the batten face, where the
+backs of the planks lie, so it stands TRIM_LEG − plank thickness proud of them; the
+TRIM_SIZE − TRIM_LEG square notch inside the L wraps the corner of the battens, and each
+face's planks butt its end, that far short of where the two batten faces meet (plus
+the chain's profile gap). It is fixed through to the same solid L of timber behind.
+Chain corners only: plank reveals stay mitred.
 """
 
 import math
@@ -29,6 +39,11 @@ FLANGE_A, FLANGE_B = 35.0, 35.0      # both legs the long one
 OUTER_RADIUS = 1.0          # mm, the nose's outer arris
 PANEL_SIZES = (6.0, 8.0, 10.0)
 RIGHT_ANGLE_K = 0.05        # |k - 1| within this is a right-angled external corner
+
+TRIM_NAME = "Square corner trim (timber)"
+TRIM_SIZE = 50.0            # mm, each leg overall, from the outer face
+TRIM_LEG = 30.0             # mm, each leg's thickness
+TRIM_BACK = TRIM_SIZE - TRIM_LEG    # how far the trim runs back past the batten faces' corner
 
 
 def offered(k, panel):
@@ -53,10 +68,20 @@ def section(D):
     return list(shape.exterior.coords)[:-1], [list(h.coords)[:-1] for h in shape.interiors]
 
 
-def _mapped(D, inward):
+def trim_section():
+    """The timber trim in plan, in the profile's (a, b): a runs along the face before the
+    corner towards it (the trim's outer corner at a = 0), b inward from the trim's outer
+    face on that side. One leg lies along each face, TRIM_LEG thick and TRIM_SIZE long,
+    so the square notch inside the L is TRIM_BACK each way."""
+    S, T = TRIM_SIZE, TRIM_LEG
+    ring = [(-S, 0.0), (0.0, 0.0), (0.0, S), (-T, S), (-T, T), (-S, T)]
+    return ring, []
+
+
+def _mapped(D, inward, trim=False):
     """The section with b turned to the frame's v (*inward* = +1 where v points into the
     building, -1 where it points out), rings re-oriented."""
-    ext, holes = section(D)
+    ext, holes = trim_section() if trim else section(D)
     pg = orient(Polygon([(a, inward * b) for a, b in ext], [[(a, inward * b) for a, b in h] for h in holes]), 1.0)
     return ([[round(a, 3), round(b, 3)] for a, b in list(pg.exterior.coords)[:-1]],
             [[[round(a, 3), round(b, 3)] for a, b in list(h.coords)[:-1]] for h in pg.interiors])
@@ -66,29 +91,33 @@ def _cross(a, b):
     return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 
 
-def profile_mesh(origin, u_sec, n, length, D, inward_hint, name, elevation):
+def profile_mesh(origin, u_sec, n, length, D, inward_hint, name, elevation, trim=False):
     """The profile prism: section in the plane of u_sec and v = n × u_sec, extruded along n
     by *length* from *origin* (the outer corner line where it starts). *inward_hint* is
-    the direction into the building from the face before the corner."""
+    the direction into the building from the face before the corner. *trim*: the timber
+    corner trim's section instead (planks)."""
     v = _cross(n, u_sec)
     inward = 1.0 if sum(a * b for a, b in zip(v, inward_hint)) > 0 else -1.0
-    profile, holes = _mapped(D, inward)
+    profile, holes = _mapped(D, inward, trim)
     m = _prism(profile, 0.0, length, {"origin": origin, "u": list(u_sec), "v": v, "n": list(n)},
-               "corner_profile", name, elevation, holes=holes)
-    m["profile_info"] = {"name": PROFILE_NAME, "D": D, "flange_a": FLANGE_A, "flange_b": FLANGE_B,
-                         "thickness": WALL, "length": round(length, 1)}
+               "corner_trim" if trim else "corner_profile", name, elevation, holes=holes)
+    if trim:
+        m["trim_info"] = {"name": TRIM_NAME, "size": TRIM_SIZE, "leg": TRIM_LEG, "length": round(length, 1)}
+    else:
+        m["profile_info"] = {"name": PROFILE_NAME, "D": D, "flange_a": FLANGE_A, "flange_b": FLANGE_B,
+                             "thickness": WALL, "length": round(length, 1)}
     return m
 
 
-def vertical_profile(frame, u_corner, toward, v_from, v_to, face, D, name, elevation):
-    """A profile standing at a vertical corner of an elevation: the outer corner line at
-    u_corner on the cladding face, the face before the corner running towards it in the
-    direction *toward* (+1 along u, -1 against)."""
+def vertical_profile(frame, u_corner, toward, v_from, v_to, face, D, name, elevation, trim=False):
+    """A profile (or, *trim*, the timber trim) standing at a vertical corner of an
+    elevation: its outer corner line at u_corner and depth *face*, the face before the
+    corner running towards it in the direction *toward* (+1 along u, -1 against)."""
     if v_to - v_from < 1.0:
         return None
     U, N = frame["u"], frame["n"]
     return profile_mesh(frame_to_world(frame, u_corner, v_from, face), [toward * U[0], toward * U[1], 0.0],
-                        [0.0, 0.0, 1.0], v_to - v_from, D, [-N[0], -N[1], 0.0], name, elevation)
+                        [0.0, 0.0, 1.0], v_to - v_from, D, [-N[0], -N[1], 0.0], name, elevation, trim)
 
 
 def head_profile(frame, u_from, u_to, v_corner, face, D, name, elevation):

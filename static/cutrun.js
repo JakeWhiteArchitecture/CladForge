@@ -15,6 +15,7 @@ const RUN_MOVE = 900;             // ms the camera may take to reach it at 1×
 const RUN_GOLDEN = 137.508;       // degrees between neighbouring boards' hues
 const RUN_GLOW = [[0, 30, 0.95], [30, 110, 0.35]];   // glow bands round the piece: from, to (mm), opacity
 const RUN_BOARD_PX = 210;         // height a board is drawn on the strip
+const RUN_LENGTH_PX = 560;        // width a plank's stock length is drawn on the strip
 
 const run = { on: false, plan: null, steps: [], i: -1, playing: false, speed: 1, timer: null,
               meshes: {}, group: null, glow: null, saved: null };
@@ -30,8 +31,8 @@ function inCuttingRun() { return run.on; }
 // ─── OPEN AND CLOSE ───
 async function openCuttingRun() {
     if (run.on) return;
-    if (!pyReady || toggleValue('cladding-type') !== 'panel' || !state.chains.some(c => c.built)) {
-        setStatus('The cutting run is for panel cladding: build a panel chain first.', 'busy');
+    if (!pyReady || !state.chains.some(c => c.built)) {
+        setStatus('Build a chain first: the cutting run plays its cutting plan.', 'busy');
         return;
     }
     const btn = document.getElementById('run-open');
@@ -139,10 +140,12 @@ function runGo(i) {
     paintWall(s);
     paintStrip(s);
     const pieces = b.pieces.length;
-    document.getElementById('run-board').textContent = `Board ${b.no}`;
+    const plank = run.plan.kind === 'plank';
+    document.getElementById('run-board').textContent = `${plank ? 'Length' : 'Board'} ${b.no}`;
     document.getElementById('run-of').textContent = `of ${run.plan.n_boards}`;
-    document.getElementById('run-piece').textContent =
-        `Piece ${s.j + 1} of ${pieces}: ${Math.round(q.cut_w)} × ${Math.round(q.cut_h)} mm${q.rotated ? ', turned on the board' : ''}`;
+    document.getElementById('run-piece').textContent = plank
+        ? `Piece ${s.j + 1} of ${pieces}: ${Math.round(q.cut_w)} mm${q.ripped ? `, ripped to ${Math.round(q.cut_h)} wide` : ''}`
+        : `Piece ${s.j + 1} of ${pieces}: ${Math.round(q.cut_w)} × ${Math.round(q.cut_h)} mm${q.rotated ? ', turned on the board' : ''}`;
     document.getElementById('run-where').textContent = `${b.elevation} · ${q.name}`;
     const sw = document.getElementById('run-swatch');
     sw.style.background = sw.style.color = runCss(runHue(s.k), FOCUS[0], FOCUS[1]);
@@ -209,7 +212,8 @@ function runLabel(text, mesh) {
     const t = _runLabelTex[text];
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: t.tex, transparent: true }));
     const bb = mesh.geometry.boundingBox || (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
-    const k = Math.min(240, 0.22 * Math.min(bb.max.x - bb.min.x, bb.max.y - bb.min.y)) / t.h;   // text height, mm
+    const narrow = Math.min(bb.max.x - bb.min.x, bb.max.y - bb.min.y);
+    const k = Math.min(240, narrow < 400 ? 0.7 * narrow : 0.22 * narrow) / t.h;   // text height, mm: planks are narrow
     sprite.scale.set(t.w * k, t.h * k, 1);
     sprite.position.copy(new THREE.Vector3((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, bb.max.z + 15).applyMatrix4(mesh.matrix));
     return sprite;
@@ -236,9 +240,11 @@ function followPiece(s) {
 // DXF draws them (y up), pieces in the board's hue, offcuts hatched grey.
 function renderStrip(plan) {
     const ns = 'http://www.w3.org/2000/svg', [bw, bh] = plan.board;
-    const extra = plan.n_boards - (plan.whole_job_boards || plan.n_boards);
+    const extra = plan.n_boards - (plan.whole_job_boards || plan.n_boards), plank = plan.kind === 'plank';
+    const unit = plank ? 'length' : 'board';
     document.getElementById('run-summary').textContent =
-        `${plan.n_boards} boards of ${bw} × ${bh} · waste ${(100 * plan.waste).toFixed(1)}% · `
+        (plank ? `${plan.n_boards} lengths of ${bw} (${bh} wide)` : `${plan.n_boards} boards of ${bw} × ${bh}`)
+        + ` · waste ${(100 * plan.waste).toFixed(1)}% · `
         + (extra > 0 ? `${extra} more than packing the whole job together` : 'no more than packing the whole job together');
     const strip = document.getElementById('run-strip');
     strip.innerHTML = `<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
@@ -249,7 +255,7 @@ function renderStrip(plan) {
         const boards = plan.boards.filter(b => b.elevation === row.elevation);
         const sec = document.createElement('section');
         sec.className = 'run-row';
-        sec.innerHTML = `<h3>${esc(row.elevation)} <span>${row.n_boards} board${row.n_boards === 1 ? '' : 's'} · waste ${(100 * row.waste).toFixed(1)}%</span></h3>`;
+        sec.innerHTML = `<h3>${esc(row.elevation)} <span>${row.n_boards} ${unit}${row.n_boards === 1 ? '' : 's'} · waste ${(100 * row.waste).toFixed(1)}%</span></h3>`;
         const line = document.createElement('div');
         line.className = 'run-boards';
         for (const b of boards) {
@@ -260,8 +266,10 @@ function renderStrip(plan) {
             fig.style.setProperty('--hue', h.toFixed(1));
             const svg = document.createElementNS(ns, 'svg');
             svg.setAttribute('viewBox', `-20 -20 ${bw + 40} ${bh + 40}`);
-            svg.style.height = RUN_BOARD_PX + 'px';
-            svg.style.width = (RUN_BOARD_PX * (bw + 40) / (bh + 40)).toFixed(1) + 'px';
+            // a board at a fixed height; a plank's stock length at a fixed width, so it stays legible
+            const px = plank ? RUN_LENGTH_PX / (bw + 40) : RUN_BOARD_PX / (bh + 40);
+            svg.style.height = (px * (bh + 40)).toFixed(1) + 'px';
+            svg.style.width = (px * (bw + 40)).toFixed(1) + 'px';
             const add = (tag, attrs, parent = svg) => {
                 const el = document.createElementNS(ns, tag);
                 for (const [a, v] of Object.entries(attrs)) el.setAttribute(a, v);
@@ -271,22 +279,29 @@ function renderStrip(plan) {
             const Y = (y, hh) => bh - y - hh;               // DXF y runs up, SVG y down
             add('rect', { x: 0, y: 0, width: bw, height: bh, class: 'run-stock' });
             for (const [x, y, w, hh] of b.offcuts) add('rect', { x, y: Y(y, hh), width: w, height: hh, class: 'run-offcut' });
-            if (plan.trim) add('rect', { x: plan.trim, y: plan.trim, width: bw - 2 * plan.trim, height: bh - 2 * plan.trim, class: 'run-trim' });
+            if (plan.trim && plank) add('rect', { x: plan.trim, y: 0, width: bw - 2 * plan.trim, height: bh, class: 'run-trim' });
+            else if (plan.trim) add('rect', { x: plan.trim, y: plan.trim, width: bw - 2 * plan.trim, height: bh - 2 * plan.trim, class: 'run-trim' });
             b.pieces.forEach((q, j) => {
                 const g = add('g', { class: 'run-piece', 'data-step': step + j });
                 g.style.setProperty('--hue', h.toFixed(1));
                 add('rect', { x: q.x, y: Y(q.y, q.h), width: q.w, height: q.h }, g);
-                const fs = Math.max(55, Math.min(150, 0.16 * Math.min(q.w, q.h)));
                 const cx = q.x + q.w / 2, cy = Y(q.y, q.h) + q.h / 2;
-                add('text', { x: cx, y: cy - 0.15 * fs, 'font-size': fs * 1.25, class: 'run-no' }, g).textContent = `${b.no}·${j + 1}`;
-                add('text', { x: cx, y: cy + 1.05 * fs, 'font-size': fs, class: 'run-size' }, g).textContent =
-                    `${Math.round(q.cut_w)} × ${Math.round(q.cut_h)}${q.rotated ? ' ↻' : ''}`;
+                if (plank) {                                 // one line along the length
+                    const fs = Math.min(0.62 * bh, 0.11 * q.w);
+                    add('text', { x: cx, y: cy, 'font-size': fs, class: 'run-no' }, g).textContent =
+                        `${b.no}·${j + 1}  ${Math.round(q.cut_w)}${q.ripped ? ' ✂' + Math.round(q.cut_h) : ''}`;
+                } else {
+                    const fs = Math.max(55, Math.min(150, 0.16 * Math.min(q.w, q.h)));
+                    add('text', { x: cx, y: cy - 0.15 * fs, 'font-size': fs * 1.25, class: 'run-no' }, g).textContent = `${b.no}·${j + 1}`;
+                    add('text', { x: cx, y: cy + 1.05 * fs, 'font-size': fs, class: 'run-size' }, g).textContent =
+                        `${Math.round(q.cut_w)} × ${Math.round(q.cut_h)}${q.rotated ? ' ↻' : ''}`;
+                }
                 g.addEventListener('click', ev => { ev.stopPropagation(); runPlay(false); runGo(+g.dataset.step); });
             });
             step += b.pieces.length;
             fig.appendChild(svg);
             const cap = document.createElement('figcaption');
-            cap.textContent = `Board ${b.no} · ${Math.round(100 * (1 - b.waste))}% used`;
+            cap.textContent = `${plank ? 'Length' : 'Board'} ${b.no} · ${Math.round(100 * (1 - b.waste))}% used`;
             fig.appendChild(cap);
             fig.addEventListener('click', () => { runPlay(false); runGo(run.steps.findIndex(t => t.k === k)); });
             line.appendChild(fig);

@@ -11,7 +11,7 @@ const WIZ = { step: 0, draft: null };
 const WIZ_GROUPS = {
     plank: [['plank_w', 'Face width', '75–250 mm'], ['plank_t', 'Thickness', '12–32 mm'],
             ['plank_lap', 'Lap', '0 = open joint'], ['plank_gap', 'Joint gap', '0–15 mm'],
-            ['plank_len', 'Max length', '1800–6000 mm']],
+            ['plank_len', 'Stock length', '1800–6000 mm']],
     panel: [['panel_t', 'Thickness', '6–20 mm'], ['panel_w', 'Cut width', '600–1500 mm'],
             ['panel_h', 'Cut height', '1200–3000 mm'], ['panel_gap', 'Joint gap', '0–15 mm']],
     battens: [['batten_centres', 'Max centres', '300–600 mm'], ['batten_w', 'Width', '25–100 mm'],
