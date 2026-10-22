@@ -15,6 +15,7 @@ import copy
 
 from shapely.geometry import Polygon, box
 from shapely.geometry.polygon import orient
+from shapely.affinity import scale
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
@@ -120,6 +121,9 @@ def _merge_spans(spans, tol):
     return out
 
 
+SIDEWAYS_STRETCH = 1000.0   # how far a part under a band is stretched along u, so only its height counts
+
+
 def clip_region(elev, splash):
     """Outline minus splash-zone bands: the area battens and cladding may occupy.
 
@@ -148,22 +152,30 @@ def clip_region(elev, splash):
 
 
 def _drop_slivers_under(region, band):
-    """*region* less its parts below *band*, within the band's width, too thin to clad."""
-    u0, _v0, u1, v1 = band.bounds
-    _ru0, rv0, _ru1, _rv1 = region.bounds
-    under = _intersection(region, box(u0, rv0 - 1.0, u1, v1))
-    if under is None or under.is_empty:
-        return region
-    half = ROW_MIN / 2.0 - 0.01
+    """*region* less its parts below *band*, within the band's width, too thin (top to
+    bottom) to clad. Only height counts: a narrow face or a narrow pier between windows
+    is not a sliver. So the opening is done with the part stretched SIDEWAYS_STRETCH times
+    along u, where nothing is narrow, and squeezed back; heights are unchanged by it, so
+    a strip under a pitched line is judged by its height too. Never fails a build: on
+    anything unexpected the region comes back as it was."""
     try:
-        kept = under.buffer(-half, join_style=2).buffer(half, join_style=2)
-    except Exception:
+        if region is None or region.is_empty or band.is_empty:
+            return region
+        u0, _v0, u1, v1 = band.bounds
+        rv0 = region.bounds[1]
+        under = _intersection(region, box(u0, rv0 - 1.0, u1, v1))
+        if under is None or under.is_empty:
+            return region
+        k, half = SIDEWAYS_STRETCH, ROW_MIN / 2.0 - 0.01
+        wide = scale(under, xfact=k, yfact=1.0, origin=(0, 0))
+        kept = scale(wide.buffer(-half, join_style=2).buffer(half, join_style=2), xfact=1.0 / k, yfact=1.0, origin=(0, 0))
+        thin = _difference(under, kept)
+        if thin is None or thin.is_empty or thin.area < 1.0:
+            return region
+        cut = _difference(region, thin)
+        return region if cut is None else cut
+    except Exception:   # noqa: BLE001 — a missed sliver is better than a failed build
         return region
-    thin = _difference(under, kept)
-    if thin is None or thin.is_empty or thin.area < 1.0:
-        return region
-    cut = _difference(region, thin)
-    return region if cut is None else cut
 
 
 def iter_polygons(geom):
