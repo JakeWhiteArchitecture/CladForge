@@ -18,7 +18,13 @@ const RUN_BOARD_PX = 210;         // height a board is drawn on the strip
 const RUN_LENGTH_PX = 440;        // height a plank's stock length is drawn on the strip, standing up
 
 const run = { on: false, plan: null, steps: [], i: -1, playing: false, speed: 1, timer: null,
-              meshes: {}, group: null, glow: null, saved: null };
+              meshes: {}, group: null, glow: null, saved: null, views: {} };
+
+// Looking round obstacles: turns of the view to either side (degrees) and rises of the
+// eye, tried nearest first, until every focal piece can be seen.
+const RUN_YAWS = [0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75];
+const RUN_RISES = [0.3, 0.75, 1.3];
+const RUN_CLOSER = [1, 0.7, 0.45];    // and, if nothing is clear from there, closer in
 
 // Neighbouring boards land far apart on the colour wheel, however many there are.
 const runHue = k => (200 + k * RUN_GOLDEN) % 360;
@@ -53,12 +59,16 @@ function startRun(plan) {
     if (state.editing) closeEditWidget();
     run.plan = plan;
     run.steps = plan.boards.flatMap((b, k) => b.pieces.map((q, j) => ({ k, j, board: b, piece: q })));
-    run.saved = { pos: camera.position.clone(), target: controls.target.clone(), dims: dimGroup.visible };
+    run.saved = { pos: camera.position.clone(), target: controls.target.clone(), dims: dimGroup.visible,
+                  faces: highlightGroup.visible, outline: outlineGroup.visible };
+    run.views = {};
     run.on = true;
     document.body.classList.add('cut-run');
     document.getElementById('run-pane').hidden = false;
     window.dispatchEvent(new Event('resize'));          // the view is half as wide now
     dimGroup.visible = false;
+    highlightGroup.visible = false;                     // the picked faces and outlines would sit in front
+    outlineGroup.visible = false;
     run.meshes = {};
     for (const layer of cladGroup.children) for (const o of layer.children)
         if (o.isMesh && o.userData.name) run.meshes[o.userData.name] = o;
@@ -75,6 +85,7 @@ function startRun(plan) {
     renderStrip(plan);
     runGo(0);
     runPlay(true);
+    setStatus('Cutting run · Space plays or pauses · ← → step · Esc closes', 'ready');
 }
 
 function closeCuttingRun() {
@@ -92,6 +103,8 @@ function closeCuttingRun() {
     document.getElementById('run-pane').hidden = true;
     window.dispatchEvent(new Event('resize'));
     dimGroup.visible = run.saved.dims;
+    highlightGroup.visible = run.saved.faces;
+    outlineGroup.visible = run.saved.outline;
     const s = run.saved, off = s.pos.clone().sub(s.target);
     animatePose(currentPose(), { target: s.target, dir: off.clone().normalize(), dist: off.length() }, null);
     run.i = -1;
@@ -226,25 +239,90 @@ function runLabel(text, mesh) {
 // once (and a good stretch of wall round them), so stepping through a board's pieces
 // keeps the camera still and it moves on with the next board. Between elevations the
 // direction turns round the target, so the camera follows the chain round its corners.
+// Anything standing in front of the pieces (a roof, a wing, another face's cladding)
+// turns the view away from it: see clearView.
 function followPiece(s) {
     const m = run.meshes[s.piece.name];
     if (!m) return;
-    const box = new THREE.Box3();
+    if (!run.views[s.k]) run.views[s.k] = boardView(s, m);
+    const v = run.views[s.k];
+    animatePose(currentPose(), { target: v.target.clone(), dir: v.dir.clone(), dist: v.dist }, null,
+                Math.min(RUN_MOVE, 0.7 * RUN_DWELL) / run.speed);
+}
+
+// Where to look at a board from: its pieces' centre, the distance that fits them all,
+// and the clearest direction near the square-on one.
+function boardView(s, m) {
+    const box = new THREE.Box3(), focal = [];
     for (const t of run.steps) {
         const mesh = t.k === s.k && run.meshes[t.piece.name];
         if (!mesh) continue;
+        focal.push(mesh);
         const bb = mesh.geometry.boundingBox || (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
         box.union(bb.clone().applyMatrix4(mesh.matrix));
     }
     const target = box.getCenter(new THREE.Vector3());
     const u = new THREE.Vector3().setFromMatrixColumn(m.matrix, 0).normalize();
     const n = new THREE.Vector3().setFromMatrixColumn(m.matrix, 2).normalize();
-    const dir = n.clone().add(new THREE.Vector3(0, 0.3, 0)).addScaledVector(u, 0.18).normalize();
     // fit the pieces' bounding sphere in the narrower of the two fields of view
     const r = box.getSize(new THREE.Vector3()).length() / 2;
     const vfov = THREE.MathUtils.degToRad(camera.fov), hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect);
     const dist = Math.max(8000, 1.15 * r / Math.sin(Math.min(vfov, hfov) / 2));
-    animatePose(currentPose(), { target, dir, dist }, null, Math.min(RUN_MOVE, 0.7 * RUN_DWELL) / run.speed);
+    const view = clearView(target, n.clone().addScaledVector(u, 0.18), dist, focal);
+    return Object.assign({ target }, view);
+}
+
+// Points to keep in sight on each focal piece: its centre and two points towards its
+// ends along its longer side, just off its outer face.
+function sightPoints(focal) {
+    const pts = [];
+    for (const mesh of focal) {
+        const bb = mesh.geometry.boundingBox;
+        const c = bb.getCenter(new THREE.Vector3()), size = bb.getSize(new THREE.Vector3());
+        const along = size.x >= size.y ? new THREE.Vector3(0.35 * size.x, 0, 0) : new THREE.Vector3(0, 0.35 * size.y, 0);
+        for (const k of [0, 1, -1]) pts.push(c.clone().addScaledVector(along, k).setZ(bb.max.z + 10).applyMatrix4(mesh.matrix));
+    }
+    return pts.slice(0, 18);
+}
+
+// The view direction nearest the preferred one (horizontal part *facing*, rising a
+// little) from which the focal pieces can be seen: turned up to 75° either way about
+// the vertical and raised if need be. Every sight line from the eye to a point on the
+// pieces is cast against the host model and the rest of the cladding as they stand
+// (hidden elements and switched-off layers do not count); the first direction with
+// none blocked wins; if none is clear from that distance, the camera comes closer in
+// (seeing the pieces matters more than fitting them all); else the fewest blocked. Each sight line is cast from the piece out
+// to the eye: a solid in between is entered through a face turned towards the piece, and
+// so is one the eye would be inside (a roof, a wing), which a ray from the eye would miss.
+function clearView(target, facing, dist, focal) {
+    const skip = new Set(focal);
+    const shown = o => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+    const blockers = [];
+    modelGroup.traverse(o => { if (o.isMesh && shown(o)) blockers.push(o); });
+    cladGroup.traverse(o => { if (o.isMesh && !skip.has(o) && shown(o)) blockers.push(o); });
+    scene.updateMatrixWorld();
+    const pts = sightPoints(focal), ray = new THREE.Raycaster(), h = facing.clone().setY(0).normalize();
+    const options = [];
+    for (const rise of RUN_RISES) for (const yaw of RUN_YAWS)
+        options.push({ yaw, rise, cost: Math.abs(yaw) + 60 * (rise - RUN_RISES[0]) });
+    options.sort((a, b) => a.cost - b.cost);
+    let best = null, tried = 0;
+    search: for (const scale of RUN_CLOSER) for (const o of options) {
+        const dir = h.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(o.yaw))
+            .add(new THREE.Vector3(0, o.rise, 0)).normalize();
+        const eye = target.clone().addScaledVector(dir, dist * scale);
+        let blocked = 0;
+        for (const p of pts) {
+            const d = eye.clone().sub(p), len = d.length();
+            ray.set(p, d.divideScalar(len));
+            ray.far = len;
+            if (ray.intersectObjects(blockers, false).length) blocked++;
+        }
+        tried++;
+        if (!best || blocked < best.blocked) best = { dir, dist: dist * scale, blocked };
+        if (!blocked) break search;
+    }
+    return { dir: best.dir, dist: best.dist, blocked: best.blocked, tried };
 }
 
 // ─── THE STRIP ───

@@ -253,8 +253,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .run-offcut { fill: url(#run-hatch); stroke: #5b6b7a; stroke-width: 4; }
 .run-trim { fill: none; stroke: #8ea3b8; stroke-width: 4; stroke-dasharray: 30 20; }
 .run-piece { cursor: pointer; }
-.run-piece rect { fill: hsl(var(--hue), 48%, 72%); stroke: #10202a; stroke-width: 6; transition: fill 0.2s; }
-.run-piece.on rect { fill: hsl(var(--hue), 70%, 70%); }
+.run-piece rect { fill: hsl(var(--hue), 24%, 74%); stroke: #10202a; stroke-width: 6; transition: fill 0.2s; }
+.run-piece.on rect { fill: hsl(var(--hue), 35%, 72%); }
 .run-piece.focus rect { fill: hsl(var(--hue), 88%, 58%); stroke: #fff; stroke-width: 18; filter: drop-shadow(0 0 40px hsl(var(--hue), 95%, 62%)); }
 .run-piece text { fill: #10202a; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; pointer-events: none; }
 .run-no { font-weight: 700; }
