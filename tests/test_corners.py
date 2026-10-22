@@ -325,10 +325,24 @@ def test_plank_profile_is_a_square_timber_trim(faces, orient):
         b_min = min(min(q[0] for q in m["profile"]) for m in out["geometry"]
                     if m["ifc_type"] == "plank" and m["elevation"] == "Elevation B")
         assert a_max <= 8000 + back - 21 + 1e-6 and b_min >= -(face["Elevation B"] - D - 21) - 1e-6
+        # cut back, a column keeps its height and is never wider than a plank
+        for m in out["geometry"]:
+            if m["ifc_type"] == "plank":
+                us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+                assert max(us) - min(us) <= p["plank_w"] + 1e-6 and max(vs) - min(vs) > p["plank_w"]
     # both faces show its 50 mm face; with vertical battens the solid L goes behind it
     assert [round(max(q[0] for q in s) - min(q[0] for q in s), 3) for s in fa["profile_strips"]] == [50.0]
-    timbers = {m["corner_timber"] for m in out["geometry"] if m.get("corner_timber")}
-    assert timbers == ({"wide", "narrow"} if orient == "horizontal" else set())
+    timbers = {m["corner_timber"]: m for m in out["geometry"] if m.get("corner_timber")}
+    assert set(timbers) == {"wide", "narrow"}               # the solid L behind it, either way
+    if orient == "vertical":                                 # standing up the corner in the batten layer
+        for m in timbers.values():
+            us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+            assert max(vs) - min(vs) > 1000 > max(us) - min(us)
+        wide = timbers["wide"]
+        inner = min(q[0] for q in wide["profile"])
+        rails = [m for m in out["geometry"] if m["ifc_type"] == "batten" and m["elevation"] == "Elevation A"
+                 and not m.get("corner_timber") and float(m["depth"]) == float(wide["depth"])]
+        assert rails and all(max(q[0] for q in m["profile"]) <= inner + 1e-6 for m in rails)   # stop against it
     assert not fa["profile_warnings"]
     assert out["info"][0]["corner"]["details"][1] == "profile"
 
@@ -349,3 +363,21 @@ def test_plank_trim_exports_and_checks(faces):
     corners = [c["message"] for c in checks if c["name"] == "Corners"]
     assert corners and "square timber corner trim" in corners[0]
     assert not [c for c in checks if c["name"] == "Corner profile"]       # no panel-thickness warning
+
+
+@pytest.mark.parametrize("orient", ["horizontal", "vertical"])
+def test_planks_run_out_to_the_trim_once_trimmed(faces, orient):
+    """Exported (trimmed to the face), the planks on both faces still run out to the trim,
+    the profile gap short of its legs, not back to the wall's corner line."""
+    from cladding_primitives import corner_ring
+    params, out = _pair(faces, detail="profile", kind="plank", plank_orient=orient, trim=True)
+    D = _parse(params)["plank_t"]
+    face = {i["elevation"]: i["total_depth"] for i in out["info"]}
+    def reach(m, side):
+        pts = corner_ring(m["profile"], m.get("corner"), float(m["depth"]) + float(m["thickness"]))
+        return max(q[0] for q in pts) if side == "r" else min(q[0] for q in pts)
+    a = max(reach(m, "r") for m in out["geometry"] if m["ifc_type"] == "plank" and m["elevation"] == "Elevation A")
+    b = min(reach(m, "l") for m in out["geometry"] if m["ifc_type"] == "plank" and m["elevation"] == "Elevation B")
+    assert abs(a - (8000 + face["Elevation A"] - D - 21)) < 0.5
+    assert abs(b + (face["Elevation B"] - D - 21)) < 0.5
+    assert [m for m in out["geometry"] if m.get("corner_timber")]           # and the L survived the trim
