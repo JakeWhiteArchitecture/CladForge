@@ -139,3 +139,38 @@ def test_vertical_planks_are_measured_up_the_wall():
     plan = nesting.chain_plan(geometry, p, ["A"], 0.0)
     q = plan["boards"][0]["pieces"][0]
     assert (q["cut_w"], q["cut_h"]) == (2400, 150)
+
+
+class _Recorder:
+    """Stands in for the DXF writer: keeps what is drawn."""
+    def __init__(self):
+        self.rings, self.texts = [], []
+
+    def add_ring(self, pts, layer, ox=0.0, oy=0.0):
+        self.rings.append((layer, [(x + ox, y + oy) for x, y in pts]))
+
+    def add_text(self, text, pos, height, layer="0", rotation=0.0):
+        self.texts.append((text, pos, rotation))
+
+    def add_line(self, a, b, layer="0"):
+        pass
+
+
+def test_the_cutting_plan_stands_plank_lengths_up_side_by_side():
+    """Each stock length is drawn upright, a plank wide and its length tall, the lengths
+    left to right along the row, pieces from the bottom, labels running up the page."""
+    pieces = [_piece("A Plank C1-%d" % i, L, u=i * 1000.0) for i, L in enumerate([3000, 2500, 1000, 900])]
+    plan = nesting.pack_lengths(pieces, 3600, 150, kerf=3)
+    rec = _Recorder()
+    for i, b in enumerate(plan["boards"]):
+        nesting._draw_length(rec, plan, b, i + 1, i * 550.0, 0.0)
+    boards = [pts for layer, pts in rec.rings if layer == "BOARD"]
+    assert len(boards) == plan["n_boards"] >= 2
+    for k, pts in enumerate(boards):
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        assert (max(xs) - min(xs), max(ys) - min(ys)) == (150, 3600)       # upright
+        assert min(xs) == k * 550.0 and min(ys) == 0.0                       # side by side
+    pieces_drawn = [pts for layer, pts in rec.rings if layer == "PIECE"]
+    assert all(max(p[1] for p in pts) - min(p[1] for p in pts) in (3000, 2500, 1000, 900) for pts in pieces_drawn)
+    assert all(rot == 90.0 for _t, _p, rot in rec.texts)
+    assert any(t.startswith("Length 1  -  waste") for t, _p, _r in rec.texts)

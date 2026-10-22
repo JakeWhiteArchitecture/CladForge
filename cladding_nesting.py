@@ -17,7 +17,7 @@ The cutting plan packs each elevation on its own (chain_plan), so every board is
 for one elevation, and puts the boards and their pieces in wall order, left to right.
 That is the order the cutting run plays them in and the cutting plan DXF draws them.
 
-Planks are cut from stock lengths (the plank's maximum length), so their packing is
+Planks are cut from stock lengths (the plank's stock length), so their packing is
 one-dimensional (pack_lengths): each piece takes its length and a kerf from a length,
 any end trim comes off both ends first, and a plank ripped narrower than the face (a
 closing course) is still cut from a full-width length. The plan has the same shape as
@@ -464,6 +464,8 @@ def plan_dxf(plans):
     waste per board and in total. A plan packed per elevation (chain_plan) draws one row
     per elevation, its boards left to right in wall order and numbered through the job,
     the same order the cutting run plays; a plain packing draws its boards in one row.
+    A plank plan draws its stock lengths standing up, side by side along the row, each
+    labelled up its side, its pieces from the bottom in the order they are cut.
     *plans* is [(chain name, plan)]."""
     from dxf_generator import _DxfWriter
     dxf = _DxfWriter()
@@ -478,8 +480,9 @@ def plan_dxf(plans):
                  (0.0, 420.0), 70.0, "NOTES")
     for chain, pl in plans:
         bw, bh = pl["board"]
-        gx, gy = bw + 700.0, bh + 1100.0
         plank = pl.get("kind") == "plank"
+        dw, dh = (bh, bw) if plank else (bw, bh)            # as drawn: a plank's length stands up
+        gx, gy = dw + (400.0 if plank else 700.0), dh + 1100.0
         dxf.add_text("%s  -  %s, lower bound %d, waste %.1f%%, kerf %.0f%s%s%s" % (
             chain, ("%d length(s) of %.0f, %.0f wide" if plank else "%d board(s) of %.0f x %.0f") % (pl["n_boards"], bw, bh),
             pl["lower_bound"], 100.0 * pl["waste"], pl["kerf"],
@@ -508,14 +511,9 @@ def plan_dxf(plans):
                 dxf.add_text("%s  -  %d %s, waste %.1f%%" % (row["elevation"], row["n_boards"],
                              "length(s)" if plank else "board(s)", 100.0 * row["waste"]), (0.0, ry + 60.0), 80.0, "NOTES")
                 ry -= 250.0
-            if plank:                              # lengths stacked down the row, like a cutting list
-                for i, b in enumerate(boards):
-                    _draw_board(dxf, pl, b, b.get("no", i + 1), 0.0, ry - bh - i * (bh + 260.0))
-                ry -= len(boards) * (bh + 260.0) + 500.0
-            else:                                  # boards left to right
-                for i, b in enumerate(boards):
-                    _draw_board(dxf, pl, b, b.get("no", i + 1), i * gx, ry - bh)
-                ry -= gy
+            for i, b in enumerate(boards):         # left to right along the row
+                _draw_board(dxf, pl, b, b.get("no", i + 1), i * gx, ry - dh)
+            ry -= gy
         y = ry - 600.0
     return dxf.to_string()
 
@@ -523,29 +521,44 @@ def plan_dxf(plans):
 def _draw_board(dxf, pl, b, no, ox, oy):
     bw, bh = pl["board"]
     plank = pl.get("kind") == "plank"
+    if plank:
+        return _draw_length(dxf, pl, b, no, ox, oy)
     dxf.add_ring([(0, 0), (bw, 0), (bw, bh), (0, bh)], "BOARD", ox, oy)
     t = pl.get("trim") or 0.0
-    if t and plank:                        # a length's squared-up ends, cut off first
-        for x0, x1 in ((0, t), (bw - t, bw)):
-            dxf.add_ring([(x0, 0), (x1, 0), (x1, bh), (x0, bh)], "OFFCUT", ox, oy)
-            _hatch(dxf, ox + x0, oy, ox + x1, oy + bh, step=max(t, 20.0))
-    elif t:                                # the squared-up edges, cut off first
+    if t:                                # the squared-up edges, cut off first
         dxf.add_ring([(t, t), (bw - t, t), (bw - t, bh - t), (t, bh - t)], "OFFCUT", ox, oy)
         for x0, y0, x1, y1 in ((0, 0, bw, t), (0, bh - t, bw, bh), (0, t, t, bh - t), (bw - t, t, bw, bh - t)):
             _hatch(dxf, ox + x0, oy + y0, ox + x1, oy + y1, step=max(t, 20.0))
-    if plank:
-        dxf.add_text("Length %d  -  waste %.1f%%" % (no, 100.0 * b["waste"]), (ox - 1500.0, oy + bh / 2.0 - 30.0), 60.0, "NOTES")
-    else:
-        dxf.add_text("Board %d  -  waste %.1f%%" % (no, 100.0 * b["waste"]), (ox, oy + bh + 60.0), 60.0, "NOTES")
+    dxf.add_text("Board %d  -  waste %.1f%%" % (no, 100.0 * b["waste"]), (ox, oy + bh + 60.0), 60.0, "NOTES")
     for q in b["pieces"]:
         dxf.add_ring([(q["x"], q["y"]), (q["x"] + q["w"], q["y"]), (q["x"] + q["w"], q["y"] + q["h"]),
                       (q["x"], q["y"] + q["h"])], "PIECE", ox, oy)
-        if plank:
-            label = "%s  %.0f%s" % (q["name"], q["cut_w"], ", ripped to %.0f" % q["cut_h"] if q.get("ripped") else "")
-            dxf.add_text(label, (ox + q["x"] + 20.0, oy + q["y"] + min(q["h"], bh) / 2.0 - 15.0), min(35.0, 0.4 * bh), "PIECE")
-            continue
         label = "%s  %.0f x %.0f%s" % (q["name"], q["cut_w"], q["cut_h"], " (rotated)" if q["rotated"] else "")
         dxf.add_text(label, (ox + q["x"] + 30.0, oy + q["y"] + q["h"] / 2.0), 40.0, "PIECE")
     for x, yy, w, h in b["offcuts"]:
         dxf.add_ring([(x, yy), (x + w, yy), (x + w, yy + h), (x, yy + h)], "OFFCUT", ox, oy)
         _hatch(dxf, ox + x, oy + yy, ox + x + w, oy + yy + h)
+
+
+def _draw_length(dxf, pl, b, no, ox, oy):
+    """A plank's stock length standing up, a plank wide and its length tall, the pieces
+    from the bottom: a piece at x along the length is drawn at height x, across it at
+    y. Labels run up the page, the length's beside it on the left."""
+    L, w = pl["board"]
+    dxf.add_ring([(0, 0), (w, 0), (w, L), (0, L)], "BOARD", ox, oy)
+    t = pl.get("trim") or 0.0
+    if t:                                  # the squared-up ends, cut off first
+        for y0, y1 in ((0, t), (L - t, L)):
+            dxf.add_ring([(0, y0), (w, y0), (w, y1), (0, y1)], "OFFCUT", ox, oy)
+            _hatch(dxf, ox, oy + y0, ox + w, oy + y1, step=max(t, 20.0))
+    dxf.add_text("Length %d  -  waste %.1f%%" % (no, 100.0 * b["waste"]), (ox - 40.0, oy), 50.0, "NOTES", rotation=90.0)
+    th = min(35.0, 0.3 * w)
+    for q in b["pieces"]:
+        x0, y0, x1, y1 = q["y"], q["x"], q["y"] + q["h"], q["x"] + q["w"]
+        dxf.add_ring([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "PIECE", ox, oy)
+        label = "%s  %.0f%s" % (q["name"], q["cut_w"], ", ripped to %.0f" % q["cut_h"] if q.get("ripped") else "")
+        dxf.add_text(label, (ox + (x0 + x1) / 2.0 + th / 2.0, oy + y0 + 20.0), th, "PIECE", rotation=90.0)
+    for x, y, lw, lh in b["offcuts"]:
+        x0, y0, x1, y1 = y, x, y + lh, x + lw
+        dxf.add_ring([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "OFFCUT", ox, oy)
+        _hatch(dxf, ox + x0, oy + y0, ox + x1, oy + y1)

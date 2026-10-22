@@ -15,7 +15,7 @@ const RUN_MOVE = 900;             // ms the camera may take to reach it at 1×
 const RUN_GOLDEN = 137.508;       // degrees between neighbouring boards' hues
 const RUN_GLOW = [[0, 30, 0.95], [30, 110, 0.35]];   // glow bands round the piece: from, to (mm), opacity
 const RUN_BOARD_PX = 210;         // height a board is drawn on the strip
-const RUN_LENGTH_PX = 560;        // width a plank's stock length is drawn on the strip
+const RUN_LENGTH_PX = 440;        // height a plank's stock length is drawn on the strip, standing up
 
 const run = { on: false, plan: null, steps: [], i: -1, playing: false, speed: 1, timer: null,
               meshes: {}, group: null, glow: null, saved: null };
@@ -215,29 +215,42 @@ function runLabel(text, mesh) {
     const narrow = Math.min(bb.max.x - bb.min.x, bb.max.y - bb.min.y);
     const k = Math.min(240, narrow < 400 ? 0.7 * narrow : 0.22 * narrow) / t.h;   // text height, mm: planks are narrow
     sprite.scale.set(t.w * k, t.h * k, 1);
+    // a tall, narrow piece (a vertical plank) has its number running up it
+    if (bb.max.y - bb.min.y > 2 * (bb.max.x - bb.min.x)) sprite.material.rotation = Math.PI / 2;
     sprite.position.copy(new THREE.Vector3((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, bb.max.z + 15).applyMatrix4(mesh.matrix));
     return sprite;
 }
 
-// Swing the camera to face the piece from outside, a little above and to the side, close
-// enough to see it and far enough to see where it sits on the wall. Between elevations
-// the direction turns round the target, so the camera follows the chain round its corners.
+// Swing the camera to face the board's pieces from outside, a little above and to the
+// side, far enough back that every piece cut from the board in focus is on screen at
+// once (and a good stretch of wall round them), so stepping through a board's pieces
+// keeps the camera still and it moves on with the next board. Between elevations the
+// direction turns round the target, so the camera follows the chain round its corners.
 function followPiece(s) {
     const m = run.meshes[s.piece.name];
     if (!m) return;
-    const bb = m.geometry.boundingBox || (m.geometry.computeBoundingBox(), m.geometry.boundingBox);
-    const target = bb.getCenter(new THREE.Vector3()).applyMatrix4(m.matrix);
+    const box = new THREE.Box3();
+    for (const t of run.steps) {
+        const mesh = t.k === s.k && run.meshes[t.piece.name];
+        if (!mesh) continue;
+        const bb = mesh.geometry.boundingBox || (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
+        box.union(bb.clone().applyMatrix4(mesh.matrix));
+    }
+    const target = box.getCenter(new THREE.Vector3());
     const u = new THREE.Vector3().setFromMatrixColumn(m.matrix, 0).normalize();
     const n = new THREE.Vector3().setFromMatrixColumn(m.matrix, 2).normalize();
     const dir = n.clone().add(new THREE.Vector3(0, 0.3, 0)).addScaledVector(u, 0.18).normalize();
-    const size = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y);
-    const dist = Math.min(16000, Math.max(8000, size * 4));     // the piece and a good stretch of wall round it
+    // fit the pieces' bounding sphere in the narrower of the two fields of view
+    const r = box.getSize(new THREE.Vector3()).length() / 2;
+    const vfov = THREE.MathUtils.degToRad(camera.fov), hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect);
+    const dist = Math.max(8000, 1.15 * r / Math.sin(Math.min(vfov, hfov) / 2));
     animatePose(currentPose(), { target, dir, dist }, null, Math.min(RUN_MOVE, 0.7 * RUN_DWELL) / run.speed);
 }
 
 // ─── THE STRIP ───
-// One row per elevation, boards left to right, drawn in board millimetres the way the
-// DXF draws them (y up), pieces in the board's hue, offcuts hatched grey.
+// One row per elevation, boards (or plank lengths, standing up) left to right, drawn in
+// board millimetres the way the DXF draws them, pieces in the board's hue, offcuts
+// hatched grey.
 function renderStrip(plan) {
     const ns = 'http://www.w3.org/2000/svg', [bw, bh] = plan.board;
     const extra = plan.n_boards - (plan.whole_job_boards || plan.n_boards), plank = plan.kind === 'plank';
@@ -257,38 +270,43 @@ function renderStrip(plan) {
         sec.className = 'run-row';
         sec.innerHTML = `<h3>${esc(row.elevation)} <span>${row.n_boards} ${unit}${row.n_boards === 1 ? '' : 's'} · waste ${(100 * row.waste).toFixed(1)}%</span></h3>`;
         const line = document.createElement('div');
-        line.className = 'run-boards';
+        line.className = 'run-boards' + (plank ? ' planks' : '');
         for (const b of boards) {
             const k = plan.boards.indexOf(b), h = runHue(k);
             const fig = document.createElement('figure');
             fig.className = 'run-board';
             fig.dataset.k = k;
             fig.style.setProperty('--hue', h.toFixed(1));
+            // As the DXF draws it: a board flat, a plank's stock length standing up, a plank
+            // wide, its pieces from the bottom. W x H is the drawing; R maps a rectangle in
+            // board millimetres (x along the board, y up it) to the SVG's (y down).
+            const W = plank ? bh : bw, H = plank ? bw : bh;
+            const R = plank ? (x, y, w, hh) => ({ x: y, y: bw - x - w, width: hh, height: w })
+                            : (x, y, w, hh) => ({ x, y: bh - y - hh, width: w, height: hh });
             const svg = document.createElementNS(ns, 'svg');
-            svg.setAttribute('viewBox', `-20 -20 ${bw + 40} ${bh + 40}`);
-            // a board at a fixed height; a plank's stock length at a fixed width, so it stays legible
-            const px = plank ? RUN_LENGTH_PX / (bw + 40) : RUN_BOARD_PX / (bh + 40);
-            svg.style.height = (px * (bh + 40)).toFixed(1) + 'px';
-            svg.style.width = (px * (bw + 40)).toFixed(1) + 'px';
+            svg.setAttribute('viewBox', `-20 -20 ${W + 40} ${H + 40}`);
+            const px = (plank ? RUN_LENGTH_PX : RUN_BOARD_PX) / (H + 40);
+            svg.style.height = (px * (H + 40)).toFixed(1) + 'px';
+            svg.style.width = (px * (W + 40)).toFixed(1) + 'px';
             const add = (tag, attrs, parent = svg) => {
                 const el = document.createElementNS(ns, tag);
                 for (const [a, v] of Object.entries(attrs)) el.setAttribute(a, v);
                 parent.appendChild(el);
                 return el;
             };
-            const Y = (y, hh) => bh - y - hh;               // DXF y runs up, SVG y down
-            add('rect', { x: 0, y: 0, width: bw, height: bh, class: 'run-stock' });
-            for (const [x, y, w, hh] of b.offcuts) add('rect', { x, y: Y(y, hh), width: w, height: hh, class: 'run-offcut' });
-            if (plan.trim && plank) add('rect', { x: plan.trim, y: 0, width: bw - 2 * plan.trim, height: bh, class: 'run-trim' });
-            else if (plan.trim) add('rect', { x: plan.trim, y: plan.trim, width: bw - 2 * plan.trim, height: bh - 2 * plan.trim, class: 'run-trim' });
+            add('rect', { x: 0, y: 0, width: W, height: H, class: 'run-stock' });
+            for (const [x, y, w, hh] of b.offcuts) add('rect', Object.assign(R(x, y, w, hh), { class: 'run-offcut' }));
+            const t = plan.trim || 0;
+            if (t) add('rect', Object.assign(plank ? R(t, 0, bw - 2 * t, bh) : R(t, t, bw - 2 * t, bh - 2 * t), { class: 'run-trim' }));
             b.pieces.forEach((q, j) => {
                 const g = add('g', { class: 'run-piece', 'data-step': step + j });
                 g.style.setProperty('--hue', h.toFixed(1));
-                add('rect', { x: q.x, y: Y(q.y, q.h), width: q.w, height: q.h }, g);
-                const cx = q.x + q.w / 2, cy = Y(q.y, q.h) + q.h / 2;
-                if (plank) {                                 // one line along the length
-                    const fs = Math.min(0.62 * bh, 0.11 * q.w);
-                    add('text', { x: cx, y: cy, 'font-size': fs, class: 'run-no' }, g).textContent =
+                const r = R(q.x, q.y, q.w, q.h);
+                add('rect', r, g);
+                const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+                if (plank) {                                 // one line, running up the length
+                    const fs = Math.min(0.55 * bh, 0.09 * q.w);
+                    add('text', { x: cx, y: cy, 'font-size': fs, class: 'run-no', transform: `rotate(-90 ${cx} ${cy})` }, g).textContent =
                         `${b.no}·${j + 1}  ${Math.round(q.cut_w)}${q.ripped ? ' ✂' + Math.round(q.cut_h) : ''}`;
                 } else {
                     const fs = Math.max(55, Math.min(150, 0.16 * Math.min(q.w, q.h)));
@@ -301,7 +319,9 @@ function renderStrip(plan) {
             step += b.pieces.length;
             fig.appendChild(svg);
             const cap = document.createElement('figcaption');
-            cap.textContent = `${plank ? 'Length' : 'Board'} ${b.no} · ${Math.round(100 * (1 - b.waste))}% used`;
+            const used = Math.round(100 * (1 - b.waste));
+            if (plank) { cap.innerHTML = `L${b.no}<br>${used}%`; fig.title = `Length ${b.no} · ${used}% used`; }
+            else cap.textContent = `Board ${b.no} · ${used}% used`;
             fig.appendChild(cap);
             fig.addEventListener('click', () => { runPlay(false); runGo(run.steps.findIndex(t => t.k === k)); });
             line.appendChild(fig);

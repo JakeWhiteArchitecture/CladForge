@@ -1133,17 +1133,21 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         const want = runColor(runHue(s.k), FOCUS[0], FOCUS[1]).getHex();
         const others = run.steps.filter(t => t.k !== s.k && run.meshes[t.piece.name]).map(t => run.meshes[t.piece.name].material.color.getHex());
         const c = mesh.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(mesh.matrix), p = c.clone().project(camera);
+        // every piece cut from the board in focus is on screen at once
+        const seen = run.steps.filter(t => t.k === s.k).map(t => run.meshes[t.piece.name].geometry.boundingBox
+            .getCenter(new THREE.Vector3()).applyMatrix4(run.meshes[t.piece.name].matrix).project(camera))
+            .every(q => Math.abs(q.x) < 1 && Math.abs(q.y) < 1 && q.z < 1);
         const a = fig.getBoundingClientRect(), b = document.getElementById('run-strip').getBoundingClientRect();
         return { focus: focus.length, stripStep: focus[0] && +focus[0].dataset.step, i, boardK: fig && +fig.dataset.k, k: s.k,
                  wall: mesh.material.color.getHex() === want, emissive: mesh.material.emissive.getHex() !== 0, othersDiffer: others.every(h => h !== want),
-                 glow: run.glow ? run.glow.children.length : 0, targetOff: Math.round(controls.target.distanceTo(c)),
+                 glow: run.glow ? run.glow.children.length : 0, seen,
                  onScreen: Math.abs(p.x) < 1 && Math.abs(p.y) < 1 && p.z < 1, stripShows: a.left >= b.left - 1 && a.right <= b.right + 1,
                  counter: document.getElementById('run-board').textContent, no: s.board.no, where: document.getElementById('run-where').textContent,
                  elevation: s.board.elevation, name: s.piece.name };
     });
     console.log('cutting run focus:', JSON.stringify(linked));
     if (linked.focus !== 1 || linked.stripStep !== linked.i || linked.boardK !== linked.k || !linked.wall || !linked.emissive || !linked.othersDiffer
-        || linked.glow !== 2 || linked.targetOff > 5 || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
+        || linked.glow !== 2 || !linked.seen || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
         || linked.where !== `${linked.elevation} · ${linked.name}`)
         throw new Error('cutting run focus not linked: ' + JSON.stringify(linked));
     // Playing moves on by itself; the keys step, pause and close, and nothing else in the
