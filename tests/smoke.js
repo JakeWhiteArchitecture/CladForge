@@ -640,7 +640,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || readout.at6.colour !== 'rgb(239, 68, 68)' || readout.at4.colour === readout.at6.colour
         || readout.real.over !== (readout.real.waste > 5) || readout.real.ms > 1000)
         throw new Error('waste readout wrong: ' + JSON.stringify(readout));
-    // The whole job is packed together (every built chain), and Optimise boards runs the
+    // Every built chain is packed (each elevation on its own), and Optimise boards runs the
     // full search: never more boards than the quick check, and the readout says which it is.
     const optimised = await page.evaluate(async () => {
         const quick = window._lastPlan, builtNames = state.chains.filter(c => c.built)
@@ -692,6 +692,9 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                 (planText.match(/Board \d+  -  waste/g) || []).length, 'boards drawn');
     if (!planText.includes('Cutting plan for setting-out. Not a quantity take-off for pricing.') || !/Panel R\d-\d/.test(planText))
         throw new Error('cutting plan DXF is missing its header or pieces');
+    // One row per elevation, each board cut for one elevation.
+    if (!/Elevation A  -  \d+ board\(s\), waste/.test(planText) || !planText.includes('Each elevation packed on its own'))
+        throw new Error('cutting plan DXF is not laid out per elevation');
 
     // The wing's south wall: not coplanar with A and not adjacent, so it starts its own chain.
     await lookAt('Wing south wall', [0, 0.3, 1]);
@@ -1087,6 +1090,94 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || hid.through === 'Wing south wall' || hid.count !== '1 hidden' || !slabs || byType.slabsHidden !== slabs
         || byType.hidden !== slabs + 1 || shown !== 0 || modeBack !== 'pick')
         throw new Error('hiding elements wrong: ' + JSON.stringify({ hideBefore, hid, slabs, byType, shown, modeBack }));
+
+    // Cutting run: the cutting plan played board by board beside the model. Every built
+    // chain in panels, so the run crosses elevations, chains and corners.
+    await page.evaluate(async () => {
+        if (toggleValue('cladding-type') !== 'panel') { selectToggle('cladding-type', 'panel'); onTypeChange(); }
+        await updatePreview();
+    });
+    await page.waitForFunction(() => window._lastPlan && document.getElementById('run-open').style.display !== 'none', null, { timeout: 30000 });
+    await page.click('#run-open');
+    await page.waitForFunction(() => inCuttingRun() && run.i >= 0, null, { timeout: 120000 });
+    await page.evaluate(() => { runPlay(false); runGo(0); });
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: path.join(__dirname, 'smoke_run.png') });
+    const runOpen = await page.evaluate(() => {
+        const plan = run.plan, view = document.getElementById('viewport').getBoundingClientRect(), pane = document.getElementById('run-pane').getBoundingClientRect();
+        const names = run.steps.map(s => s.piece.name);
+        return { boards: plan.n_boards, figures: document.querySelectorAll('#run-strip .run-board').length,
+                 rows: [...document.querySelectorAll('#run-strip .run-row h3')].map(h => h.firstChild.textContent.trim()),
+                 planRows: plan.rows.map(r => r.elevation),
+                 oneElevationPerBoard: plan.boards.every(b => b.pieces.every(q => q.name.startsWith(b.elevation + ' '))),
+                 steps: run.steps.length, pieces: plan.n_pieces, onWall: names.filter(n => run.meshes[n]).length,
+                 whole: plan.whole_job_boards, view: Math.round(view.width), pane: Math.round(pane.width),
+                 sidePanel: getComputedStyle(document.getElementById('panel')).display,
+                 counter: document.getElementById('run-board').textContent + ' ' + document.getElementById('run-of').textContent,
+                 labels: run.group.children.length, summary: document.getElementById('run-summary').textContent };
+    });
+    console.log('cutting run:', JSON.stringify(runOpen));
+    if (runOpen.figures !== runOpen.boards || runOpen.rows.join() !== runOpen.planRows.join() || runOpen.planRows.length < 2
+        || !runOpen.oneElevationPerBoard || runOpen.steps !== runOpen.pieces || runOpen.onWall !== runOpen.steps
+        || runOpen.sidePanel !== 'none' || Math.abs(runOpen.view - runOpen.pane) > 40 || runOpen.counter !== `Board 1 of ${runOpen.boards}`
+        || runOpen.labels !== runOpen.steps || runOpen.boards < runOpen.whole || !/^\d+ boards of 1250 × 2500 · waste /.test(runOpen.summary))
+        throw new Error('cutting run did not open right: ' + JSON.stringify(runOpen));
+    // The last piece: the same piece glows on its board and on the wall, in the board's
+    // hue and no other board's, the strip has scrolled to it and the camera looks at it.
+    const linked = await page.evaluate(async () => {
+        const i = run.steps.length - 1;
+        runGo(i);
+        await new Promise(r => setTimeout(r, 1500));
+        const s = run.steps[i], mesh = run.meshes[s.piece.name];
+        const focus = document.querySelectorAll('#run-strip .run-piece.focus'), fig = document.querySelector('#run-strip .run-board.focus');
+        const want = runColor(runHue(s.k), FOCUS[0], FOCUS[1]).getHex();
+        const others = run.steps.filter(t => t.k !== s.k && run.meshes[t.piece.name]).map(t => run.meshes[t.piece.name].material.color.getHex());
+        const c = mesh.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(mesh.matrix), p = c.clone().project(camera);
+        const a = fig.getBoundingClientRect(), b = document.getElementById('run-strip').getBoundingClientRect();
+        return { focus: focus.length, stripStep: focus[0] && +focus[0].dataset.step, i, boardK: fig && +fig.dataset.k, k: s.k,
+                 wall: mesh.material.color.getHex() === want, emissive: mesh.material.emissive.getHex() !== 0, othersDiffer: others.every(h => h !== want),
+                 glow: run.glow ? run.glow.children.length : 0, targetOff: Math.round(controls.target.distanceTo(c)),
+                 onScreen: Math.abs(p.x) < 1 && Math.abs(p.y) < 1 && p.z < 1, stripShows: a.left >= b.left - 1 && a.right <= b.right + 1,
+                 counter: document.getElementById('run-board').textContent, no: s.board.no, where: document.getElementById('run-where').textContent,
+                 elevation: s.board.elevation, name: s.piece.name };
+    });
+    console.log('cutting run focus:', JSON.stringify(linked));
+    if (linked.focus !== 1 || linked.stripStep !== linked.i || linked.boardK !== linked.k || !linked.wall || !linked.emissive || !linked.othersDiffer
+        || linked.glow !== 2 || linked.targetOff > 5 || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
+        || linked.where !== `${linked.elevation} · ${linked.name}`)
+        throw new Error('cutting run focus not linked: ' + JSON.stringify(linked));
+    // Playing moves on by itself; the keys step, pause and close, and nothing else in the
+    // app sees them (E would go flat, Enter would open the wizard).
+    const played = await page.evaluate(async () => {
+        runSpeed(4); runGo(0); runPlay(true);
+        await new Promise(r => setTimeout(r, 1300));
+        const moved = run.i;
+        runPlay(false);
+        return { moved };
+    });
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    const iBefore = await page.evaluate(() => run.i);
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('e');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press(' ');
+    const keys = await page.evaluate(() => ({ i: run.i, playing: run.playing, flat: in2D(), wizard: document.getElementById('chain-wizard').classList.contains('open') }));
+    await page.keyboard.press(' ');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(900);
+    const closed = await page.evaluate(() => {
+        const meshes = []; for (const l of cladGroup.children) for (const o of l.children) if (o.isMesh && o.userData.runColor !== undefined) meshes.push(o);
+        return { on: inCuttingRun(), pane: document.getElementById('run-pane').hidden, sidePanel: getComputedStyle(document.getElementById('panel')).display,
+                 restored: meshes.every(o => o.material.color.getHex() === o.userData.runColor && o.material.emissive.getHex() === o.userData.runEmissive),
+                 glow: !!run.glow, labels: !!run.group, view: Math.round(document.getElementById('viewport').getBoundingClientRect().width) };
+    });
+    console.log('cutting run playback:', JSON.stringify({ played, iBefore, keys, closed }));
+    if (played.moved < 2 || keys.i !== iBefore + 1 || !keys.playing || keys.flat || keys.wizard || closed.on || !closed.pane
+        || closed.sidePanel === 'none' || !closed.restored || closed.glow || closed.labels || closed.view < 1000)
+        throw new Error('cutting run playback wrong: ' + JSON.stringify({ played, iBefore, keys, closed }));
+
     await page.evaluate(() => hideElement(allMeshes[0]));           // a new model starts with none hidden
 
     // The server importer, the fallback for models web-ifc cannot build.

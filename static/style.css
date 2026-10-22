@@ -104,7 +104,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .check-dot.info { background: #2196f3; }
 .scope-note { font-size: 11px; color: var(--hint); line-height: 1.5; border-left: 2px solid var(--border); padding-left: 8px; margin-top: 8px; }
 
-.viewport { flex: 1; position: relative; background: #0a0a1a; }
+.viewport { flex: 1; min-width: 0; position: relative; overflow: hidden; background: #0a0a1a; }  /* min-width: the canvas must not hold it wide */
 .viewport canvas { display: block; }
 .viewport-info { position: absolute; top: 10px; right: 10px; font-size: 11px; color: #00ccff; z-index: 5; }
 .dim-overlay { position: absolute; bottom: 20px; left: 20px; z-index: 5; background: rgba(22,33,62,0.9); padding: 10px 14px; border-radius: 6px; font-size: 12px; line-height: 1.8; border: 1px solid var(--border); min-width: 220px; }
@@ -214,3 +214,49 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .hide-row select { flex: 1; min-width: 0; font-size: 11px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 3px; }
 .hide-row .btn { flex: 0 0 auto; width: auto; padding: 4px 10px; }
 .hidden-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+
+/* Cutting run: the view on the left, the cutting plan on the right, played board by board. */
+#run-open { padding: 9px 16px; border: 1px solid var(--accent); border-radius: 20px; background: rgba(22,33,62,0.92);
+    color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+#run-open:hover:not(:disabled) { background: #1a4a80; }
+#run-open:disabled { opacity: 0.7; cursor: wait; }
+.cut-run .panel, .cut-run .legend, .cut-run .dim-overlay, .cut-run .waste-readout, .cut-run .view-actions,
+.cut-run .viewport-info, .cut-run .edit-widget, .cut-run .dim2d-layer, .cut-run .dim2d-editor { display: none !important; }
+.run-pane { flex: 0 0 50%; min-width: 0; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border); }
+.run-pane[hidden] { display: none; }
+.run-head { position: relative; padding: 16px 20px 12px; display: grid; grid-template-columns: auto 1fr; column-gap: 12px; row-gap: 2px; align-items: center; }
+.run-swatch { grid-row: 1 / 4; width: 14px; align-self: stretch; border-radius: 3px; box-shadow: 0 0 14px currentColor; }
+.run-count { font-size: 15px; color: var(--muted); }
+.run-count b { font-size: 26px; color: var(--text); letter-spacing: 0.3px; }
+.run-piece { font-size: 15px; color: var(--text); font-variant-numeric: tabular-nums; }
+.run-where { font-size: 12px; color: var(--hint); }
+.run-bar { grid-column: 1 / 3; height: 3px; background: var(--bg); border-radius: 2px; margin-top: 10px; overflow: hidden; }
+.run-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.3s; }
+.run-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 20px 10px; }
+.run-controls .mini { padding: 6px 12px; font-size: 12px; }
+.run-controls .run-play { min-width: 64px; background: var(--accent); }
+.run-speed { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: auto; }
+.run-speed input { width: 110px; }
+.run-speed span { min-width: 30px; color: var(--accent); font-weight: 600; }
+.run-summary { padding: 0 20px 10px; font-size: 12px; color: var(--hint); border-bottom: 1px solid var(--border); }
+.run-strip { flex: 1; overflow: auto; padding: 8px 0 24px; scroll-padding: 0 40px; }
+.run-row { padding: 10px 20px 4px; }
+.run-row h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); margin-bottom: 8px; }
+.run-row h3 span { text-transform: none; letter-spacing: 0; color: var(--hint); font-weight: 400; margin-left: 6px; }
+.run-boards { display: flex; gap: 22px; width: max-content; padding: 6px 4px 8px; }
+.run-board { margin: 0; display: grid; gap: 6px; cursor: pointer; border-radius: 6px; padding: 6px; transition: box-shadow 0.25s, transform 0.25s; }
+.run-board figcaption { font-size: 11px; color: var(--muted); text-align: center; }
+.run-board.focus { box-shadow: 0 0 0 2px hsl(var(--hue), 90%, 62%), 0 0 22px 4px hsla(var(--hue), 90%, 60%, 0.55); }
+.run-board.focus figcaption { color: var(--text); font-weight: 600; }
+.run-board svg { display: block; overflow: visible; }
+.run-stock { fill: #27313d; stroke: #8ea3b8; stroke-width: 8; }
+.run-offcut { fill: url(#run-hatch); stroke: #5b6b7a; stroke-width: 4; }
+.run-trim { fill: none; stroke: #8ea3b8; stroke-width: 4; stroke-dasharray: 30 20; }
+.run-piece { cursor: pointer; }
+.run-piece rect { fill: hsl(var(--hue), 48%, 72%); stroke: #10202a; stroke-width: 6; transition: fill 0.2s; }
+.run-piece.on rect { fill: hsl(var(--hue), 70%, 70%); }
+.run-piece.focus rect { fill: hsl(var(--hue), 88%, 58%); stroke: #fff; stroke-width: 18; filter: drop-shadow(0 0 40px hsl(var(--hue), 95%, 62%)); }
+.run-piece text { fill: #10202a; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; pointer-events: none; }
+.run-no { font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .run-board, .run-piece rect, .run-bar span { transition: none; } }
+@media (max-width: 900px) { .run-pane { flex: 0 0 55%; border-left: none; border-top: 1px solid var(--border); } }

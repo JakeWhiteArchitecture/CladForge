@@ -237,6 +237,7 @@
             <div class="wr-key" id="wr-key" style="display:none"><span style="background:#22c55e"></span>90%+ <span style="background:#f59e0b"></span>75–90% <span style="background:#ef4444"></span>&lt;75% board use</div>
         </div>
         <div class="view-actions">
+            <button id="run-open" style="display:none" onclick="openCuttingRun()" title="Play the cutting plan board by board beside the model">Cutting run</button>
             <button id="view-2d" onclick="toggle2D()" disabled title="Look at the active elevation flat and square-on (E)">2D elevation</button>
             <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
         </div>
@@ -261,6 +262,26 @@
             <p class="hint" style="margin:2px 0 0">Shifts this elevation's battens and boards, ± half a bay. Joints stop carrying round a corner once its two faces are offset differently. Click another clad face to edit that one.</p>
         </div>
     </div>
+
+    <!-- Cutting run: the cutting plan played board by board beside the model (cutrun.js) -->
+    <aside class="run-pane" id="run-pane" hidden aria-label="Cutting run">
+        <div class="run-head">
+            <span class="run-swatch" id="run-swatch"></span>
+            <div class="run-count"><b id="run-board">Board 1</b> <span id="run-of">of 1</span></div>
+            <div class="run-piece" id="run-piece" aria-live="polite"></div>
+            <div class="run-where" id="run-where"></div>
+            <div class="run-bar"><span id="run-progress"></span></div>
+        </div>
+        <div class="run-controls">
+            <button class="mini" onclick="runStep(-1)" title="Previous piece (←)" aria-label="Previous piece">◀</button>
+            <button class="mini run-play" id="run-play" onclick="runPlay(!run.playing)" title="Play or pause (Space)" aria-pressed="false">Play</button>
+            <button class="mini" onclick="runStep(1)" title="Next piece (→)" aria-label="Next piece">▶</button>
+            <label class="run-speed">Speed <input type="range" id="run-speed" min="0.25" max="4" step="0.25" value="1" oninput="runSpeed(this.value)"> <span id="run-speed-val">1×</span></label>
+            <button class="mini" onclick="closeCuttingRun()" title="Back to the model (Esc)">Close</button>
+        </div>
+        <div class="run-summary" id="run-summary"></div>
+        <div class="run-strip" id="run-strip"></div>
+    </aside>
 
     <div id="course-dialog" role="dialog" aria-modal="true" aria-label="Course height">
         <div class="reminder-dialog">
@@ -309,6 +330,7 @@
     <script src="static/app.js"></script>
     <script src="static/wizard.js"></script>
     <script src="static/dims2d.js"></script>
+    <script src="static/cutrun.js"></script>
     <script>initApp();</script>
 </body>
 </html>

@@ -576,6 +576,8 @@ function highlightCorner(frame, u, height) {
 }
 
 function renderGeometry(meshes) {
+    // A rebuild replaces the panels the cutting run is colouring, so the run closes first.
+    if (typeof inCuttingRun === 'function' && inCuttingRun()) closeCuttingRun();
     clearGroup(cladGroup);
     const byLayer = {};
     for (const m of meshes) {

@@ -12,6 +12,10 @@ the board's edges. Offcuts stay on their board as free rectangles for later piec
 Several deterministic heuristics are run and the best result kept: fewest boards,
 then least waste — sort order × placement rule × split rule.
 
+The cutting plan packs each elevation on its own (chain_plan), so every board is cut
+for one elevation, and puts the boards and their pieces in wall order, left to right.
+That is the order the cutting run plays them in and the cutting plan DXF draws them.
+
 Pure Python: it runs in Pyodide with the rest of the engine.
 """
 
@@ -75,9 +79,10 @@ SHUFFLE_SEED = 20100601
 
 
 def chain_pieces(geometry, elevations):
-    """[{"name", "w", "h", "area"}] for every panel of the given elevations. w × h is the
-    piece's bounding rectangle over both its faces (a mitred or lapped end runs further
-    on one face than the other); area is the net area of its outer face."""
+    """[{"name", "w", "h", "area", "elevation", "u", "v"}] for every panel of the given
+    elevations. w × h is the piece's bounding rectangle over both its faces (a mitred or
+    lapped end runs further on one face than the other); area is the net area of its
+    outer face; u, v is its bottom left corner on the elevation, seen from outside."""
     out = []
     for m in geometry:
         if m.get("ifc_type") != "panel" or m.get("elevation") not in elevations:
@@ -92,7 +97,8 @@ def chain_pieces(geometry, elevations):
         except Exception:   # noqa: BLE001 — a degenerate outline counts its rectangle
             area = (max(us) - min(us)) * (max(vs) - min(vs))
         out.append({"name": m.get("name", "Panel"), "w": round(max(us) - min(us), 1),
-                    "h": round(max(vs) - min(vs), 1), "area": area})
+                    "h": round(max(vs) - min(vs), 1), "area": area, "elevation": m.get("elevation"),
+                    "u": round(min(us), 1), "v": round(min(vs), 1)})
     return out
 
 
@@ -130,7 +136,8 @@ def _place(boards, p, kerf, rotate, score, split, useful, work, new_board=None):
     b = boards[bi]
     fx, fy, fw, fh = b["free"].pop(fi)
     b["pieces"].append({"name": p["name"], "x": fx, "y": fy, "w": ow - kerf, "h": oh - kerf,
-                        "cut_w": p["w"], "cut_h": p["h"], "rotated": rot, "area": p["area"]})
+                        "cut_w": p["w"], "cut_h": p["h"], "rotated": rot, "area": p["area"],
+                        "u": p.get("u", 0.0), "v": p.get("v", 0.0)})
     # Guillotine split of what is left of the free rectangle: one cut right across it.
     rw, rh = fw - ow, fh - oh
     if split(rw, rh, ow, oh, fw, fh):
@@ -173,7 +180,8 @@ def _eliminate(boards, BW, BH, kerf, rotate, work):
             for b in trial:
                 b["free"] = b["free"] + b["scrap"]
                 b["scrap"] = []
-            moving = sorted(({"name": q["name"], "w": q["cut_w"], "h": q["cut_h"], "area": q["area"]}
+            moving = sorted(({"name": q["name"], "w": q["cut_w"], "h": q["cut_h"], "area": q["area"],
+                              "u": q.get("u", 0.0), "v": q.get("v", 0.0)}
                              for q in boards[i]["pieces"]), key=lambda p: (-p["w"] * p["h"], p["name"]))
             if all(_place(trial, p, kerf, rotate, _bssf, SPLITS[0][1], everything, work) for p in moving):
                 boards[:] = trial
@@ -194,12 +202,12 @@ def _shuffled(pieces, n, seed):
         yield order
 
 
-def pack(pieces, board_w, board_h, kerf=3.0, rotate=True, trim=0.0, deep=False):
+def pack(pieces, board_w, board_h, kerf=3.0, rotate=True, trim=0.0, deep=False, work_limit=DEEP_WORK):
     """The best packing: fewest boards, then least waste, then the first strategy in
     order. *trim* is cut off every edge of the board first (factory edges), so pieces
     come from the board less 2 × trim each way. The quick check runs 16 strategies; *deep*
-    runs every one, then shuffled piece orders, then tries to empty a board. Deterministic:
-    the same pieces give the same layout."""
+    runs every one, then shuffled piece orders, then tries to empty a board, within
+    *work_limit* free-rectangle checks. Deterministic: the same pieces give the same layout."""
     trim = max(0.0, float(trim or 0.0))
     uw, uh = board_w - 2 * trim, board_h - 2 * trim            # what is left to cut from
     fits = lambda p: ((p["w"] <= uw + EPS and p["h"] <= uh + EPS) or  # noqa: E731
@@ -228,15 +236,15 @@ def pack(pieces, board_w, board_h, kerf=3.0, rotate=True, trim=0.0, deep=False):
         tried += 1
         consider(boards, "%s, %s, split on the %s" % (sort_name, place_name, split_name))
         ranked.append(((len(boards), round(1.0 - net / (len(boards) * board_area), 9) if boards else 0.0), place_name, split_name))
-        if len(best[0]) <= lower or (deep and tried >= len(QUICK) and work.n > DEEP_WORK):
+        if len(best[0]) <= lower or (deep and tried >= len(QUICK) and work.n > work_limit):
             break
-    if deep and best and len(best[0]) > lower and work.n <= DEEP_WORK:
+    if deep and best and len(best[0]) > lower and work.n <= work_limit:
         # Shuffled orders under the rules that did best, while the work allowance lasts.
         rules = [(pl, sp) for pl in PLACEMENTS for sp in SPLITS]
         score_of = lambda r: min(x[0] for x in ranked if x[1] == r[0][0] and x[2] == r[1][0])  # noqa: E731
         top = sorted(rules, key=score_of)[:3]                     # stable: ties keep the list order
         for k, order in enumerate(_shuffled(usable, 10_000, SHUFFLE_SEED)):
-            if work.n > DEEP_WORK or len(best[0]) <= lower:
+            if work.n > work_limit or len(best[0]) <= lower:
                 break
             (place_name, score), (split_name, split) = top[k % len(top)]
             consider(_pack(order, BW, BH, kerf, rotate, score, split, useful, work),
@@ -274,13 +282,58 @@ def friendly_sizes(board_w, board_h, kerf, trim=0.0):
     return {"across": split(min(board_w, board_h), 3), "along": split(max(board_w, board_h), 5)}
 
 
+def wall_order(boards):
+    """Put each board's pieces in wall order, left to right then bottom up, and the boards
+    in the order of their first piece: the order a fitter works along the elevation."""
+    at = lambda q: (round(q.get("u", 0.0)), round(q.get("v", 0.0)), q["name"])  # noqa: E731
+    for b in boards:
+        b["pieces"].sort(key=at)
+    boards.sort(key=lambda b: at(b["pieces"][0]) if b["pieces"] else (math.inf, math.inf, ""))
+    return boards
+
+
 def chain_plan(geometry, p, elevations, clad_area, deep=False):
-    """The packing for the given elevations' panels (one chain, or the whole job), with
-    their clad area (m² net of openings)."""
-    plan = pack(chain_pieces(geometry, set(elevations)), p["board_w"], p["board_h"], p["kerf"], p["rotate"],
-                p.get("board_trim", 0.0), deep)
-    plan["clad_area"] = clad_area
-    return plan
+    """The cutting plan for the given elevations' panels (one chain, or the whole job),
+    with their clad area (m² net of openings). Each elevation is packed on its own, in the
+    order given (a chain's elevations in turn round it), so every board is cut for one
+    elevation; boards are numbered through the job in wall order. One row per elevation
+    carries its own count and waste. Packing the whole job together could pass an offcut
+    from one elevation to another: its board count (quick check) is kept as
+    whole_job_boards, so the cost of keeping elevations apart is on show."""
+    args = (p["board_w"], p["board_h"], p["kerf"], p["rotate"], p.get("board_trim", 0.0))
+    order = list(dict.fromkeys(elevations))
+    pieces = {e: chain_pieces(geometry, {e}) for e in order}
+    total = sum(len(v) for v in pieces.values()) or 1
+    boards, rows, fills, oversize, plans = [], [], {}, [], []
+    for e in order:
+        if not pieces[e]:
+            continue
+        # The deep search's work is shared out by piece count, so the job stays bounded.
+        share = max(DEEP_WORK // 8, DEEP_WORK * len(pieces[e]) // total)
+        pl = pack(pieces[e], *args, deep=deep, work_limit=share)
+        plans.append(pl)
+        for b in wall_order(pl["boards"]):
+            b["elevation"] = e
+            b["no"] = len(boards) + 1
+            boards.append(b)
+        fills.update(pl["fills"])
+        oversize += pl["oversize"]
+        rows.append({"elevation": e, "n_boards": pl["n_boards"], "waste": pl["waste"], "lower_bound": pl["lower_bound"],
+                     "net_area": pl["net_area"], "heuristic": pl["heuristic"], "n_pieces": pl["n_pieces"]})
+    whole = pack([q for e in order for q in pieces[e]], *args)
+    net = sum(r["net_area"] for r in rows)
+    board_area = p["board_w"] * p["board_h"]
+    trim = max(0.0, float(args[4] or 0.0))
+    return {"boards": boards, "rows": rows, "n_boards": len(boards), "net_area": net,
+            "lower_bound": sum(r["lower_bound"] for r in rows),
+            "waste": 1.0 - net / (len(boards) * board_area) if boards else 0.0,
+            "heuristic": "each elevation on its own; " + "; ".join("%s: %s" % (r["elevation"], r["heuristic"]) for r in rows),
+            "oversize": oversize, "capped": sum(pl["capped"] for pl in plans), "n_pieces": sum(r["n_pieces"] for r in rows),
+            "board": [p["board_w"], p["board_h"]], "kerf": p["kerf"], "rotate": bool(p["rotate"]), "trim": trim,
+            "deep": bool(deep), "strategies": sum(pl["strategies"] for pl in plans),
+            "emptied": sum(pl["emptied"] for pl in plans), "work": sum(pl["work"] for pl in plans) + whole["work"],
+            "fills": fills, "friendly": friendly_sizes(p["board_w"], p["board_h"], p["kerf"], trim),
+            "per_elevation": True, "whole_job_boards": whole["n_boards"], "clad_area": clad_area}
 
 
 # ── the cutting plan drawing ──────────────────────────────────────────────
@@ -296,14 +349,17 @@ def _hatch(dxf, x0, y0, x1, y1, step=60.0, layer="OFFCUT"):
 
 
 def plan_dxf(plans):
-    """A DXF of every chain's cutting plan: one rectangle per board, to scale, in a grid,
-    each piece in place with its name and cut size, rotated pieces marked, offcuts
-    hatched, the waste per board and in total. *plans* is [(chain name, plan)]."""
+    """A DXF of every chain's cutting plan: one rectangle per board, to scale, each piece
+    in place with its name and cut size, rotated pieces marked, offcuts hatched, the
+    waste per board and in total. A plan packed per elevation (chain_plan) draws one row
+    per elevation, its boards left to right in wall order and numbered through the job,
+    the same order the cutting run plays; a plain packing draws its boards in one row.
+    *plans* is [(chain name, plan)]."""
     from dxf_generator import _DxfWriter
     dxf = _DxfWriter()
     for name, color in (("BOARD", 7), ("PIECE", 5), ("OFFCUT", 8), ("NOTES", 7)):
         dxf.add_layer(name, color)
-    per_row, y = 4, 0.0
+    y = 0.0
     total_boards = sum(pl["n_boards"] for _n, pl in plans)
     total_net = sum(pl["net_area"] for _n, pl in plans)
     total_area = sum(pl["n_boards"] * pl["board"][0] * pl["board"][1] for _n, pl in plans)
@@ -312,35 +368,56 @@ def plan_dxf(plans):
                  (0.0, 420.0), 70.0, "NOTES")
     for chain, pl in plans:
         bw, bh = pl["board"]
-        gx, gy = bw + 700.0, bh + 900.0
+        gx, gy = bw + 700.0, bh + 1100.0
         dxf.add_text("%s  -  %d board(s) of %.0f x %.0f, lower bound %d, waste %.1f%%, kerf %.0f%s%s%s" % (
             chain, pl["n_boards"], bw, bh, pl["lower_bound"], 100.0 * pl["waste"], pl["kerf"],
             ", edge trim %.0f" % pl["trim"] if pl.get("trim") else "",
             ", rotation allowed" if pl["rotate"] else "",
             ("  -  %d piece(s) not packed (cap %d)" % (pl["capped"], MAX_PIECES)) if pl["capped"] else ""),
             (0.0, y), 70.0, "NOTES")
-        dxf.add_text("Best of %d strategies: %s" % (pl.get("strategies", 0), pl.get("heuristic", "")),
-                     (0.0, y - 200.0), 45.0, "NOTES")
+        if pl.get("per_elevation"):
+            note = "Each elevation packed on its own: every board is cut for one elevation."
+            extra = pl["n_boards"] - pl.get("whole_job_boards", pl["n_boards"])
+            if extra > 0:
+                note += "  Packing the whole job together would need about %d fewer." % extra
+            dxf.add_text(note, (0.0, y - 200.0), 45.0, "NOTES")
+        else:
+            dxf.add_text("Best of %d strategies: %s" % (pl.get("strategies", 0), pl.get("heuristic", "")),
+                         (0.0, y - 200.0), 45.0, "NOTES")
         if pl["oversize"]:
             dxf.add_text("Larger than the board either way round: " + ", ".join(pl["oversize"]), (0.0, y - 110.0), 50.0, "NOTES")
-        top = y - 350.0
-        for i, b in enumerate(pl["boards"]):
-            ox, oy = (i % per_row) * gx, top - bh - (i // per_row) * gy
-            dxf.add_ring([(0, 0), (bw, 0), (bw, bh), (0, bh)], "BOARD", ox, oy)
-            t = pl.get("trim") or 0.0
-            if t:                                  # the squared-up edges, cut off first
-                dxf.add_ring([(t, t), (bw - t, t), (bw - t, bh - t), (t, bh - t)], "OFFCUT", ox, oy)
-                for x0, y0, x1, y1 in ((0, 0, bw, t), (0, bh - t, bw, bh), (0, t, t, bh - t), (bw - t, t, bw, bh - t)):
-                    _hatch(dxf, ox + x0, oy + y0, ox + x1, oy + y1, step=max(t, 20.0))
-            dxf.add_text("Board %d  -  waste %.1f%%" % (i + 1, 100.0 * b["waste"]), (ox, oy + bh + 60.0), 60.0, "NOTES")
-            for q in b["pieces"]:
-                dxf.add_ring([(q["x"], q["y"]), (q["x"] + q["w"], q["y"]), (q["x"] + q["w"], q["y"] + q["h"]),
-                              (q["x"], q["y"] + q["h"])], "PIECE", ox, oy)
-                label = "%s  %.0f x %.0f%s" % (q["name"], q["cut_w"], q["cut_h"], " (rotated)" if q["rotated"] else "")
-                dxf.add_text(label, (ox + q["x"] + 30.0, oy + q["y"] + q["h"] / 2.0), 40.0, "PIECE")
-            for x, yy, w, h in b["offcuts"]:
-                dxf.add_ring([(x, yy), (x + w, yy), (x + w, yy + h), (x, yy + h)], "OFFCUT", ox, oy)
-                _hatch(dxf, ox + x, oy + yy, ox + x + w, oy + yy + h)
-        rows = max(1, int(math.ceil(len(pl["boards"]) / float(per_row))))
-        y = top - rows * gy - 600.0
+        if pl.get("rows"):
+            rows = [(r, [b for b in pl["boards"] if b.get("elevation") == r["elevation"]]) for r in pl["rows"]]
+        else:
+            rows = [(None, pl["boards"])]
+        top = y - 450.0
+        for k, (row, boards) in enumerate(rows):
+            ry = top - k * gy                      # the top of this row's boards
+            if row:
+                dxf.add_text("%s  -  %d board(s), waste %.1f%%" % (row["elevation"], row["n_boards"], 100.0 * row["waste"]),
+                             (0.0, ry + 60.0), 80.0, "NOTES")
+                ry -= 250.0
+            for i, b in enumerate(boards):
+                ox, oy = i * gx, ry - bh
+                _draw_board(dxf, pl, b, b.get("no", i + 1), ox, oy)
+        y = top - len(rows) * gy - 600.0
     return dxf.to_string()
+
+
+def _draw_board(dxf, pl, b, no, ox, oy):
+    bw, bh = pl["board"]
+    dxf.add_ring([(0, 0), (bw, 0), (bw, bh), (0, bh)], "BOARD", ox, oy)
+    t = pl.get("trim") or 0.0
+    if t:                                  # the squared-up edges, cut off first
+        dxf.add_ring([(t, t), (bw - t, t), (bw - t, bh - t), (t, bh - t)], "OFFCUT", ox, oy)
+        for x0, y0, x1, y1 in ((0, 0, bw, t), (0, bh - t, bw, bh), (0, t, t, bh - t), (bw - t, t, bw, bh - t)):
+            _hatch(dxf, ox + x0, oy + y0, ox + x1, oy + y1, step=max(t, 20.0))
+    dxf.add_text("Board %d  -  waste %.1f%%" % (no, 100.0 * b["waste"]), (ox, oy + bh + 60.0), 60.0, "NOTES")
+    for q in b["pieces"]:
+        dxf.add_ring([(q["x"], q["y"]), (q["x"] + q["w"], q["y"]), (q["x"] + q["w"], q["y"] + q["h"]),
+                      (q["x"], q["y"] + q["h"])], "PIECE", ox, oy)
+        label = "%s  %.0f x %.0f%s" % (q["name"], q["cut_w"], q["cut_h"], " (rotated)" if q["rotated"] else "")
+        dxf.add_text(label, (ox + q["x"] + 30.0, oy + q["y"] + q["h"] / 2.0), 40.0, "PIECE")
+    for x, yy, w, h in b["offcuts"]:
+        dxf.add_ring([(x, yy), (x + w, yy), (x + w, yy + h), (x, yy + h)], "OFFCUT", ox, oy)
+        _hatch(dxf, ox + x, oy + yy, ox + x + w, oy + yy + h)
