@@ -1160,6 +1160,20 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || linked.glow !== linked.j + 1 || !linked.seen || !linked.onScreen || !linked.stripShows || linked.counter !== `Board ${linked.no}`
         || linked.where !== `${linked.elevation} · ${linked.name}`)
         throw new Error('cutting run focus not linked: ' + JSON.stringify(linked));
+    // Boards already inspected are cross-hatched in their own colour: at the last piece,
+    // exactly the pieces of the boards before its own; back at the start, none.
+    const hatched = await page.evaluate(() => {
+        const i = run.steps.map(t => !!t.piece).lastIndexOf(true), key = run.steps[i].key;
+        runGo(i);
+        const first = run.steps.findIndex(t => t.key === key);
+        const want = new Set(run.steps.slice(0, first).filter(t => t.piece).map(t => t.piece.name));
+        const shown = Object.entries(run.hatch.skins).filter(([, m]) => m.visible).map(([n]) => n);
+        const ok = shown.length === want.size && shown.every(n => want.has(n));
+        runGo(0);
+        return { ok, n: shown.length, none: Object.values(run.hatch.skins).every(m => !m.visible) };
+    });
+    console.log('cutting run hatch:', JSON.stringify(hatched));
+    if (!hatched.ok || !hatched.n || !hatched.none) throw new Error('inspected boards not hatched right: ' + JSON.stringify(hatched));
     // Each elevation ends with its rack: the offcuts gathered on the strip and laid out on
     // the ground in front of the cladding, all in focus, and the camera on them.
     const racked = await page.evaluate(async () => {
