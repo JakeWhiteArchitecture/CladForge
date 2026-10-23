@@ -7,11 +7,16 @@ Sheathing and insulation already follow the outline and run through the
 splash zone, so they are left alone.
 
 Runs in Pyodide for the live preview whenever params["trim"] is true, and
-always before IFC/DXF export. Every GEOS call is wrapped: a TopologyException
-raised inside WASM cannot be caught by the caller, so it is caught here.
+always before IFC/DXF export. A TopologyException inside WASM is a C++ abort that
+kills the runtime: try/except never sees it. So the cutting ops look before they
+cut (near_misses) and cut on a 0.01 mm grid, which always nodes, where shapes
+nearly meet; the try/except is only for errors that do raise.
 """
 
 import copy
+import math
+
+import shapely
 
 from shapely.geometry import Polygon, box
 from shapely.geometry.polygon import orient
@@ -24,26 +29,120 @@ from cladding_edges import offset_region
 
 TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel", "gasket"})
 _MIN_AREA = 25.0   # mm² – slivers smaller than this are discarded
+ROBUST_GRID = 0.01        # mm – an op on shapes that nearly meet runs on this grid
+NEAR_MISS = 0.5           # mm – vertices or edges this close that do not meet make an op risky
+MEETS = 1e-6              # mm – closer than this is meeting (float noise), not a near miss
+NEAR_MISS_WORK = 400_000  # vertex x edge checks past which an op is treated as risky unchecked
+
+
+def _vertices(geoms):
+    out = []
+    for g in geoms:
+        if g is None or g.is_empty:
+            continue
+        if hasattr(g, "geoms"):
+            out += _vertices(list(g.geoms))
+        elif g.geom_type == "Polygon":
+            out += [c[:2] for ring in [g.exterior, *g.interiors] for c in ring.coords]
+        else:
+            out += [c[:2] for c in g.coords]
+    return out
+
+
+def _segments(geoms):
+    out = []
+    for g in geoms:
+        if g is None or g.is_empty:
+            continue
+        if hasattr(g, "geoms"):
+            out += _segments(list(g.geoms))
+            continue
+        rings = [g.exterior, *g.interiors] if g.geom_type == "Polygon" else [g]
+        for ring in rings:
+            cs = [c[:2] for c in ring.coords]
+            out += list(zip(cs, cs[1:]))
+    return out
+
+
+def _close(pts, segs, box_=None, meets=MEETS):
+    """Does a point come within NEAR_MISS of another point or of an edge, not meeting it
+    (closer than *meets* is meeting)?"""
+    if box_ is not None:
+        x0, y0, x1, y1 = box_[0] - NEAR_MISS, box_[1] - NEAR_MISS, box_[2] + NEAR_MISS, box_[3] + NEAR_MISS
+        pts = [(x, y) for x, y in pts if x0 <= x <= x1 and y0 <= y <= y1]
+        segs = [s for s in segs if max(s[0][0], s[1][0]) >= x0 and min(s[0][0], s[1][0]) <= x1
+                and max(s[0][1], s[1][1]) >= y0 and min(s[0][1], s[1][1]) <= y1]
+    if len(pts) * (len(segs) + 1) > NEAR_MISS_WORK:
+        return True
+    for (ax, ay), (bx, by) in segs:
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy
+        for x, y in pts:
+            if x < min(ax, bx) - NEAR_MISS or x > max(ax, bx) + NEAR_MISS or y < min(ay, by) - NEAR_MISS or y > max(ay, by) + NEAR_MISS:
+                continue
+            for qx, qy in ((ax, ay), (bx, by)):                  # near an end
+                if meets < math.hypot(x - qx, y - qy) <= NEAR_MISS:
+                    return True
+            if L2 > 0.0:
+                t = ((x - ax) * dx + (y - ay) * dy) / L2
+                if 0.0 < t < 1.0 and meets < abs((x - ax) * dy - (y - ay) * dx) / math.sqrt(L2) <= NEAR_MISS:
+                    return True
+    return False
+
+
+def near_misses(geoms, others=None):
+    """Do any vertices, or a vertex and an edge, come within NEAR_MISS of each other without
+    meeting? Edges that nearly coincide (two ends 0.02 mm apart, a corner a hair off a
+    sloped line) are what GEOS's floating-point overlay fails to node. With *others*,
+    only across the two sets, near where they overlap: a board against its outline. There
+    nothing under NEAR_MISS counts as meeting but exactly: a batten's corner a billionth of
+    a millimetre off a gable's slope is the case GEOS cannot node, and a cut snapped to the
+    grid costs a board nothing. Within one set (the extractor's unions) float noise under
+    MEETS is meeting, so a clean rotated face keeps its exact coordinates."""
+    geoms = [g for g in geoms if g is not None and not g.is_empty]
+    if others is None:
+        return _close(_vertices(geoms), _segments(geoms))
+    others = [g for g in others if g is not None and not g.is_empty]
+    if not geoms or not others:
+        return False
+    a, b = shapely.total_bounds(geoms), shapely.total_bounds(others)
+    near = (max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3]))
+    if near[0] > near[2] + NEAR_MISS or near[1] > near[3] + NEAR_MISS:
+        return False
+    return (_close(_vertices(geoms), _segments(others), near, 0.0)
+            or _close(_vertices(others), _segments(geoms), near, 0.0))
+
+
+def _areal(g):
+    """Only the polygons of *g*: the grid overlay refuses a collection that mixes them with
+    the lines or points a touching cut leaves (a C++ abort, like a TopologyException)."""
+    if g is None or g.geom_type in ("Polygon", "MultiPolygon"):
+        return g
+    parts = [q for q in getattr(g, "geoms", [g]) if q.geom_type in ("Polygon", "MultiPolygon")]
+    return shapely.union_all(parts, grid_size=ROBUST_GRID) if parts else Polygon()
 
 
 def _safe(op, a, b):
-    """Run a binary Shapely op, retrying on buffer(0)-repaired inputs."""
+    """A binary Shapely op that cannot kill the engine: on a 0.01 mm grid where the two
+    shapes nearly meet (their polygons only), exactly otherwise; retried on buffer(0)-
+    repaired inputs if it raises."""
+    risky = near_misses([a], [b])
     try:
-        return op(a, b)
+        return op(_areal(a), _areal(b), ROBUST_GRID) if risky else op(a, b, None)
     except Exception:
         pass
     try:
-        return op(a.buffer(0), b.buffer(0))
+        return op(_areal(a.buffer(0)), _areal(b.buffer(0)), ROBUST_GRID)
     except Exception:
         return None
 
 
 def _difference(a, b):
-    return _safe(lambda x, y: x.difference(y), a, b)
+    return _safe(lambda x, y, g: shapely.difference(x, y, grid_size=g), a, b)
 
 
 def _intersection(a, b):
-    return _safe(lambda x, y: x.intersection(y), a, b)
+    return _safe(lambda x, y, g: shapely.intersection(x, y, grid_size=g), a, b)
 
 
 def region_polygon(elev):

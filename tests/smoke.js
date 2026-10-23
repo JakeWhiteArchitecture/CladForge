@@ -1004,18 +1004,19 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         return vs.length ? `boards ${Math.round(Math.min(...vs))}–${Math.round(Math.max(...vs))} of face 0–${Math.round(info.height)} (clad top ${Math.round(info.clad_top)})` : 'none';
     }));
 
-    // Planks cannot lap, so the option disables itself and falls back to a mitre.
+    // Planks cannot lap, so Master disables itself and falls back to a mitre. Profile stays
+    // on offer: with planks it is the square timber corner trim.
     await page.click('#cladding-type .turn-btn[data-value="plank"]');
     await page.waitForTimeout(1200);
     const plankCorners = await page.evaluate(() => ({
         lap: document.querySelector('#corner-type .turn-btn[data-value="lap"]').disabled,
         profile: document.querySelector('#corner-type .turn-btn[data-value="profile"]').disabled,
         active: document.querySelector('#corner-type .turn-btn.active').dataset.value,
-        options: /value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true))
+        options: !/value="profile"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true))
                  && /value="lap"[^>]*disabled/.test(cornerOptions('', profileOffered(1), true)) }));
-    console.log('Master and Profile disabled for planks:', JSON.stringify(plankCorners));
-    if (!plankCorners.lap || !plankCorners.profile || !plankCorners.options || plankCorners.active !== 'mitre')
-        throw new Error('Master or Profile offered for planks: ' + JSON.stringify(plankCorners));
+    console.log('Master disabled, Profile (the trim) offered for planks:', JSON.stringify(plankCorners));
+    if (!plankCorners.lap || plankCorners.profile || !plankCorners.options || plankCorners.active !== 'mitre')
+        throw new Error('plank corner options wrong: ' + JSON.stringify(plankCorners));
 
     // Save state: every chain, its surfaces and the settings to XML. Change things, load the
     // file back, and the cladding is exactly what it was, from the surfaces in the file.

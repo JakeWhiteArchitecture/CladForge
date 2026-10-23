@@ -50,7 +50,8 @@ def _parse(params):
     p["cladding_type"] = "panel" if params.get("cladding_type") == "panel" else "plank"
     p["counter_batten"] = params.get("counter_batten", "auto")   # auto | yes | no
     p["plank_orient"] = "vertical" if params.get("plank_orient") == "vertical" else "horizontal"
-    p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "butt") else "mitre"
+    # every job-wide corner detail the toggle offers (cladding_primitives.CORNER_DETAILS)
+    p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "profile", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))
     p["rotate"] = bool(params.get("rotate", True))          # a piece may be cut turned 90 degrees
     p["share_offcuts"] = bool(params.get("share_offcuts", False))   # an elevation may cut from earlier ones' offcuts
