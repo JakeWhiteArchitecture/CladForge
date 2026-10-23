@@ -450,6 +450,11 @@ def _horizontal_battens(p, vs, meshes, name, frame, depth, W, ifc_type="batten",
     return depth + d
 
 
+def _joints(segs):
+    """Where a run's pieces meet: the middle of each joint gap."""
+    return [(e + s) / 2.0 for (_s, e), (s, _e) in zip(segs, segs[1:])]
+
+
 def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Horizontal boards on vertical battens (optionally on horizontal counter-battens)."""
     name, frame = elev["name"], elev["frame"]
@@ -461,21 +466,26 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
     courses = _courses(elev, v0, H, cover)
+    beside = []                  # the joints in the course below: this one keeps clear of them
     for j, v in enumerate(courses):
         # Set each course out along the part of the face it actually crosses, so a run
         # broken by a gable or an opening gets no seam it does not need.
         lo = max(v, v0)          # a course set out from the chain datum is cut at the base
         if v + face - lo < 1.0:
+            beside = []
             continue
         runs = strip_intervals(region, lo, v + face) if region is not None else [(0.0, W)]
-        piece = 0
+        piece, mine = 0, []
         for a, b in runs:
-            segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"])
+            segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"],
+                                  beside, p["batten_centres"])
+            mine += _joints(segs)
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1
                 meshes.append(_prism(_rect(s, lo, e, v + face), depth, p["plank_t"], frame, "plank",
                                      "%s Plank C%d-%d" % (name, j + 1, piece), name))
+        beside = mine
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
@@ -500,16 +510,20 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
     starts = centred_positions(W, cover, offset, face)
+    beside = []                  # the joints in the plank to the left: this one keeps clear of them
     for j, u in enumerate(starts):
         runs = strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)]
-        piece = 0
+        piece, mine = 0, []
         for a, b in runs:
-            segs, bad = split_run(max(a, v0), b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"])
+            segs, bad = split_run(max(a, v0), b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"],
+                                  beside, p["batten_centres"])
+            mine += _joints(segs)
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1
                 meshes.append(_prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
                                      "%s Plank C%d-%d" % (name, j + 1, piece), name))
+        beside = mine
     left_cut = (starts[0] + face) if starts and starts[0] < 0 else 0.0
     right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0
     info.update(n_courses=len(starts), cover=cover, batten_centres=p["batten_centres"],
