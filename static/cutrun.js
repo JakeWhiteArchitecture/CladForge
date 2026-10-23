@@ -25,7 +25,7 @@ const RUN_LENGTH_PX = 440;        // height a plank's stock length is drawn on t
 
 const run = { on: false, plan: null, steps: [], i: -1, playing: false, speed: 1, timer: null,
               meshes: {}, group: null, glow: null, saved: null, views: {}, rack: null, hatch: null };
-const RUN_HATCH_MM = 110;         // mm between the lines of the cross-hatch on a board already inspected
+const RUN_HATCH_MM = 110;         // mm between the diagonal hatch lines on a board already inspected
 const RUN_RACK_T = 25;            // mm: how thick an offcut is drawn on the rack
 const RUN_RACK_GAP = 80;          // mm between offcuts on the rack
 const RUN_RACK_OUT = 900;         // mm in front of the cladding the rack starts
@@ -247,7 +247,7 @@ function paintWall(s) {
     clearGlow();
     run.glow = new THREE.Group();
     scene.add(run.glow);
-    // Boards the run has already been through are cross-hatched, their colour kept, so
+    // Boards the run has already been through are hatched, their colour kept, so
     // a glance shows nothing on the elevation was missed or counted twice. Stepping
     // back un-hatches them again: inspected means before the board in focus.
     if (run.hatch) {
@@ -278,19 +278,18 @@ function paintWall(s) {
 }
 
 // ─── INSPECTED BOARDS ───
-// A cross-hatch skin for every piece: a copy of the piece's own geometry (so a mitred
+// A diagonal hatch skin for every piece: a copy of the piece's own geometry (so a mitred
 // or sloped cut is hatched exactly to its edge) drawn just in front of it, carrying a
-// see-through texture of crossing lines, so the board's colour shows between them.
+// see-through texture of broad black diagonals, so the board's colour shows between them.
 // Built once when the run opens and only shown or hidden as it plays.
 function buildHatch() {
     const c = document.createElement('canvas');
     c.width = c.height = 128;
     const g = c.getContext('2d');
-    g.strokeStyle = 'rgba(16, 32, 42, 0.75)';
-    g.lineWidth = 9;
-    for (const [x0, y0, x1, y1] of [[0, 0, 128, 128], [0, 128, 128, 0], [-64, 64, 64, -64], [64, 192, 192, 64], [-64, 64, 64, 192], [64, -64, 192, 64]]) {
-        g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-    }
+    g.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+    g.lineWidth = 26;
+    // one direction of diagonals, drawn past the corners so the tile repeats seamlessly
+    for (const k of [-128, 0, 128]) { g.beginPath(); g.moveTo(k - 16, 144); g.lineTo(k + 144, -16); g.stroke(); }
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
