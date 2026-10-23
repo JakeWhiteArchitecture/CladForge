@@ -620,7 +620,7 @@ async function extractOnce(e) {
         pyodide.globals.set('_payload_json', json);
         pyodide.globals.set('_params_json', JSON.stringify(getParams()));
         // The engine works out the cladding zone's depth, so the rule lives in one place.
-        const out = await pyodide.runPythonAsync(`
+        const out = await pyRun(`
 import json as _json
 from fabric_extract import extract_elevation as _ex
 from cladding_constants import _parse as _parse_params
@@ -799,7 +799,7 @@ async function updatePreview() {
     const seq = ++_seq;
     try {
         pyodide.globals.set('_params_json', JSON.stringify(params));
-        const out = await pyodide.runPythonAsync(`
+        const out = await pyRun(`
 import json as _json
 from cladding_preview import generate_preview as _gp, check_rules as _cr
 _p = _json.loads(_params_json)
@@ -1395,6 +1395,28 @@ function cladforge() {
 window.cladforge = cladforge;
 
 // ─── PYODIDE ───
+// Run Python, but never wait forever on a dead engine. A C++ abort inside WASM (GEOS,
+// IfcOpenShell, the heap) can leave the call's promise unsettled, so the elevation sat
+// "extracting" for good and the restart below never ran. JavaScript cannot run while
+// Python computes, so the check only gets a turn once Python has stopped: if the engine
+// then answers a trivial call with "fatally failed", the stuck call is rejected with that
+// error and the caller's restart path takes over.
+function pyRun(code) {
+    const py = pyodide;
+    return new Promise((resolve, reject) => {
+        let done = false;
+        const timer = setInterval(() => {
+            if (done) return;
+            try { py.runPython('0'); }
+            catch (err) {
+                if (/fatally failed|Aborted/i.test(err.message || '')) { done = true; clearInterval(timer); reject(err); }
+            }
+        }, 1500);
+        py.runPythonAsync(code).then(v => { done = true; clearInterval(timer); resolve(v); },
+                                     e => { done = true; clearInterval(timer); reject(e); });
+    });
+}
+
 async function restartEngine() {
     if (_restarting) return false;          // one rebuild at a time
     _restarting = true;
