@@ -225,7 +225,21 @@ def panel_bays(length, panel, gap, offset):
     return panels, sorted(joints)
 
 
-def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, target=None):
+def _clear_cut(cut, cur, want, feasible, avoid, pitch, whole):
+    """The joint to cut at, kept clear of *avoid* (the joints in the board alongside):
+    two battens clear if any feasible batten is, else one, choosing as split_run does
+    (the furthest within reach, else the nearest beyond). If none is, None when the rest
+    of the run fits one stock length (*whole*): better no joint than one in line with
+    the neighbour's. Else *cut* as it was."""
+    for clear in (2 * pitch - 1.0, pitch - 1.0):
+        pool = [s for s in feasible if all(abs(s - x) >= clear for x in avoid)]
+        if pool:
+            within = [s for s in pool if s <= cur + want + 1e-6]
+            return within[-1] if within else pool[0]
+    return None if whole else cut
+
+
+def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, target=None, avoid=(), pitch=0.0):
     """Split the run [a, b] into board lengths no longer than *max_len* (the stock).
 
     *target* is the length a piece is set out to (*max_len* when not given): shorter
@@ -238,6 +252,13 @@ def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, tar
     target and the joint is reported as unsupported. Returns (segments,
     unsupported_joints) with segments as (start, end) already shortened by half the
     joint gap at each internal joint.
+
+    *avoid* are the joints in the board alongside: every joint keeps two battens (*pitch*
+    apart) clear of them where a batten allows, else one, else is left out where the
+    rest of the run fits one stock length, so neighbouring boards alternate rather than
+    splicing in line. The half-length start alone cannot promise
+    that: when the minimum piece is more than half the target it is pushed onto the
+    same batten as the neighbour's.
     """
     target = max_len if target is None else max(min(target, max_len), min(min_piece, max_len))
     if b - a <= target + 1e-6:
@@ -255,6 +276,12 @@ def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, tar
         if candidates:
             # within the target, the furthest batten; past it, the nearest one beyond
             cut = candidates[-1] if candidates[-1] <= cur + want else candidates[0]
+            if avoid and pitch > 0:
+                cut = _clear_cut(cut, cur, want, [s for s in stops if ok(s, max_len)], avoid, pitch,
+                                 b - cur <= max_len + 1e-6)
+                if cut is None:      # no joint clear of the neighbour's: the rest in one length
+                    segs.append((cur, b))
+                    break
         elif b - cur <= max_len + 1e-6:
             segs.append((cur, b))    # no batten leaves both pieces long enough: one length
             break

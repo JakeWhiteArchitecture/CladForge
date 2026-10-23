@@ -234,3 +234,50 @@ def test_keeping_together_never_adds_a_length_or_overfills_one():
         assert xs[-1][1] <= 3600 + 1e-6
     assert sorted(q["name"] for b in plan["boards"] for q in b["pieces"]) == sorted(p["name"] for p in pieces)
     assert plan == nesting.pack_lengths(pieces, 3600, 150, kerf=3, deep=True)    # deterministic
+
+
+# ── neighbouring boards stagger their joints ──────────────────────────────
+
+STOPS = [25.0 + 400 * k for k in range(8)]          # batten centres up a 2400 wall
+
+
+def _joint_at(segs):
+    return [round((e + s) / 2) for (_s, e), (s, _e) in zip(segs, segs[1:])]
+
+
+def test_a_board_keeps_its_joints_clear_of_the_board_beside_it():
+    """Splices at 70% (1710 target) with a 900 minimum: alone, every board would splice on
+    the one batten that leaves 900 both sides. Beside a board jointed there, the next has
+    no clear batten, so it goes up in one length rather than in line."""
+    first, _ = split_run(0.0, 2400.0, 3600.0, STOPS, False, 0.0, 900.0, 1710.0)
+    second, _ = split_run(0.0, 2400.0, 3600.0, STOPS, True, 0.0, 900.0, 1710.0)
+    assert _joint_at(first) == _joint_at(second) == [1225]                 # in line, unchecked
+    second, _ = split_run(0.0, 2400.0, 3600.0, STOPS, True, 0.0, 900.0, 1710.0, avoid=[1225.0], pitch=400.0)
+    assert _joint_at(second) == [] and _lengths(second) == [2400]
+
+
+def test_joints_go_two_battens_clear_where_they_can():
+    tall = [25.0 + 400 * k for k in range(20)]
+    segs, _ = split_run(0.0, 6000.0, 3600.0, tall, True, 0.0, 600.0, 2400.0)
+    beside, _ = split_run(0.0, 6000.0, 3600.0, tall, False, 0.0, 600.0, 2400.0, avoid=_joint_at(segs), pitch=400.0)
+    assert all(abs(a - b) >= 799 for a in _joint_at(beside) for b in _joint_at(segs))
+    assert all(e - s >= 600 for s, e in beside) and all(e - s <= 3600 for s, e in beside)
+    # with nothing beside it a board splits exactly as before
+    assert split_run(0.0, 6000.0, 3600.0, tall, False, 0.0, 600.0, 2400.0) == \
+        split_run(0.0, 6000.0, 3600.0, tall, False, 0.0, 600.0, 2400.0, avoid=[], pitch=400.0)
+
+
+def test_neighbouring_planks_never_splice_on_the_same_batten():
+    """A whole wall of vertical planks at 70% splices and a 900 minimum."""
+    from cladding_geometry import _vertical_planks
+    import shapely.geometry as sg
+    p = _parse({"cladding_type": "plank", "plank_orient": "vertical", "plank_len": 3600, "plank_min": 900, "plank_splice": 70})
+    meshes, info = [], {"unsupported_joints": 0}
+    elev = {"name": "A", "frame": FRAME, "width": 4000.0, "height": 2400.0}
+    _vertical_planks(p, elev, meshes, [], info, 0.0, 4000.0, 2400.0, 0.0, 0.0, sg.box(0, 0, 4000, 2400))
+    cols = {}
+    for m in (m for m in meshes if m["ifc_type"] == "plank"):
+        us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+        cols.setdefault(round(min(us)), []).append((min(vs), max(vs)))
+    joints = [sorted(round((a[1] + b[0]) / 2) for a, b in zip(sorted(c), sorted(c)[1:])) for _u, c in sorted(cols.items())]
+    assert any(joints) and all(not set(a) & set(b) for a, b in zip(joints, joints[1:]))
