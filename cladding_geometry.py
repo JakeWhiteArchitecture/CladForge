@@ -17,7 +17,7 @@ import cladding_corners as profiles
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
                                  base_level, corner_ends, openings, buildup_depth, clip_bounds,
-                                 clip_bounds_v, panel_rows, row_height)
+                                 clip_bounds_v, panel_rows, row_height, bays_on_posts)
 
 
 def build_elevation(p, elev, layout=None):
@@ -406,6 +406,7 @@ def _courses(elev, v0, H, pitch):
 LOCK_CENTRES = "The panel bay sets the batten centres: change the panel width"
 LOCK_OPENING = "The structural opening sets this width"
 LOCK_BAYS = "Set out from the structural openings: the bays follow the jambs"
+LOCK_POSTS = "Set out from the model's columns: the battens follow the client's"
 LOCK_BASE_ROW = "Cut at this face's base: set this row on the face the chain's datum comes from"
 LOCK_UNDER_DATUM = "Under the chain's datum: rows here carry on down at the panel height"
 FIXED_TOP_ROW = "The top row is whatever is left under the top of the cladding, so its height is not typed: split it, or change the rows below"
@@ -455,13 +456,26 @@ def _joints(segs):
     return [(e + s) / 2.0 for (_s, e), (s, _e) in zip(segs, segs[1:])]
 
 
+def _posts(p, elev, info):
+    """Centrelines for the vertical battens from the columns the client's model has standing
+    on the face (fabric_extract._post_of), when the option is on and there are any: the
+    designer set them out to suit the frame behind, so ours go on the same lines and the
+    offset slider has nothing to move. None otherwise."""
+    us = sorted(q["u"] for q in elev.get("posts") or []) if p.get("battens_from_model", True) else []
+    info["model_posts"] = len(us)
+    return us or None
+
+
 def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Horizontal boards on vertical battens (optionally on horizontal counter-battens)."""
     name, frame = elev["name"], elev["frame"]
     if p["has_cb"]:  # forced by override — flagged by check_rules, drainage is compromised
         vs = dedupe(stacked_positions(v0 + p["cb_w"] / 2, H, p["cb_centres"]) + [H - p["cb_w"] / 2], p["cb_w"])
         depth = _horizontal_battens(p, vs, meshes, name, frame, depth, W, "counter_batten", p["cb_w"], p["cb_d"])
-    battens = batten_positions(W, p["batten_w"], p["batten_centres"], offset)
+    posts = _posts(p, elev, info)
+    bw = p["batten_w"]
+    battens = (dedupe_priority([posts, [bw / 2, W - bw / 2]], bw) if posts
+               else batten_positions(W, bw, p["batten_centres"], offset))
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
@@ -489,7 +503,7 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
-    dims += _batten_dims(name, battens, p["batten_centres"], True, W)
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else None)
     full = [v for v in courses if v >= v0 - 0.5]
     if full:
         dims.append(_dim(name, [W, full[0]], [W, full[0] + cover], "Course %.0f" % cover, 300, [1, 0],
@@ -501,8 +515,13 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
 def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Vertical boards on horizontal battens on vertical counter-battens."""
     name, frame = elev["name"], elev["frame"]
+    posts = _posts(p, elev, info) if p["has_cb"] else None
+    if not p["has_cb"]:
+        info["model_posts"] = 0       # no vertical layer to put on the columns
     if p["has_cb"]:
-        cbs = batten_positions(W, p["cb_w"], p["cb_centres"], 0.0)
+        # the first layer, vertical: on the columns where the model has them
+        cbs = (dedupe_priority([posts, [p["cb_w"] / 2, W - p["cb_w"] / 2]], p["cb_w"]) if posts
+               else batten_positions(W, p["cb_w"], p["cb_centres"], 0.0))
         depth = _vertical_battens(p, cbs, meshes, name, frame, depth, H, "counter_batten", p["cb_w"], p["cb_d"])
     bw = p["batten_w"]
     battens = dedupe(stacked_positions(v0 + bw / 2, H - bw / 2, p["batten_centres"]) + [H - bw / 2], bw)
@@ -550,12 +569,26 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         depth = _horizontal_battens(p, vs, meshes, name, frame, depth, W, "counter_batten", p["cb_w"], p["cb_d"])
     holes = openings(elev)
     jambs = sorted({u for o in holes for u in (o[0], o[1]) if bw < u < W - bw}) if p["set_out_from_openings"] else []
-    if jambs:
+    posts = _posts(p, elev, info)
+    reveal = []
+    if posts:
+        # The client's columns fix the battens: every joint goes on one, and each reveal
+        # line is a joint carried straight up past the opening and on down below it, on a
+        # batten above and below the opening (beside it the closer carries the joint):
+        # the column's own where one is there, one of ours where not. A joint with no
+        # column in reach gets a batten too.
+        panels, joints, extra = bays_on_posts([0.0] + jambs + [W], posts, p["panel_w"], gap)
+        reveal = list(jambs)
+        info["post_extra"] = len(extra)
+        info["reveal_battens"] = len([u for u in jambs if all(abs(u - q) > bw / 2 for q in posts)])
+    elif jambs:
         panels, joints = bays_between([0.0] + jambs + [W], p["panel_w"], gap)
     else:
         panels, joints = panel_bays(W, p["panel_w"], gap, offset)
     edges = [bw / 2, W - bw / 2]
-    if jambs:
+    if posts:
+        supports = dedupe_priority([posts, extra, edges], bw)
+    elif jambs:
         # Set out from the openings: each span between jambs is its own bay, so the
         # spacing follows the openings. A cavity closer backs every jamb, so it counts
         # as support alongside the battens.
@@ -575,7 +608,18 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         grid = [u for u in grid if bw / 2 < u < W - bw / 2]
         supports = dedupe_priority([joints, grid, edges], bw)
     battens = [u for u in supports if all(abs(u - j) > bw / 2 for j in jambs)]
+    batten_back = depth
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
+    for i, u in enumerate(reveal):
+        # above and below the openings this line is a jamb of: beside them is the closer
+        cut = sorted((o[2], o[3]) for o in holes if min(abs(o[0] - u), abs(o[1] - u)) < 1.0)
+        lo = 0.0
+        for k, (a, b) in enumerate(cut + [(H, H)]):
+            if a - lo > 1.0:
+                meshes.append(_prism(_rect(u - bw / 2, lo, u + bw / 2, a), batten_back, p["batten_d"], frame, "batten",
+                                     "%s Batten R%d-%d" % (name, i + 1, k + 1), name))
+            lo = max(lo, b)
+    battens = sorted(battens + reveal)
     cavity_t = depth - cavity_start
     # The row list starts at the chain's datum, so rows line up round its corners; a face
     # that starts higher cuts the row at its base, one that starts lower carries on down.
@@ -625,11 +669,11 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
                 hjoints=joints, panel_joints=[q for q in joints if q["dissolved"]], joints_dropped=dropped,
                 set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
-    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_CENTRES)
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else LOCK_CENTRES)
     # The left closing cut and the first full panel set out the face: typing a cut solves
     # for the offset, typing the panel sets the panel width. Set out from the openings,
     # the bays follow the jambs instead and both are read-only.
-    lock = {"lock": LOCK_BAYS} if jambs else {}
+    lock = {"lock": LOCK_POSTS} if posts else ({"lock": LOCK_BAYS} if jambs else {})
     if fulls and fulls[0][0] > 1:
         dims.append(_dim(name, [0, H], [fulls[0][0], H], "Cut %.0f" % fulls[0][0], 300, [0, 1],
                          "cut_left", fulls[0][0], bay=p["panel_w"] + gap, **lock))
