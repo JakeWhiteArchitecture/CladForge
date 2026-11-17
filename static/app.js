@@ -726,6 +726,7 @@ function getParams() {
     p.set_out_from_openings = document.getElementById('set_out_from_openings').checked;
     p.cladding_type = toggleValue('cladding-type');
     p.rotate = document.getElementById('rotate').checked;
+    p.battens_from_model = document.getElementById('battens_from_model').checked;
     p.share_offcuts = document.getElementById('share_offcuts').checked;
     p.plank_orient = toggleValue('plank-orient');
     p.counter_batten = val('counter_batten');
@@ -868,13 +869,27 @@ function updateDerivedStatic(p) {
     }
 }
 
+// Set out from the model's columns, the battens are fixed, and with horizontal planks or
+// panels they are all the offset slider would move. Under vertical planks it still moves
+// the planks, so it stays.
+function lockOffsetToModel(i) {
+    const fixed = !!(i && i.model_posts) && !(toggleValue('cladding-type') === 'plank' && toggleValue('plank-orient') === 'vertical');
+    for (const id of ['offset', 'edit-offset']) {
+        const s = document.getElementById(id);
+        s.disabled = fixed;
+        s.title = fixed ? "Set out from the model's columns: the battens follow the client's" : '';
+    }
+    if (fixed) document.getElementById('offset-val').textContent = 'model';
+}
+
 function renderInfo(infos) {
     const e = state.elevations[state.active];
     const i = infos.find(x => e && x.elevation === e.name) || infos[0];
     const set = (id, v) => document.getElementById(id).textContent = v;
     if (!i) { ['dim-size', 'dim-centres', 'dim-courses', 'dim-cuts', 'dim-boards'].forEach(id => set(id, '--')); return; }
     set('dim-size', `${Math.round(i.width)} × ${Math.round(i.height)} mm`);
-    set('dim-centres', `${i.batten_centres.toFixed(0)} mm`);
+    set('dim-centres', i.model_posts ? `on ${i.model_posts} model columns` : `${i.batten_centres.toFixed(0)} mm`);
+    lockOffsetToModel(i);
     set('dim-courses', `${i.n_courses} @ ${i.cover.toFixed(0)}`);
     set('dim-cuts', `L ${Math.round(i.closing_cut_left)} · R ${Math.round(i.closing_cut_right)} · T ${Math.round(i.closing_cut_top)}`);
     set('dim-boards', `${i.n_boards} (setting-out only)`);
@@ -891,7 +906,7 @@ function setStatus(text, cls) {
 // (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
-const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts'];
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model'];
 const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient'];
 
 function snapshotState() {

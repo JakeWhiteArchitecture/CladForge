@@ -40,6 +40,11 @@ PITCH_TOL = 20.0          # mm – rise along an abutment line before it counts 
 DEFAULT_BUDGET_S = 20.0   # s – extraction gives up on context past this rather than hang
 # Type names are compared upper-cased: web-ifc reports IFCSLAB, IfcOpenShell IfcSlab.
 ABUTMENT_TYPES = frozenset({"IFCSLAB", "IFCSLABSTANDARDCASE", "IFCSLABELEMENTEDCASE", "IFCROOF"})
+# Columns: a designer's battens, modelled as columns standing on the face (_post_of).
+POST_TYPES = frozenset({"IFCCOLUMN", "IFCCOLUMNSTANDARDCASE"})
+POST_WIDTH = (15.0, 150.0)  # mm – how wide a modelled batten can be, across the wall
+POST_MIN_HEIGHT = 600.0     # mm – and how tall at least: anything shorter is not a batten
+POST_REACH = 150.0          # mm – its back within this of the face (it stands on the sarking)
 # Windows and doors: where a reveal lining runs back to (cladding_edges.opening_frames).
 FRAME_TYPES = frozenset({"IFCWINDOW", "IFCWINDOWSTANDARDCASE", "IFCDOOR", "IFCDOORSTANDARDCASE"})
 IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE", "IFCSPACE",
@@ -376,7 +381,7 @@ def _extract(payload):
     _say(dbg, "%s: %d faces, region %.0f x %.0f" % (name, len(faces), region.bounds[2] - region.bounds[0],
                                                     region.bounds[3] - region.bounds[1]))
     clad_depth = float(options.get("clad_depth") or 0.0)
-    abutments, cuts, frames = [], [], []
+    abutments, cuts, frames, posts = [], [], [], []
     umin0, vmin0, umax0, vmax0 = region.bounds
     skipped = 0
     for elem in payload.get("context", []):
@@ -395,6 +400,12 @@ def _extract(payload):
         _t0 = time.perf_counter()
         try:   # one awkward element must not sink the whole extraction
             tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
+            if etype in POST_TYPES:
+                post = _post_of(tris, n, d, u)
+                if post:
+                    posts.append(dict(post, name=elem.get("name", "")))
+                    clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
+                    continue
             if etype in FRAME_TYPES:
                 fr = _frame_of(tris, n, d, u)
                 if fr:
@@ -461,12 +472,45 @@ def _extract(payload):
                                             round(f["rect"][2] - vmin, 1), round(f["rect"][3] - vmin, 1)])
                               for f in frames],
                    "wall_depth": float(options.get("wall_depth") or 0.0),
+                   "posts": _merge_posts(posts, umin, vmin, width),
                    "n_holes": sum(len(pg["holes"]) for pg in polygons) + len(notches)})
     result["timings_ms"] = {k: v for k, v in sorted(clock.items(), key=lambda kv: -kv[1])[:8] if v >= 20}
     _say(dbg, "%s: done — %s" % (name, result["timings_ms"] or "nothing slow"))
     if any(a.get("pitched") for a in result["abutments"]):
         result["warnings"].append("Pitched abutment detected — the splash zone follows the roof line; check it")
     return result
+
+
+def _post_of(tris, n, d, u):
+    """A vertical column standing on the face: the designer's batten, set out to suit the
+    frame behind. Narrow across the wall (POST_WIDTH), at least POST_MIN_HEIGHT tall and
+    several times taller than wide, its back on the face or within POST_REACH in front of
+    it. Returns its centreline and extent before the local shift, or None: a structural
+    column inside the wall, a beam laid across it or a short block is not a batten."""
+    pts = [(_dot(p, u), p[2], _dot(p, n) - d) for tri in tris for p in tri]
+    if not pts:
+        return None
+    us, vs, ss = [q[0] for q in pts], [q[1] for q in pts], [q[2] for q in pts]
+    w, h = max(us) - min(us), max(vs) - min(vs)
+    if not (POST_WIDTH[0] <= w <= POST_WIDTH[1]) or h < max(POST_MIN_HEIGHT, 5.0 * w):
+        return None
+    if min(ss) < -PLANE_TOL or min(ss) > POST_REACH:
+        return None
+    return {"u": (min(us) + max(us)) / 2.0, "w": w, "v0": min(vs), "v1": max(vs)}
+
+
+def _merge_posts(posts, umin, vmin, width):
+    """The columns on the face, in local u: one per centreline (a batten modelled a storey
+    at a time is one batten), sorted, those beyond the face left out."""
+    out = []
+    for q in sorted(posts, key=lambda q: q["u"]):
+        if out and abs(q["u"] - out[-1]["u"]) <= 5.0:
+            out[-1].update(v0=min(out[-1]["v0"], q["v0"]), v1=max(out[-1]["v1"], q["v1"]), w=max(out[-1]["w"], q["w"]))
+        else:
+            out.append(dict(q))
+    return [{"u": round(q["u"] - umin, 1), "w": round(q["w"], 1), "v0": round(q["v0"] - vmin, 1),
+             "v1": round(q["v1"] - vmin, 1), "name": q.get("name", "")}
+            for q in out if -q["w"] <= q["u"] - umin <= width + q["w"]]
 
 
 def _frame_of(tris, n, d, u):

@@ -54,6 +54,8 @@ def _parse(params):
     p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "profile", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))
     p["rotate"] = bool(params.get("rotate", True))          # a piece may be cut turned 90 degrees
+    # the vertical battens on the columns the client's model has standing on the face
+    p["battens_from_model"] = bool(params.get("battens_from_model", True))
     p["share_offcuts"] = bool(params.get("share_offcuts", False))   # an elevation may cut from earlier ones' offcuts
     # Derived: battens perpendicular to boards; horizontal battens on vertical counter-battens.
     vertical_planks = p["cladding_type"] == "plank" and p["plank_orient"] == "vertical"

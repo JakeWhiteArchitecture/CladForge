@@ -207,6 +207,37 @@ def bays_between(stops, max_panel, gap):
     return panels, sorted(joints)
 
 
+MIN_BAY = 300.0   # mm – a bay set out on posts is never narrower than this where a post allows
+
+
+def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY):
+    """Panels filling each span between consecutive *stops* (the ends, opening jambs: fixed
+    edges, no joint gap taken there) with every joint on a post, a batten the client's
+    model fixes: the furthest post that keeps the panel within *max_panel*, so as few
+    joints as the posts allow, avoiding one that leaves a last bay under *min_bay*. Where
+    no post is in reach the joint goes at the full panel width and is listed in *extra*,
+    needing a batten of its own. Returns (panels, joints, extra)."""
+    panels, joints, extra = [], [], []
+    for a, b in zip(stops, stops[1:]):
+        if b - a <= 1.0:
+            continue
+        cur = a
+        while b - cur > max_panel + 1e-6:
+            reach = cur + max_panel + gap / 2.0
+            inside = [q for q in posts if cur + gap / 2.0 + min_bay <= q <= reach + 1e-6 and q <= b - gap / 2.0 - 1.0]
+            fair = [q for q in inside if b - (q + gap / 2.0) >= min_bay]
+            if fair or inside:
+                j = (fair or inside)[-1]
+            else:
+                j = reach
+                extra.append(j)
+            panels.append((cur, j - gap / 2.0, True))
+            joints.append(j)
+            cur = j + gap / 2.0
+        panels.append((cur, b, True))
+    return panels, sorted(joints), extra
+
+
 def panel_bays(length, panel, gap, offset):
     """Panels across *length* with a panel centred at length/2 + offset.
     Returns (panels, joints): panels as (start, end, full) clipped to [0, length],
