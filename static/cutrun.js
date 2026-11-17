@@ -24,7 +24,8 @@ const RUN_BOARD_PX = 210;         // height a board is drawn on the strip
 const RUN_LENGTH_PX = 440;        // height a plank's stock length is drawn on the strip, standing up
 
 const run = { on: false, plan: null, steps: [], i: -1, playing: false, speed: 1, timer: null,
-              meshes: {}, group: null, glow: null, saved: null, views: {}, rack: null };
+              meshes: {}, group: null, glow: null, saved: null, views: {}, rack: null, hatch: null };
+const RUN_HATCH_MM = 110;         // mm between the diagonal hatch lines on a board already inspected
 const RUN_RACK_T = 25;            // mm: how thick an offcut is drawn on the rack
 const RUN_RACK_GAP = 80;          // mm between offcuts on the rack
 const RUN_RACK_OUT = 900;         // mm in front of the cladding the rack starts
@@ -98,6 +99,7 @@ function startRun(plan) {
     }
     run.group = new THREE.Group();
     scene.add(run.group);
+    buildHatch();
     run.steps.forEach(s => {
         const mesh = s.piece && run.meshes[s.piece.name];
         if (mesh) run.group.add(runLabel(stepLabel(s), mesh));
@@ -139,6 +141,7 @@ function closeCuttingRun() {
     clearGlow();
     clearRack();
     landOffcut();
+    if (run.hatch) { clearGroup(run.hatch.group); scene.remove(run.hatch.group); run.hatch = null; }
     if (run.group) { clearGroup(run.group); scene.remove(run.group); run.group = null; }
     for (const m of Object.values(run.meshes)) {
         if (m.userData.runColor !== undefined) m.material.color.setHex(m.userData.runColor);
@@ -244,6 +247,17 @@ function paintWall(s) {
     clearGlow();
     run.glow = new THREE.Group();
     scene.add(run.glow);
+    // Boards the run has already been through are hatched, their colour kept, so
+    // a glance shows nothing on the elevation was missed or counted twice. Stepping
+    // back un-hatches them again: inspected means before the board in focus.
+    if (run.hatch) {
+        const first = run.steps.findIndex(t => t.key === s.key), done = new Set();
+        for (let n = 0; n < first; n++) if (run.steps[n].piece) done.add(run.steps[n].key);
+        for (const t of run.steps) {
+            const h = t.piece && run.hatch.skins[t.piece.name];
+            if (h) h.visible = done.has(t.key) && !(t.key === s.key);
+        }
+    }
     run.steps.forEach(t => {
         const m = t.piece && run.meshes[t.piece.name];
         if (!m) return;
@@ -261,6 +275,43 @@ function paintWall(s) {
         it.mesh.material.emissive.copy(lit ? runColor(it.hue, 80, 22) : new THREE.Color(0x000000));
         if (lit && s.kind !== 'rack') run.glow.add(rackGlow(it));
     }
+}
+
+// ─── INSPECTED BOARDS ───
+// A diagonal hatch skin for every piece: a copy of the piece's own geometry (so a mitred
+// or sloped cut is hatched exactly to its edge) drawn just in front of it, carrying a
+// see-through texture of broad black diagonals, so the board's colour shows between them.
+// Built once when the run opens and only shown or hidden as it plays.
+function buildHatch() {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d');
+    g.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+    g.lineWidth = 26;
+    // one direction of diagonals, drawn past the corners so the tile repeats seamlessly
+    for (const k of [-128, 0, 128]) { g.beginPath(); g.moveTo(k - 16, 144); g.lineTo(k + 144, -16); g.stroke(); }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+                                              polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+    const group = new THREE.Group(), skins = {};
+    for (const t of run.steps) {
+        const mesh = t.piece && run.meshes[t.piece.name];
+        if (!mesh || skins[t.piece.name]) continue;
+        const geo = mesh.geometry.clone(), pos = geo.attributes.position, uv = new Float32Array(pos.count * 2);
+        // the hatch in the board's own millimetres: square to the wall, the same size everywhere
+        for (let k = 0; k < pos.count; k++) { uv[2 * k] = pos.getX(k) / RUN_HATCH_MM; uv[2 * k + 1] = pos.getY(k) / RUN_HATCH_MM; }
+        geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        const skin = new THREE.Mesh(geo, mat);
+        skin.matrixAutoUpdate = false;
+        skin.matrix.copy(mesh.matrix);
+        skin.renderOrder = 5;
+        skin.visible = false;
+        group.add(skin);
+        skins[t.piece.name] = skin;
+    }
+    scene.add(group);
+    run.hatch = { group, skins };
 }
 
 // ─── THE RACK ───
