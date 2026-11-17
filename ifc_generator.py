@@ -5,7 +5,8 @@ CladForge — IFC4X3 export via IfcOpenShell.
 
 One IfcElementAssembly per elevation, placed in the host wall's storey and
 aggregating IfcMember battens, IfcPlate sheathing and IfcCovering insulation
-and boards. Every prism becomes an IfcExtrudedAreaSolid whose placement axis
+and boards (panels as IfcWall instead with *panels_as_walls*: Archicad and others
+take an IfcCovering in as a slab, while a wall is what a panel is edited as). Every prism becomes an IfcExtrudedAreaSolid whose placement axis
 is the elevation normal, so the profile drawn in (u, v) extrudes outward.
 A mitred end slopes with depth, so those elements are written as an explicit
 brep instead. Raw entity creation is used for property sets: the WASM wheel ships
@@ -343,6 +344,8 @@ def meshes_to_ifc(meshes, params, infos=None):
         parts = []
         for mesh in by_elev.get(name, []):
             ifc_class, predefined, label = _IFC_TYPE_MAP.get(mesh.get("ifc_type"), ("IfcBuildingElementProxy", None, None))
+            if mesh.get("ifc_type") == "panel" and p["panels_as_walls"]:
+                ifc_class, predefined = "IfcWall", "USERDEFINED"
             try:
                 elem = _make_element(ifc, body, ifc_class, mesh.get("name") or label, _prism_solid(ifc, mesh),
                                      predefined, label)
@@ -354,6 +357,8 @@ def meshes_to_ifc(meshes, params, infos=None):
             common = {"Reference": ("IfcIdentifier", label), "IsExternal": ("IfcBoolean", True)}
             if ifc_class == "IfcCovering":
                 _pset(ifc, [elem], "Pset_CoveringCommon", common)
+            elif ifc_class == "IfcWall":
+                _pset(ifc, [elem], "Pset_WallCommon", dict(common, LoadBearing=("IfcBoolean", False)))
             elif ifc_class == "IfcMember":
                 _pset(ifc, [elem], "Pset_MemberCommon", common)
             info = mesh.get("profile_info")
