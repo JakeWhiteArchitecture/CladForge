@@ -381,3 +381,14 @@ def test_planks_run_out_to_the_trim_once_trimmed(faces, orient):
     assert abs(a - (8000 + face["Elevation A"] - D - 21)) < 0.5
     assert abs(b + (face["Elevation B"] - D - 21)) < 0.5
     assert [m for m in out["geometry"] if m.get("corner_timber")]           # and the L survived the trim
+
+
+@pytest.mark.parametrize("detail", ["profile", "butt"])
+def test_the_job_wide_corner_setting_is_kept(faces, detail):
+    """The toggle offers Profile and Square for the whole job. Both used to be read back
+    as a mitre, so only a corner set on its own ever got them."""
+    assert _parse({"corner": detail})["corner"] == detail
+    params, out = _pair(faces, detail=None, kind="plank", corner=detail)
+    trims = [m for m in out["geometry"] if m["ifc_type"] == "corner_trim"]
+    assert bool(trims) == (detail == "profile")
+    assert out["info"][0]["corner"]["details"][1] == detail

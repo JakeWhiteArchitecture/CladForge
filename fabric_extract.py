@@ -29,15 +29,11 @@ from shapely import union_all
 from shapely.ops import unary_union, polygonize
 from shapely.affinity import translate
 
-from cladding_booleans import iter_polygons, polygon_to_rings, _difference
+from cladding_booleans import iter_polygons, polygon_to_rings, _difference, near_misses, ROBUST_GRID
 
 PLANE_TOL = 25.0          # mm – off-plane distance still treated as on the face
 VERTICAL_TOL = 0.087      # sin(5 deg) – flatten faces this close to vertical
 MIN_HOLE_AREA = 2500.0    # mm² – ignore holes smaller than 50 x 50
-UNION_GRID = 0.01         # mm – a risky union snaps to this grid (see _union)
-NEAR_MISS = 0.5           # mm – vertices or edges this close that do not meet make a union risky
-MEETS = 1e-6              # mm – closer than this is meeting (float noise), not a near miss
-NEAR_MISS_WORK = 400_000  # vertex x edge checks past which a union is treated as risky unchecked
 EDGE_MARGIN = 50.0        # mm – abutments this close to the top/bottom are not abutments
 CORNER_TOL = 400.0        # mm – a corner may sit this far past an elevation's end (wall thickness)
 PITCH_TOL = 20.0          # mm – rise along an abutment line before it counts as pitched
@@ -176,63 +172,16 @@ def _to_local(p, n, u, mode="wall"):
 
 # ── region ────────────────────────────────────────────────────────────────
 
-def _coords(g):
-    """Every vertex of a line or polygon (or a collection of them)."""
-    if hasattr(g, "geoms"):
-        return [c for part in g.geoms for c in _coords(part)]
-    if g.geom_type == "Polygon":
-        return [c for ring in [g.exterior, *g.interiors] for c in ring.coords]
-    return list(g.coords)
-
-
-def _near_misses(geoms):
-    """Do any two vertices, or a vertex and an edge, come within NEAR_MISS of each other
-    without meeting? Edges from different elements that nearly coincide are what GEOS's
-    floating-point union fails to node. Too large to check cheaply counts as yes."""
-    pts = {(round(x, 6), round(y, 6)) for g in geoms for x, y, *_ in _coords(g)}
-    segs = []
-    for g in geoms:
-        parts = list(g.geoms) if hasattr(g, "geoms") else [g]
-        for part in parts:
-            rings = [part.exterior, *part.interiors] if part.geom_type == "Polygon" else [part]
-            for ring in rings:
-                cs = list(ring.coords)
-                segs += [(cs[i][:2], cs[i + 1][:2]) for i in range(len(cs) - 1)]
-    if len(pts) * len(segs) > NEAR_MISS_WORK:
-        return True
-    cell = {}
-    for x, y in pts:
-        cell.setdefault((math.floor(x / NEAR_MISS), math.floor(y / NEAR_MISS)), []).append((x, y))
-    for (i, j), here in cell.items():
-        for di in (-1, 0, 1):
-            for dj in (-1, 0, 1):
-                for x, y in cell.get((i + di, j + dj), ()):
-                    if any(MEETS < math.hypot(x - a, y - b) <= NEAR_MISS for a, b in here):
-                        return True
-    for (ax, ay), (bx, by) in segs:
-        dx, dy = bx - ax, by - ay
-        L2 = dx * dx + dy * dy
-        if L2 <= 0.0:
-            continue
-        for x, y in pts:
-            if x < min(ax, bx) - NEAR_MISS or x > max(ax, bx) + NEAR_MISS or y < min(ay, by) - NEAR_MISS or y > max(ay, by) + NEAR_MISS:
-                continue
-            t = ((x - ax) * dx + (y - ay) * dy) / L2
-            if 0.0 < t < 1.0 and MEETS < abs((x - ax) * dy - (y - ay) * dx) / math.sqrt(L2) <= NEAR_MISS:
-                return True
-    return False
-
-
 def _union(geoms):
     """unary_union that cannot kill the engine. Model edges from different elements can
     nearly coincide (two ends 0.02 mm apart), and GEOS's floating-point union can then
     fail to node them: a TopologyException that in the browser is a C++ abort, taking the
     runtime down where try/except never sees it. So look first: where anything nearly
-    meets (_near_misses), union snapped to a 0.01 mm grid, which always nodes; otherwise
+    meets (cladding_booleans.near_misses), union snapped to a 0.01 mm grid, which always nodes; otherwise
     exactly, as before, so clean geometry keeps its exact coordinates."""
     geoms = list(geoms)
-    if len(geoms) > 1 and _near_misses(geoms):
-        return union_all(geoms, grid_size=UNION_GRID)
+    if len(geoms) > 1 and near_misses(geoms):
+        return union_all(geoms, grid_size=ROBUST_GRID)
     return unary_union(geoms)
 
 
