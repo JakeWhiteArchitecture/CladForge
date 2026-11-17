@@ -90,3 +90,28 @@ def test_dxf_export(design):
     assert "not a quantity take-off" in dxf
     assert "Approved Document B" in dxf
     assert dxf.count("\r\nLINE\r\n") > 500
+
+
+@pytest.mark.parametrize("as_walls", [False, True])
+def test_panels_can_be_exported_as_walls(design, as_walls):
+    """Archicad and others bring an IfcCovering in as a slab; with panels_as_walls each
+    panel is an IfcWall instead, to edit as a wall. Nothing else changes."""
+    params, out = design
+    ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], dict(params, panels_as_walls=as_walls), out["info"]))
+    n_panels = sum(1 for m in out["geometry"] if m["ifc_type"] == "panel")
+    walls = ifc.by_type("IfcWall")
+    panel_coverings = [c for c in ifc.by_type("IfcCovering") if c.ObjectType == "Cladding panel"]
+    assert n_panels > 0
+    if as_walls:
+        assert len(walls) == n_panels and not panel_coverings
+        assert all(w.ObjectType == "Cladding panel" and w.PredefinedType == "USERDEFINED" for w in walls)
+        psets = {r.RelatingPropertyDefinition.Name for w in walls for r in w.IsDefinedBy}
+        assert "Pset_WallCommon" in psets
+        # still in the elevation's assembly, with their material
+        assert all(w.Decomposes and w.Decomposes[0].RelatingObject.is_a("IfcElementAssembly") for w in walls)
+        assert all(any(r.is_a("IfcRelAssociatesMaterial") for r in w.HasAssociations) for w in walls)
+    else:
+        assert not walls and len(panel_coverings) == n_panels
+    # the rest of the buildup is the same either way
+    assert len(ifc.by_type("IfcMember")) == sum(1 for m in out["geometry"] if m["ifc_type"] in
+                                                 ("batten", "counter_batten", "cross_batten", "closer", "corner_profile", "corner_trim"))
