@@ -21,7 +21,15 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "sheathing": ("#d9c9a3", 0.35), "insulation": ("#e8d86a", 0.30), "counter_batten": ("#8b7355", 1.0),
     "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
     "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
-    "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#a8c66c", 1.0), "gasket": ("#1c1c1c", 1.0)}
+    "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#a8c66c", 1.0), "gasket": ("#1c1c1c", 1.0),
+    "deck": ("#c9a46a", 1.0), "membrane": ("#5b8fc7", 0.55), "seam": ("#6f7b88", 1.0)}
+# A standing seam as modelled: the two upstands closed together as a stem, and the double
+# fold as a head on its top, to one side (GreenCoat PLX: 25 high, 12.5-14 head, ~5 stem).
+SEAM_STEM, SEAM_HEAD_W, SEAM_HEAD_H = 5.0, 12.0, 12.0     # mm
+SEAM_CENTRES = (430.0, 530.0)   # mm – the standard tray widths, seam to seam
+SEAM_FLAT_L = 40.0              # mm – the length of a seam end pressed flat onto the tray
+DECK_T = {"boards": 22.0, "ply": 18.0}   # mm – softwood boarding, or WBP plywood
+MEMBRANE_T = 1.0       # mm – the structured breather membrane under the trays, as drawn
 EPDM_T, EPDM_LAP = 2.0, 15.0    # EPDM gasket on vertical timbers: thickness, and past the timber each side
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
@@ -32,6 +40,8 @@ _NUMERIC = {  # name: (default, min, max)
     "panel_gap": (10, 0, 15), "plank_w": (150, 75, 250), "plank_t": (20, 12, 32),
     "plank_lap": (0, 0, 50), "plank_gap": (8, 0, 15), "plank_len": (3600, 1800, 6000),
     "plank_min": (300, 100, 3000), "plank_splice": (0, 0, 100),   # shortest piece a splice may leave; 0-100 fewer to more splices
+    # standing seam (a plank profile): seam centres 430 or 530, seam height, sheet thickness
+    "seam_centres": (530, 430, 530), "seam_h": (25, 25, 38), "seam_t": (0.6, 0.5, 1.0),
     "closer_w": (50, 25, 150),
     "board_w": (1250, 300, 3000), "board_h": (2500, 300, 5000), "kerf": (3, 0, 10), "board_trim": (0, 0, 50),   # stock and saw
 }
@@ -50,6 +60,19 @@ def _parse(params):
     p["cladding_type"] = "panel" if params.get("cladding_type") == "panel" else "plank"
     p["counter_batten"] = params.get("counter_batten", "auto")   # auto | yes | no
     p["plank_orient"] = "vertical" if params.get("plank_orient") == "vertical" else "horizontal"
+    # Standing seam is a plank profile: trays a seam-centre wide, run and joined like planks,
+    # on a continuous deck (and membrane) on vertical battens, so the cavity always drains.
+    p["plank_profile"] = "seam" if params.get("plank_profile") == "seam" else "board"
+    p["seam"] = p["cladding_type"] == "plank" and p["plank_profile"] == "seam"
+    if p["seam"]:
+        p["seam_centres"] = min(SEAM_CENTRES, key=lambda c: abs(c - p["seam_centres"]))
+        p["seam_h"] = 38.0 if p["seam_h"] > 31.5 else 25.0
+        p["plank_w"], p["plank_gap"], p["plank_lap"], p["plank_t"] = p["seam_centres"], 0.0, 0.0, p["seam_t"]
+    p["seam_deck"] = "ply" if params.get("seam_deck") == "ply" else "boards"
+    # Where a seam runs out (the base, the top, an opening): folded down to the tray on a
+    # slope, or stopped short and its end pressed flat onto the tray.
+    p["seam_end"] = "flat" if params.get("seam_end") == "flat" else "folded"
+    p["deck_t"] = DECK_T[p["seam_deck"]]
     # every job-wide corner detail the toggle offers (cladding_primitives.CORNER_DETAILS)
     p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "profile", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))
@@ -60,8 +83,8 @@ def _parse(params):
     p["panels_as_walls"] = bool(params.get("panels_as_walls", False))
     p["share_offcuts"] = bool(params.get("share_offcuts", False))   # an elevation may cut from earlier ones' offcuts
     # Derived: battens perpendicular to boards; horizontal battens on vertical counter-battens.
-    vertical_planks = p["cladding_type"] == "plank" and p["plank_orient"] == "vertical"
-    p["boards_run"] = "vertical" if vertical_planks else "horizontal"
+    vertical_planks = p["cladding_type"] == "plank" and p["plank_orient"] == "vertical" and not p["seam"]
+    p["boards_run"] = "vertical" if p["cladding_type"] == "plank" and p["plank_orient"] == "vertical" else "horizontal"
     p["battens"] = "horizontal" if vertical_planks else "vertical"
     p["cb_derived"] = vertical_planks
     p["has_cb"] = {"yes": True, "no": False}.get(p["counter_batten"], vertical_planks)

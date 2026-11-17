@@ -14,7 +14,15 @@ def check_rules(params, infos=None):
     add = lambda name, status, message, value=None: checks.append(  # noqa: E731
         {"name": name, "status": status, "message": message, "value": value})
 
-    if p["cladding_type"] == "plank":
+    if p["seam"]:
+        # Trays lie on a continuous deck, so it is the deck that spans the battens.
+        max_span = max([400.0] + [span for min_t, span in PLANK_SPAN_TABLE if p["deck_t"] >= min_t])
+        c = p["batten_centres"]
+        status = "pass" if c <= max_span + 0.5 else "fail"
+        add("Deck span", status, "Batten centres %.0fmm vs %.0fmm max span for the %.0fmm %s deck%s"
+            % (c, max_span, p["deck_t"], "WBP plywood" if p["seam_deck"] == "ply" else "softwood boarding",
+               " — exceeds max span" if status == "fail" else ""), c)
+    elif p["cladding_type"] == "plank":
         max_span = max([400.0] + [span for min_t, span in PLANK_SPAN_TABLE if p["plank_t"] >= min_t])
         c = p["batten_centres"]
         status = "pass" if c < max_span - 0.5 else ("warn" if c <= max_span + 0.5 else "fail")

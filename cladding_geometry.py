@@ -8,8 +8,8 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 
 import math
 
-from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP
-from cladding_booleans import clip_region, strip_intervals
+from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_STEM, SEAM_HEAD_W, SEAM_HEAD_H, MEMBRANE_T
+from cladding_booleans import clip_region, strip_intervals, iter_polygons, polygon_to_rings
 from cladding_constants import frame_to_world
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
                             opening_key, opening_frames, settings as edge_settings)
@@ -73,7 +73,7 @@ def build_elevation(p, elev, layout=None):
     layers = depth                       # depth of the face the cavity starts from
     if p["cladding_type"] == "panel":
         depth = _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
-    elif p["battens"] == "vertical":
+    elif p["boards_run"] == "horizontal":
         depth = _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
     else:
         depth = _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
@@ -466,6 +466,37 @@ def _posts(p, elev, info):
     return us or None
 
 
+SEAM_STOPS = 50.0     # mm – a tray's cross joint can go anywhere on the deck: these are its steps
+
+
+def _seam_deck(p, elev, meshes, depth, region):
+    """A standing seam's continuous deck (softwood boarding or WBP ply) on the battens, and
+    the breather membrane on it, both following the clad outline (openings as holes).
+    Returns the depth of the membrane's face, where the trays lie."""
+    name, frame = elev["name"], elev["frame"]
+    for i, pg in enumerate(iter_polygons(region)):
+        ext, holes = polygon_to_rings(pg)
+        meshes.append(_prism(ext, depth, p["deck_t"], frame, "deck", "%s Deck %d" % (name, i + 1), name, holes=holes))
+        meshes.append(_prism(ext, depth + p["deck_t"], MEMBRANE_T, frame, "membrane",
+                             "%s Membrane %d" % (name, i + 1), name, holes=holes))
+    return depth + p["deck_t"] + MEMBRANE_T
+
+
+def _seam(p, meshes, frame, name, elevation, face, along_v, line, a, b):
+    """The standing seam on a tray's edge at *line* (u for vertical trays, v for horizontal),
+    from *a* to *b* along it: the closed upstands as a stem, the double fold as a head on its
+    top, to one side. No folds and no clips: a seam as it reads in elevation and in 3D."""
+    st, hw, hh, sh = SEAM_STEM, SEAM_HEAD_W, SEAM_HEAD_H, p["seam_h"]
+    if along_v:
+        stem, head = _rect(line - st / 2, a, line + st / 2, b), _rect(line - st / 2, a, line - st / 2 + hw, b)
+    else:
+        stem, head = _rect(a, line - st / 2, b, line + st / 2), _rect(a, line - st / 2, b, line - st / 2 + hw)
+    for part, ring, at, t, label in (("stem", stem, face, sh - hh, "Seam"), ("head", head, face + sh - hh, hh, "Seam head")):
+        m = _prism(ring, at, t, frame, "seam", "%s %s" % (name, label), elevation)
+        m.update(seam_part=part, seam_v=along_v, seam_line=line, seam_face=face)   # for finish_seams
+        meshes.append(m)
+
+
 def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Horizontal boards on vertical battens (optionally on horizontal counter-battens)."""
     name, frame = elev["name"], elev["frame"]
@@ -477,6 +508,10 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     battens = (dedupe_priority([posts, [bw / 2, W - bw / 2]], bw) if posts
                else batten_positions(W, bw, p["batten_centres"], offset))
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
+    stops = battens
+    if p["seam"]:            # trays on a deck: their cross joints need no batten behind
+        depth = _seam_deck(p, elev, meshes, depth, region)
+        stops = [SEAM_STOPS * k for k in range(1, int(W / SEAM_STOPS))]
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
     courses = _courses(elev, v0, H, cover)
@@ -491,14 +526,16 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
         runs = strip_intervals(region, lo, v + face) if region is not None else [(0.0, W)]
         piece, mine = 0, []
         for a, b in runs:
-            segs, bad = split_run(a, b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"],
+            segs, bad = split_run(a, b, p["plank_len"], stops, j % 2 == 1, gap, p["plank_min"], p["plank_target"],
                                   beside, p["batten_centres"])
             mine += _joints(segs)
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1
-                meshes.append(_prism(_rect(s, lo, e, v + face), depth, p["plank_t"], frame, "plank",
-                                     "%s Plank C%d-%d" % (name, j + 1, piece), name))
+                label = "%s %s C%d-%d" % (name, "Tray" if p["seam"] else "Plank", j + 1, piece)
+                meshes.append(_prism(_rect(s, lo, e, v + face), depth, p["plank_t"], frame, "plank", label, name))
+                if p["seam"] and lo > v0 + 1.0:      # the seam with the tray below, along its bottom edge
+                    _seam(p, meshes, frame, label, name, depth + p["plank_t"], False, lo, s, e)
         beside = mine
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
@@ -513,8 +550,11 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
 
 
 def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
-    """Vertical boards on horizontal battens on vertical counter-battens."""
+    """Vertical boards on horizontal battens on vertical counter-battens. Vertical standing
+    seam trays instead lie on a deck on vertical battens, so the cavity still drains."""
     name, frame = elev["name"], elev["frame"]
+    if p["seam"]:
+        return _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
     posts = _posts(p, elev, info) if p["has_cb"] else None
     if not p["has_cb"]:
         info["model_posts"] = 0       # no vertical layer to put on the columns
@@ -552,6 +592,47 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
         dims.append(_dim(name, [max(0, starts[0]), H], [max(0, starts[0]) + (cover if starts[0] >= 0 else left_cut), H],
                          ("Course %.0f" % cover) if starts[0] >= 0 else ("Cut %.0f" % left_cut), 300, [0, 1],
                          "course" if starts[0] >= 0 else None, cover))
+    return depth + p["plank_t"]
+
+
+def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
+    """Vertical standing seam trays: vertical battens (on the model's columns where it has
+    them), the deck and membrane, then trays a seam-centre wide set out across the face like
+    vertical planks, run and joined like them, each with its seam along its left edge."""
+    name, frame = elev["name"], elev["frame"]
+    posts, bw = _posts(p, elev, info), p["batten_w"]
+    battens = (dedupe_priority([posts, [bw / 2, W - bw / 2]], bw) if posts
+               else batten_positions(W, bw, p["batten_centres"], 0.0))
+    depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
+    depth = _seam_deck(p, elev, meshes, depth, region)
+    stops = [v0 + SEAM_STOPS * k for k in range(1, int((H - v0) / SEAM_STOPS))]
+    cover = face = p["plank_w"]
+    starts = centred_positions(W, cover, offset, face)
+    beside = []
+    for j, u in enumerate(starts):
+        runs = strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)]
+        piece, mine = 0, []
+        for a, b in runs:
+            segs, bad = split_run(max(a, v0), b, p["plank_len"], stops, j % 2 == 1, 0.0, p["plank_min"], p["plank_target"],
+                                  beside, p["batten_centres"])
+            mine += _joints(segs)
+            info["unsupported_joints"] += len(bad)
+            for s, e in segs:
+                piece += 1
+                label = "%s Tray C%d-%d" % (name, j + 1, piece)
+                meshes.append(_prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank", label, name))
+                if u > 1.0:                          # the seam with the tray to its left
+                    _seam(p, meshes, frame, label, name, depth + p["plank_t"], True, u, s, e)
+        beside = mine
+    left_cut = (starts[0] + face) if starts and starts[0] < 0 else 0.0
+    right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0
+    info.update(n_courses=len(starts), cover=cover, batten_centres=p["batten_centres"],
+                closing_cut_top=0.0, closing_cut_left=left_cut, closing_cut_right=right_cut)
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else None)
+    if starts:
+        dims.append(_dim(name, [max(0, starts[0]), H], [max(0, starts[0]) + (cover if starts[0] >= 0 else left_cut), H],
+                         ("Tray %.0f" % cover) if starts[0] >= 0 else ("Cut %.0f" % left_cut), 300, [0, 1],
+                         None, cover))
     return depth + p["plank_t"]
 
 

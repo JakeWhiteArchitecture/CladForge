@@ -514,7 +514,8 @@ function shapeFromRings(profile, holes) {
 
 const _layerOf = { sheathing: 'sheathing', insulation: 'insulation', counter_batten: 'counter_batten',
                    batten: 'batten', cross_batten: 'batten', panel: 'cladding', plank: 'cladding',
-                   reveal: 'cladding', closer: 'closer', corner_profile: 'cladding', corner_trim: 'cladding', gasket: 'batten' };
+                   reveal: 'cladding', closer: 'closer', corner_profile: 'cladding', corner_trim: 'cladding', gasket: 'batten',
+                   deck: 'sheathing', membrane: 'sheathing', seam: 'cladding' };
 
 function applyCorner(geo, m, tol = 0.6) {
     // Move the vertices on a corner end to u_end -/+ (ext + k x depth): k shears the

@@ -256,14 +256,16 @@ def panel_bays(length, panel, gap, offset):
     return panels, sorted(joints)
 
 
-def _clear_cut(cut, cur, want, feasible, avoid, pitch, whole):
+def _clear_cut(cut, cur, want, feasible, avoid, pitch, whole, end=None, max_len=None):
     """The joint to cut at, kept clear of *avoid* (the joints in the board alongside):
     two battens clear if any feasible batten is, else one, choosing as split_run does
-    (the furthest within reach, else the nearest beyond). If none is, None when the rest
-    of the run fits one stock length (*whole*): better no joint than one in line with
-    the neighbour's. Else *cut* as it was."""
+    (the furthest within reach, else the nearest beyond), but never one that leaves the
+    rest of the run (to *end*) needing more lengths than *cut* would: clearance is not
+    worth an extra joint. If none is, None when the rest of the run fits one stock length
+    (*whole*): better no joint than one in line with the neighbour's. Else *cut*."""
+    pieces = lambda s: math.ceil((end - s - 1e-6) / max_len) if end is not None and max_len else 0  # noqa: E731
     for clear in (2 * pitch - 1.0, pitch - 1.0):
-        pool = [s for s in feasible if all(abs(s - x) >= clear for x in avoid)]
+        pool = [s for s in feasible if all(abs(s - x) >= clear for x in avoid) and pieces(s) <= pieces(cut)]
         if pool:
             within = [s for s in pool if s <= cur + want + 1e-6]
             return within[-1] if within else pool[0]
@@ -309,7 +311,7 @@ def split_run(a, b, max_len, stops, stagger, joint_gap=0.0, min_piece=300.0, tar
             cut = candidates[-1] if candidates[-1] <= cur + want else candidates[0]
             if avoid and pitch > 0:
                 cut = _clear_cut(cut, cur, want, [s for s in stops if ok(s, max_len)], avoid, pitch,
-                                 b - cur <= max_len + 1e-6)
+                                 b - cur <= max_len + 1e-6, b, max_len)
                 if cut is None:      # no joint clear of the neighbour's: the rest in one length
                     segs.append((cur, b))
                     break
@@ -368,6 +370,8 @@ def buildup_depth(p):
     """Depth of the cladding outer face from the wall face (mm)."""
     d = (p["sheathing_t"] if p["sheathing"] else 0.0) + (p["insulation_t"] if p["insulation"] else 0.0)
     d += (p["cb_d"] if p["has_cb"] else 0.0) + p["batten_d"]
+    if p.get("seam"):                      # a standing seam's deck and membrane, under the trays
+        d += p["deck_t"] + 1.0
     return d + (p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"])
 
 

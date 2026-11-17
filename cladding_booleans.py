@@ -27,7 +27,7 @@ from shapely.prepared import prep
 from cladding_primitives import clip_bounds, clip_bounds_v, splash_rings, openings, ROW_MIN
 from cladding_edges import offset_region
 
-TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel", "gasket"})
+TRIMMABLE = frozenset({"batten", "counter_batten", "cross_batten", "plank", "panel", "gasket", "seam"})
 _MIN_AREA = 25.0   # mm² – slivers smaller than this are discarded
 ROBUST_GRID = 0.01        # mm – an op on shapes that nearly meet runs on this grid
 NEAR_MISS = 0.5           # mm – vertices or edges this close that do not meet make an op risky

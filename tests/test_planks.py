@@ -281,3 +281,12 @@ def test_neighbouring_planks_never_splice_on_the_same_batten():
         cols.setdefault(round(min(us)), []).append((min(vs), max(vs)))
     joints = [sorted(round((a[1] + b[0]) / 2) for a, b in zip(sorted(c), sorted(c)[1:])) for _u, c in sorted(cols.items())]
     assert any(joints) and all(not set(a) & set(b) for a, b in zip(joints, joints[1:]))
+
+
+def test_clearance_is_never_bought_with_an_extra_joint():
+    """2850 to cut from 2000 lengths beside a joint at 1575: two battens' clearance (800)
+    would put this joint at 750 and need a third piece; one batten's (400) at 2150 needs
+    none, so that is the one taken."""
+    stops = [150.0 + 50 * k for k in range(1, 57)]
+    segs, _ = split_run(150.0, 3000.0, 2000.0, stops, False, 0.0, 300.0, 2000.0, avoid=[1575.0], pitch=400.0)
+    assert len(segs) == 2 and abs(_joint_at(segs)[0] - 1575) >= 400
