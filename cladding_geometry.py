@@ -433,6 +433,15 @@ def _batten_dims(name, battens, pitch, along_u, H_or_W, lock=None):
     return out
 
 
+def _centres_string(name, us, H, lock=LOCK_POSTS):
+    """A running string of the centres between every vertical batten in use, across the top
+    of the face: on the client's columns the spacing is theirs, uneven, and changes as columns
+    are toggled in the 2D view, so each bay is dimensioned rather than one c/c."""
+    us = sorted(us)
+    return [_dim(name, [a, H], [b, H], "%.0f" % (b - a), 480, [0, 1], lock=lock)
+            for a, b in zip(us, us[1:]) if b - a > 1.0]
+
+
 def _vertical_battens(p, us, meshes, name, frame, depth, H, ifc_type="batten", w=None, d=None):
     w = w or p["batten_w"]
     d = d or p["batten_d"]
@@ -456,14 +465,40 @@ def _joints(segs):
     return [(e + s) / 2.0 for (_s, e), (s, _e) in zip(segs, segs[1:])]
 
 
+POST_STATES = ("on", "fix", "off")
+
+
+def post_key(u):
+    """How a model column is known from one build to the next: its centreline on the face,
+    to the millimetre (the 2D view's toggles are kept by it, elev["post_states"])."""
+    return str(int(math.floor(float(u) + 0.5)))      # half up, as the 2D view's Math.round
+
+
+def post_state(elev, u):
+    """A model column's use, as toggled in the 2D view: "on" (a batten a joint may land on,
+    the default), "fix" (a batten for fixing only: no joint on it), "off" (not used)."""
+    st = (elev.get("post_states") or {}).get(post_key(u), "on")
+    return st if st in POST_STATES else "on"
+
+
 def _posts(p, elev, info):
     """Centrelines for the vertical battens from the columns the client's model has standing
     on the face (fabric_extract._post_of), when the option is on and there are any: the
     designer set them out to suit the frame behind, so ours go on the same lines and the
-    offset slider has nothing to move. None otherwise."""
-    us = sorted(q["u"] for q in elev.get("posts") or []) if p.get("battens_from_model", True) else []
+    offset slider has nothing to move. A column toggled "off" in the 2D view is left out;
+    one toggled "fix" is a batten but takes no joint (_post_fixings). None if none are left.
+    Every column and its state go to info["posts"] for the 2D view."""
+    cols = sorted(elev.get("posts") or [], key=lambda q: q["u"]) if p.get("battens_from_model", True) else []
+    info["posts"] = [{"u": round(float(q["u"]), 1), "v0": q.get("v0"), "v1": q.get("v1"), "w": q.get("w"),
+                      "state": post_state(elev, q["u"])} for q in cols]
+    us = [q["u"] for q in info["posts"] if q["state"] != "off"]
     info["model_posts"] = len(us)
     return us or None
+
+
+def _post_fixings(info):
+    """The model columns toggled "fix": battens for fixing only, which no joint may land on."""
+    return [q["u"] for q in info.get("posts") or [] if q["state"] == "fix"]
 
 
 SEAM_STOPS = 50.0     # mm – a tray's cross joint can go anywhere on the deck: these are its steps
@@ -550,7 +585,8 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     battens = (dedupe_priority([posts, [bw / 2, W - bw / 2]], bw) if posts
                else batten_positions(W, bw, p["batten_centres"], offset))
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
-    stops = battens
+    fixings = _post_fixings(info)        # battens a plank end may not stop on
+    stops = [u for u in battens if all(abs(u - f) > bw / 2 for f in fixings)]
     if p["seam"]:            # trays on a deck: their cross joints need no batten behind
         depth = _seam_deck(p, elev, meshes, depth, region)
         stops = [SEAM_STOPS * k for k in range(1, int(W / SEAM_STOPS))]
@@ -587,6 +623,8 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
     dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else None)
+    if posts:
+        dims += _centres_string(name, battens, H)
     full = [v for v in courses if v >= v0 - 0.5]
     if full:
         dims.append(_dim(name, [W, full[0]], [W, full[0] + cover], "Course %.0f" % cover, 300, [1, 0],
@@ -609,6 +647,8 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
         cbs = (dedupe_priority([posts, [p["cb_w"] / 2, W - p["cb_w"] / 2]], p["cb_w"]) if posts
                else batten_positions(W, p["cb_w"], p["cb_centres"], 0.0))
         depth = _vertical_battens(p, cbs, meshes, name, frame, depth, H, "counter_batten", p["cb_w"], p["cb_d"])
+        if posts:
+            dims += _centres_string(name, cbs, H)
     bw = p["batten_w"]
     battens = dedupe(stacked_positions(v0 + bw / 2, H - bw / 2, p["batten_centres"]) + [H - bw / 2], bw)
     depth = _horizontal_battens(p, battens, meshes, name, frame, depth, W)
@@ -734,6 +774,8 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
                 closing_cut_top=0.0, closing_cut_left=left_cut, closing_cut_right=right_cut,
                 set_out_from_openings=from_openings, tray_widths=sorted({round(b - a) for a, b in cols if a >= 0 and b <= W}))
     dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else None)
+    if posts:
+        dims += _centres_string(name, battens, H)
     if cols:
         u0, u1 = cols[0]
         lock = {"lock": LOCK_SEAMS} if from_openings else {}
@@ -765,7 +807,9 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         # batten above and below the opening (beside it the closer carries the joint):
         # the column's own where one is there, one of ours where not. A joint with no
         # column in reach gets a batten too.
-        panels, joints, extra = bays_on_posts([0.0] + jambs + [W], posts, p["panel_w"], gap)
+        fixings = _post_fixings(info)
+        on = [u for u in posts if all(abs(u - f) > 0.5 for f in fixings)]   # the columns a joint may use
+        panels, joints, extra = bays_on_posts([0.0] + jambs + [W], on, p["panel_w"], gap)
         reveal = list(jambs)
         info["post_extra"] = len(extra)
         info["reveal_battens"] = len([u for u in jambs if all(abs(u - q) > bw / 2 for q in posts)])
@@ -858,6 +902,8 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
                 set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
     dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else LOCK_CENTRES)
+    if posts:
+        dims += _centres_string(name, battens, H)
     # The left closing cut and the first full panel set out the face: typing a cut solves
     # for the offset, typing the panel sets the panel width. Set out from the openings,
     # the bays follow the jambs instead and both are read-only.

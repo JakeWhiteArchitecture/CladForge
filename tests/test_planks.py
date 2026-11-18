@@ -290,3 +290,48 @@ def test_clearance_is_never_bought_with_an_extra_joint():
     stops = [150.0 + 50 * k for k in range(1, 57)]
     segs, _ = split_run(150.0, 3000.0, 2000.0, stops, False, 0.0, 300.0, 2000.0, avoid=[1575.0], pitch=400.0)
     assert len(segs) == 2 and abs(_joint_at(segs)[0] - 1575) >= 400
+
+
+def test_client_battens_toggled_in_2d_on_fixing_only_off():
+    """Each client batten (a model column on the face) can be on, fixing only or off: panels
+    joint only on the ones on, a fixing-only one stays a batten but takes no joint, and an
+    off one is not a batten at all."""
+    import contextlib
+    import io
+    from synthetic import payload
+    from fabric_extract import extract_elevation
+    from cladding_preview import generate_preview
+    with contextlib.redirect_stdout(io.StringIO()):
+        wall = extract_elevation(payload())
+    posts = [{"u": float(u), "w": 50.0, "v0": 0.0, "v1": 3000.0} for u in range(150, 8000, 600)]
+    base = dict(wall, posts=posts)
+
+    def build(states):
+        params = {"elevations": [dict(base, post_states=states)], "cladding_type": "panel", "panel_w": 1200,
+                  "trim": False, "set_out_from_openings": False}
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = generate_preview(params)
+        g = out["geometry"]
+        battens = sorted({round(sum(q[0] for q in m["profile"]) / 4) for m in g if m["ifc_type"] == "batten"
+                          and max(q[1] for q in m["profile"]) - min(q[1] for q in m["profile"]) > 1000})
+        edges = sorted({round(x) for m in g if m["ifc_type"] == "panel" for x in (min(q[0] for q in m["profile"]),
+                                                                                 max(q[0] for q in m["profile"]))})
+        top = sorted((d["p1"][0], d["p2"][0], d["label"]) for d in out["dimensions"]
+                     if d["p1"][1] == d["p2"][1] == 3000.0 and d.get("offset") == 480)
+        # the centres string across the top: one dimension per bay between the battens in use
+        assert [(round(a), round(b)) for a, b, _l in top] == list(zip(battens, battens[1:]))
+        assert all(lab == "%.0f" % (b - a) for a, b, lab in top)
+        return out["info"][0], battens, edges
+
+    def joint_at(edges, u):
+        return any(abs(e - (u - 5)) < 2 for e in edges) and any(abs(e - (u + 5)) < 2 for e in edges)
+
+    info, battens, edges = build(None)
+    assert {q["state"] for q in info["posts"]} == {"on"} and len(info["posts"]) == len(posts)
+    assert 1950 in battens and joint_at(edges, 1950)               # 750 + 1200: a joint on the column
+    info, battens, edges = build({"1950": "fix"})
+    assert next(q for q in info["posts"] if q["u"] == 1950)["state"] == "fix"
+    assert 1950 in battens and not joint_at(edges, 1950)          # still a batten, no joint on it
+    info, battens, edges = build({"1950": "off"})
+    assert 1950 not in battens and not joint_at(edges, 1950)      # not used at all
+    assert next(q for q in info["posts"] if q["u"] == 1950)["state"] == "off"   # still drawn, to turn back on

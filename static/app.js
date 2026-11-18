@@ -172,6 +172,7 @@ function elevationCard(e, i) {
         + (e.cover ? ` · course ${Math.round(e.cover)}` : '')
         + (e.panelRows && e.panelRows.length ? ` · rows ${e.panelRows.map(Math.round).join('/')}` : '')
         + (e.panelJoints && e.panelJoints.length ? ` · ${e.panelJoints.length} joint${e.panelJoints.length > 1 ? 's' : ''} dissolved` : '')
+        + (e.postStates && Object.keys(e.postStates).length ? ` · ${Object.keys(e.postStates).length} client batten${Object.keys(e.postStates).length > 1 ? 's' : ''} set` : '')
         + (ok && (e.chain.topZ !== null || e.chain.bottomZ !== null)
             ? ` · levels ${Math.round(Math.max(0, vLocal(e, e.chain.bottomZ) || 0))}–${Math.round(Math.min(r.height, vLocal(e, e.chain.topZ) === null ? r.height : vLocal(e, e.chain.topZ)))}` : '');
     return `<div class="elev-card ${i === state.active ? 'active' : ''} ${e.error ? 'error' : ''}" onclick="setActive(${i})">
@@ -425,7 +426,7 @@ function toggle2D() {
     enter2D(e.result.name, e.result.frame, cladBox(e));
     update2DButton();
     renderDims2D();
-    setStatus('2D elevation: click a dimension to type over it, a panel joint to dissolve it · E or Esc for 3D', 'ready');
+    setStatus('2D elevation: click a dimension to type over it, a panel joint to dissolve it, a client batten to set it on, fixing only or off · E or Esc for 3D', 'ready');
 }
 
 function update2DButton() {
@@ -711,6 +712,7 @@ function elevationRecords() {
                                                    clip_v_hi: vLocal(e, chain.topZ),
                                                    cover: e.cover || null, panel_rows: e.panelRows || null,
                                                    panel_joints: e.panelJoints || null,
+                                                   post_states: e.postStates || null,
                                                    course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
                                                    edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
@@ -948,7 +950,8 @@ function snapshotState() {
         cornerLo: e.cornerLo || 0, cornerHi: e.cornerHi || 0, masterLo: !!e.masterLo, masterHi: !!e.masterHi,
         detailLo: e.detailLo || null, detailHi: e.detailHi || null, clipLo: e.clipLo || 0,
         clipHi: e.clipHi === undefined ? null : e.clipHi, cover: e.cover || null,
-        panelRows: e.panelRows || null, panelJoints: e.panelJoints || null, openingDetails: e.openingDetails || {},
+        panelRows: e.panelRows || null, panelJoints: e.panelJoints || null, postStates: e.postStates || null,
+        openingDetails: e.openingDetails || {},
         manual: e.manual || [], disabled: e.disabled || {},
         // the faces it was picked from, for reference: the surface below is what loads
         picks: e.picks.length ? e.picks.map(q => ({ element: (q.mesh && q.mesh.userData.name) || null, faces: q.faces.length,
@@ -1051,7 +1054,8 @@ function restoreState(st) {
                         cornerLo: m.cornerLo || 0, cornerHi: m.cornerHi || 0, masterLo: !!m.masterLo, masterHi: !!m.masterHi,
                         detailLo: m.detailLo || null, detailHi: m.detailHi || null, clipLo: m.clipLo || 0,
                         clipHi: m.clipHi === undefined ? null : m.clipHi, cover: m.cover || null,
-                        panelRows: m.panelRows || null, panelJoints: m.panelJoints || null, openingDetails: m.openingDetails || {} };
+                        panelRows: m.panelRows || null, panelJoints: m.panelJoints || null,
+                        postStates: m.postStates || null, openingDetails: m.openingDetails || {} };
             chain.members.push(e);
             state.elevations.push(e);
             byName[e.name] = e;
