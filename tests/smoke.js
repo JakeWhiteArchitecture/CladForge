@@ -1224,10 +1224,16 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         throw new Error('cutting run playback wrong: ' + JSON.stringify({ played, iBefore, keys, closed }));
 
     // Planks: the same run over stock lengths, a 1200 shortest piece with some splicing,
-    // and Profile as the square timber corner trim wherever a chain turns a right angle.
+    // and Profile as the Marley-type corner profile wherever a chain turns a right angle,
+    // and on the jambs and head of A's first window: offered there with planks too.
     const planks = await page.evaluate(async () => {
         selectToggle('cladding-type', 'plank'); onTypeChange();
         selectToggle('corner-type', 'profile');
+        const e0 = state.elevations[0], key = openingsOf(e0)[0].key;
+        setOpeningDetail(e0, key, 'jamb', 'profile', 'face', 'one');
+        setOpeningDetail(e0, key, 'head', 'profile', 'face', 'one');
+        const offered = !/value="profile"[^>]*disabled/.test(
+            cornerOptions('', !(toggleValue('cladding-type') !== 'panel' && toggleValue('plank-profile') === 'seam'), false));
         document.getElementById('plank_min').value = 1200;
         document.getElementById('plank_splice').value = 30;
         await updatePreview();
@@ -1239,6 +1245,8 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         }).filter(L => L < 1199).length;
         return { kind: plan && plan.kind, board: plan && plan.board, label: document.getElementById('wr-boards-label').textContent,
                  trims: geo.filter(m => m.ifc_type === 'corner_trim').length, profiles: geo.filter(m => m.ifc_type === 'corner_profile').length,
+                 reveal: geo.filter(m => m.ifc_type === 'corner_trim' && / (Jamb|Head) Profile 1/.test(m.name) && m.elevation === e0.result.name).length,
+                 offered,
                  short, piece: document.getElementById('plank_splice_val').textContent,
                  trimLabel: document.getElementById('trim-label').textContent };
     });
@@ -1255,6 +1263,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     });
     console.log('planks:', JSON.stringify({ planks, plankRun }));
     if (planks.kind !== 'plank' || planks.label !== 'Lengths' || planks.board[0] !== 3600 || !planks.trims || planks.profiles
+        || planks.reveal !== 3 || !planks.offered
         || !/^\d+ mm$/.test(planks.piece) || !/^End trim/.test(planks.trimLabel)
         || !/^Length 1 of \d+$/.test(plankRun.counter) || plankRun.onWall !== plankRun.steps || plankRun.figures !== plankRun.boards
         || !/lengths of 3600/.test(plankRun.summary))

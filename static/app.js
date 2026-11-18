@@ -226,7 +226,7 @@ const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master', profile: 'Profile', butt:
 const CORNER_LETTER = { mitre: 'M', lap: 'L', profile: 'P', butt: 'S' };
 
 // Profile is for right-angled external corners only: the aluminium profile with panels,
-// the square timber corner trim with planks (cladding_corners.py).
+// the Marley-type corner profile with planks (cladding_corners.py).
 function profileOffered(k) { return k > 0 && Math.abs(k - 1) < 0.05; }
 
 function cornerDetailInForce(c) {
@@ -243,8 +243,8 @@ function cornerOptions(own, profileOk, withDefault) {
     return (withDefault ? [['', 'Job default']] : []).concat([['mitre', 'Mitred'], ['lap', 'Master'], ['profile', 'Profile'], ['butt', 'Square']])
         .map(([v, t]) => {
             const off = (v === 'lap' && !panel) || (v === 'profile' && !profileOk);
-            const why = v === 'lap' ? 'panel cladding only' : (panel ? 'right-angled external corners only'
-                                                                       : 'right-angled external chain corners only');
+            const seam = !panel && toggleValue('plank-profile') === 'seam';
+            const why = v === 'lap' ? 'panel cladding only' : (seam ? 'not with standing seam' : 'right-angled external corners only');
             return `<option value="${v}" ${v === own ? 'selected' : ''} ${off ? 'disabled' : ''}>${t}${off ? ' (' + why + ')' : ''}</option>`;
         }).join('');
 }
@@ -757,7 +757,7 @@ function getParams() {
 function onTypeChange() {
     const panel = toggleValue('cladding-type') === 'panel';
     // The master-lap needs a board to run past the corner, so it is a panel detail.
-    // Profile is offered either way: with planks it is the timber corner trim.
+    // Profile is offered either way: with planks it is the Marley-type corner profile.
     for (const v of ['lap']) {
         const b = document.querySelector('#corner-type .turn-btn[data-value="' + v + '"]');
         b.disabled = !panel;

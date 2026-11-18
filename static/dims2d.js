@@ -387,7 +387,7 @@ function detailBlock(e, item, box) {
     const frameRow = `<div class="d2-row" title="${o.frame_note || ''}">Frame ${where} · ${source}</div>
         <div class="d2-row">Set <input id="o2-frame" type="number" step="5" placeholder="mm behind" style="width:70px">
             ${o.frame_from === 'set' ? '<button class="mini" id="o2-frame-clear">Clear</button>' : ''}</div>`;
-    return frameRow + `<div class="d2-row">${kind === 'jamb' ? 'Both jambs' : 'Head'} <select id="o2-detail">${cornerOptions(o[kind], toggleValue('cladding-type') === 'panel', false)}</select></div>
+    return frameRow + `<div class="d2-row">${kind === 'jamb' ? 'Both jambs' : 'Head'} <select id="o2-detail">${cornerOptions(o[kind], !(toggleValue('cladding-type') !== 'panel' && toggleValue('plank-profile') === 'seam'), false)}</select></div>
         <div class="d2-scope turn-toggle" id="o2-master" style="${o[kind] === 'lap' ? '' : 'display:none'}">
             <button class="turn-btn ${o[kind + '_master'] === 'face' ? 'active' : ''}" data-master="face">Face board over</button>
             <button class="turn-btn ${o[kind + '_master'] === 'reveal' ? 'active' : ''}" data-master="reveal">Lining over</button></div>

@@ -21,7 +21,7 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "sheathing": ("#d9c9a3", 0.35), "insulation": ("#e8d86a", 0.30), "counter_batten": ("#8b7355", 1.0),
     "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
     "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
-    "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#a8c66c", 1.0), "gasket": ("#1c1c1c", 1.0),
+    "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#9aa1a8", 1.0), "gasket": ("#1c1c1c", 1.0),
     "deck": ("#c9a46a", 1.0), "seam": ("#6b8fa3", 1.0)}   # a seam is its trays' own metal
 # A standing seam as modelled: a closed double lock, sheet by sheet (cladding_geometry.
 # _double_lock), rolled, with the same air SEAM_AIR between every sheet and the one parallel to
