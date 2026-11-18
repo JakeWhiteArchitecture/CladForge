@@ -71,7 +71,7 @@ def test_vertical_trays_on_a_deck_on_vertical_battens(wall, centres):
     (deck,) = _of(out, "deck")
     assert not _of(out, "membrane")
     assert len(deck["holes"]) == 2 and deck["thickness"] == 22         # window and pipe
-    assert all(abs(m["depth"] - (deck["depth"] + 22)) < 1e-6 for m in trays)
+    assert all(abs(m["depth"] - (deck["depth"] + 22 + 2)) < 1e-6 for m in trays)   # 2 off the deck
     # every tray but those at the left edge has its seam, as three solids
     stems = _parts(out, "under_up")
     assert {len(_parts(out, k)) for k in PARTS} == {len(stems)} and len(stems) >= len([m for m in trays if _span(m, 0)[0] > 1.0])
@@ -135,35 +135,58 @@ def test_the_seam_is_a_closed_double_lock(wall):
     assert _span(cap, 0)[1] - _span(cap, 0)[0] == pytest.approx(5 * 0.8 + 4 * 1.8)
 
 
+def _u_of(frame, xyz):
+    o, u = frame["origin"], frame["u"]
+    return sum((a - b) * c for a, b, c in zip(xyz, o, u))
+
+
 def test_seams_on_the_reveal_corners_run_on_past_the_opening(wall):
     """Set out from the openings, each jamb (2000, 3200) is a seam line, and the seam on it
     carries straight on up past the window through the reveal detail: one line the full
-    height, its outer sheet on the reveal corner, its head turned onto the face (mirrored on
-    the left jamb), so nothing of it stands over the opening. Each span is split into equal
-    trays within the seam centres: no closing cut."""
+    height, its head turned onto the face (mirrored on the left jamb). Beside the window the
+    reveal lining is the second tray: it stands 2 off the jamb in the opening and carries
+    straight on out as the seam's upstand on that side, locked into the fold. Each span is
+    split into equal trays within the seam centres: no closing cut."""
+    t, air, so = 0.6, 1.8, 2.0
     _params, out = _build(wall, plank_orient="vertical", seam_centres=430, trim=True)
     assert out["info"][0]["set_out_from_openings"]
     widths = sorted({round(_span(m, 0)[1] - _span(m, 0)[0], 1) for m in _of(out, "plank")})
     assert max(widths) <= 430 and widths == [400.0]           # 2000 = 5 x 400, 1200 = 3 x 400, 4800 = 12 x 400
     seams = [m for m in _of(out, "seam") if m.get("seam_part")]
-    for jamb, side in ((2000.0, -1), (3200.0, 1)):
+    linings = {m["name"][-1]: m for m in _of(out, "reveal") if m["name"][-1] in "LR"}
+    for jamb, side, key in ((2000.0, -1, "L"), (3200.0, 1, "R")):
         at = [m for m in seams if abs(m["seam_line"] - jamb) < 5]
         line = at[0]["seam_line"]
-        assert line == pytest.approx(jamb + side * (0.9 + 0.6))               # off the corner by its outer sheet
+        assert line == pytest.approx(jamb + side * (air / 2 - so))
         ups = sorted(_span(m, 1) for m in at if m["seam_part"] == "over_up")
         assert ups[0][0] == pytest.approx(160.0) and ups[-1][1] == pytest.approx(2990.0)
         assert all(b[0] == pytest.approx(a[1]) for a, b in zip(ups, ups[1:]))   # unbroken, base to top
         assert any(lo < 1500 < hi for lo, hi in ups)                           # past the window
-        xs = [_span(m, 0) for m in at]
-        assert all(x1 <= jamb + 1e-6 for _x0, x1 in xs) if side < 0 else all(x0 >= jamb - 1e-6 for x0, _x1 in xs)
-    # nothing over the opening, and folded only at the base and the top
+        # the reveal lining: 2 off the jamb in the opening, one sheet, in line with the upstand on that side
+        lining = linings[key]
+        u_l = _u_of(wall["frame"], lining["frame"]["origin"])
+        reveal_side = sorted((u_l, u_l - side * t))
+        assert u_l == pytest.approx(jamb - side * so)
+        up = next(m for m in at if m["seam_part"] == "over_up")
+        assert _span(up, 0) == pytest.approx(tuple(reveal_side), abs=0.01)
+        assert up["depth"] == pytest.approx(up["seam_face"])                    # from the face the lining runs out to
+        # the head turned onto the face, away from the opening
+        cap = next(m for m in at if m["seam_part"] == "over_cap")
+        assert (_span(cap, 0)[0] < jamb - 5) if side < 0 else (_span(cap, 0)[1] > jamb + 5)
+    # nothing else over the opening, and the metal 2 off the deck
     for m in seams:
         (u0, u1), (v0, v1) = _span(m, 0), _span(m, 1)
-        assert not (u1 > 2000 + 1e-6 and u0 < 3200 - 1e-6 and v1 > 900 + 1e-6 and v0 < 2100 - 1e-6)
+        assert not (u1 > 2000 + so + t + 1e-6 and u0 < 3200 - so - t - 1e-6 and v1 > 900 + 1e-6 and v0 < 2100 - 1e-6)
     # free set-out instead: the seams at the regular centres, none on the jambs
     _params, out = _build(wall, plank_orient="vertical", seam_centres=430, set_out_from_openings=False)
     assert not out["info"][0]["set_out_from_openings"]
     assert not any(abs(m["seam_line"] - 2000) < 5 for m in _parts(out, "over_up"))
+
+
+def test_one_metal_one_colour(wall):
+    _params, out = _build(wall, plank_orient="vertical", trim=True)
+    colours = {m["color"] for m in out["geometry"] if m["ifc_type"] in ("plank", "seam", "reveal")}
+    assert len(colours) == 1
 
 
 def test_horizontal_trays_seam_along_the_tray_below(wall):

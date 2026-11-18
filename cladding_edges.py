@@ -330,7 +330,7 @@ def mitre_to_linings(meshes, p, infos):
     by trimming included, to the reveal linings with that opening's corner detail
     (mitred by default). Runs on the finished boards, after trimming, and records the
     result as a shift per ring vertex ("vshift")."""
-    if not p.get("reveals", True):
+    if not p.get("reveals", True) or p.get("seam"):     # standing seam: the metal meets square
         return meshes
     face_by = {i["elevation"]: i.get("total_depth", 0.0) for i in infos}
     board = p["panel_t"] if p.get("cladding_type") == "panel" else p["plank_t"]

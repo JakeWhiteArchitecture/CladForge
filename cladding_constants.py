@@ -22,13 +22,14 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
     "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
     "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#a8c66c", 1.0), "gasket": ("#1c1c1c", 1.0),
-    "deck": ("#c9a46a", 1.0), "seam": ("#6f7b88", 1.0)}
+    "deck": ("#c9a46a", 1.0), "seam": ("#6b8fa3", 1.0)}   # a seam is its trays' own metal
 # A standing seam as modelled: a closed double lock, sheet by sheet (cladding_geometry.
 # _double_lock), rolled, with the same air SEAM_AIR between every sheet and the one parallel to
 # it (the clip runs in it between the upstands), so the head comes out 5 sheets and 4 airs
 # across, SEAM_HEAD_D deep from the top.
 SEAM_AIR = 1.8          # mm – between each sheet and the next, throughout
 SEAM_HEAD_D = 17.0      # mm – from the top of the seam to the foot of the head
+SEAM_STANDOFF = 2.0     # mm – the metal off the deck, and off the reveal behind its linings
 SEAM_CENTRES = (430.0, 530.0)   # mm – the standard tray widths, seam to seam
 DECK_T = {"boards": 22.0, "ply": 18.0}   # mm – softwood boarding, or WBP plywood
 EPDM_T, EPDM_LAP = 2.0, 15.0    # EPDM gasket on vertical timbers: thickness, and past the timber each side

@@ -8,7 +8,7 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 
 import math
 
-from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_AIR, SEAM_HEAD_D
+from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_AIR, SEAM_HEAD_D, SEAM_STANDOFF
 from cladding_booleans import clip_region, strip_intervals, iter_polygons, polygon_to_rings
 from cladding_constants import frame_to_world
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
@@ -471,13 +471,13 @@ SEAM_STOPS = 50.0     # mm – a tray's cross joint can go anywhere on the deck:
 
 def _seam_deck(p, elev, meshes, depth, region):
     """A standing seam's continuous deck (softwood boarding or WBP ply) on the battens,
-    following the clad outline (openings as holes). Returns the depth of its face, where the
-    trays lie."""
+    following the clad outline (openings as holes). Returns the depth where the trays lie:
+    SEAM_STANDOFF off its face."""
     name, frame = elev["name"], elev["frame"]
     for i, pg in enumerate(iter_polygons(region)):
         ext, holes = polygon_to_rings(pg)
         meshes.append(_prism(ext, depth, p["deck_t"], frame, "deck", "%s Deck %d" % (name, i + 1), name, holes=holes))
-    return depth + p["deck_t"]
+    return depth + p["deck_t"] + SEAM_STANDOFF
 
 
 def _tray(p, ring, depth, frame, label, elevation):
@@ -665,8 +665,12 @@ def _tray_seams(p, meshes, frame, name, face, laid, holes):
     reveal corner (a jamb, set out from the openings) it carries straight on up past the
     opening through the reveal detail, where only one tray is there, so the jamb line reads
     as one seam the full height: kept on the face, its outer sheet on the corner and its head
-    turned away from the opening (mirrored on a left jamb, the opening on its + side)."""
-    off = SEAM_AIR / 2.0 + p["seam_t"]          # the seam line to its outer sheet
+    turned away from the opening (mirrored on a left jamb, the opening on its + side). There
+    the reveal lining is the second tray: it runs out of the reveal and on up as the seam's
+    upstand on the opening side, locked into the fold with the face tray's.""" 
+    # The reveal lining stands SEAM_STANDOFF into the opening off the jamb, and carries
+    # straight on out past the face as the seam's upstand on the opening side.
+    off = SEAM_AIR / 2.0 - SEAM_STANDOFF
     for (_u0, left, ltrays), (u, runs, trays) in zip(laid, laid[1:]):
         jamb = next((side for o in holes for side, x in ((-1, o[0]), (1, o[1])) if abs(u - x) < 1.0), 0)
         if not jamb:
@@ -675,6 +679,8 @@ def _tray_seams(p, meshes, frame, name, face, laid, holes):
                     _seam(p, meshes, frame, label, name, face, True, u, a2, b2)
             continue
         line, mirror = u + jamb * off, jamb < 0
+        # trimmed in height only, by the face beside it: its reveal side stands in the opening
+        strip = tuple(sorted((u + jamb * 6.0, u + jamb * 12.0)))
         pieces = [(s, e, label) for s, e, label in trays]
         for s, e, label in ltrays:                # past the opening: the tray on the other side alone
             spans = [(s, e)]
@@ -682,7 +688,10 @@ def _tray_seams(p, meshes, frame, name, face, laid, holes):
                 spans = [q for x0, x1 in spans for q in ((x0, min(x1, a)), (max(x0, b), x1)) if q[1] - q[0] > 1.0]
             pieces += [(x0, x1, label) for x0, x1 in spans]
         for s, e, label in sorted(pieces):
+            n = len(meshes)
             _seam(p, meshes, frame, label, name, face, True, line, s, e, mirror=mirror)
+            for m in meshes[n:]:
+                m["clip_v_at"] = strip
 
 
 def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
@@ -973,6 +982,11 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
         reach = max(board, face - frames[(u0, u1, v0, v1)]["depth"])
         jamb = reveal_treatment(d.get("jamb", "mitre"), d.get("jamb_master", "face"), face, pull, board, p["panel_gap"], s["pgap"])[1]
         head_t = reveal_treatment(d.get("head", "mitre"), d.get("head_master", "face"), face, pull, board, p["panel_gap"], s["pgap"])[1]
+        # Standing seam: the linings are the trays' metal, square-ended, SEAM_STANDOFF off the
+        # reveal behind them; a jamb's runs on out as the upstand of the seam on its corner.
+        so = SEAM_STANDOFF if p.get("seam") else 0.0
+        if so:
+            jamb = head_t = None
         for side, u in ((-1.0, u0), (1.0, u1)):
             # The closer sits in the wall side of the jamb and fills the cavity.
             a, b = (u - cw, u) if side < 0 else (u, u + cw)
@@ -981,17 +995,17 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
             if not p["reveals"]:
                 continue
             lining = _prism(_rect(0.0, jv0, reach, jv1), 0.0, board,
-                            _reveal_frame(frame, u, face, -side), "reveal",
+                            _reveal_frame(frame, u - side * so, face, -side), "reveal",
                             "%s Reveal %d%s" % (name, i + 1, "L" if side < 0 else "R"), name)
             if jamb:
                 lining["corner"] = {"k_l": jamb[0], "ext_l": jamb[1], "u_l": 0.0}
             meshes.append(lining)
-        ua, ub = u0 + board, u1 - board                      # between the jamb linings
+        ua, ub = u0 + so + board, u1 - so - board            # between the jamb linings
         if not p["reveals"]:
             continue
         if ub - ua > 1.0 and head_in:
             head = _prism(_rect(0.0, 0.0, max(board, reach - air), ub - ua), 0.0, board,
-                          _head_frame(frame, ua, v1 - air, face), "reveal", "%s Reveal %dH" % (name, i + 1), name)
+                          _head_frame(frame, ua, v1 - air - so, face), "reveal", "%s Reveal %dH" % (name, i + 1), name)
             if head_t:
                 head["corner"] = {"k_l": head_t[0], "ext_l": head_t[1], "u_l": 0.0}
             meshes.append(head)
