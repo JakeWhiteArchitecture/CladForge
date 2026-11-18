@@ -438,8 +438,15 @@ def _centres_string(name, us, H, lock=LOCK_POSTS):
     of the face: on the client's columns the spacing is theirs, uneven, and changes as columns
     are toggled in the 2D view, so each bay is dimensioned rather than one c/c."""
     us = sorted(us)
-    return [_dim(name, [a, H], [b, H], "%.0f" % (b - a), 480, [0, 1], lock=lock)
-            for a, b in zip(us, us[1:]) if b - a > 1.0]
+    return _widths_string(name, list(zip(us, us[1:])), H, lock)
+
+
+def _widths_string(name, spans, H, lock=LOCK_POSTS):
+    """A running string of dimensions across the top of the face, one per span (a, b),
+    stepped up and down alternately so narrow ones' labels do not run into each other."""
+    spans = [(a, b) for a, b in sorted(spans) if b - a > 1.0]
+    return [_dim(name, [a, H], [b, H], "%.0f" % (b - a), 480 if k % 2 == 0 else 640, [0, 1], lock=lock)
+            for k, (a, b) in enumerate(spans)]
 
 
 def _vertical_battens(p, us, meshes, name, frame, depth, H, ifc_type="batten", w=None, d=None):
@@ -903,7 +910,8 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
     dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else LOCK_CENTRES)
     if posts:
-        dims += _centres_string(name, battens, H)
+        # on the client's battens the panels come out of uneven widths: each one dimensioned
+        dims += _widths_string(name, [(max(0.0, a), min(W, b)) for a, b, _f in panels], H)
     # The left closing cut and the first full panel set out the face: typing a cut solves
     # for the offset, typing the panel sets the panel width. Set out from the openings,
     # the bays follow the jambs instead and both are read-only.

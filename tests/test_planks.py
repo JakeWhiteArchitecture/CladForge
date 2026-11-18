@@ -317,10 +317,15 @@ def test_client_battens_toggled_in_2d_on_fixing_only_off():
         edges = sorted({round(x) for m in g if m["ifc_type"] == "panel" for x in (min(q[0] for q in m["profile"]),
                                                                                  max(q[0] for q in m["profile"]))})
         top = sorted((d["p1"][0], d["p2"][0], d["label"]) for d in out["dimensions"]
-                     if d["p1"][1] == d["p2"][1] == 3000.0 and d.get("offset") == 480)
-        # the centres string across the top: one dimension per bay between the battens in use
-        assert [(round(a), round(b)) for a, b, _l in top] == list(zip(battens, battens[1:]))
+                     if d["p1"][1] == d["p2"][1] == 3000.0 and d.get("offset") in (480, 640))
+        # the panel widths across the top, joint to joint: one dimension per panel
+        assert top[0][0] == 0.0 and top[-1][1] == 8000.0                     # end to end
+        assert all(abs(n[0] - (p[1] + 10.0)) < 0.01 for p, n in zip(top, top[1:]))   # panel, 10 joint, panel
         assert all(lab == "%.0f" % (b - a) for a, b, lab in top)
+        assert top and all(500 <= b - a <= 1201 for a, b, _l in top if 0 < a and b < 8000)
+        offs = [d["offset"] for d in sorted((d for d in out["dimensions"] if d.get("offset") in (480, 640)
+                                             and d["p1"][1] == 3000.0), key=lambda d: d["p1"][0])]
+        assert offs == [480 if k % 2 == 0 else 640 for k in range(len(offs))]   # stepped up and down
         return out["info"][0], battens, edges
 
     def joint_at(edges, u):
