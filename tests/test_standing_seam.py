@@ -49,7 +49,7 @@ def test_only_the_standard_centres_and_seam_heights():
     assert not _parse({"plank_orient": "vertical"})["seam"] and _parse({"plank_orient": "vertical"})["battens"] == "horizontal"
 
 
-PARTS = ("under_up", "under_cap", "under_flange", "over_up", "over_bend", "over_return", "over_turn", "over_outer")
+PARTS = ("over_up", "over_cap", "over_outer", "over_turn", "over_lip", "under_up", "under_bend", "under_flange")
 
 
 def _parts(out, part):
@@ -73,7 +73,7 @@ def test_vertical_trays_on_a_deck_on_vertical_battens(wall, centres):
     assert len(deck["holes"]) == 2 and deck["thickness"] == 22         # window and pipe
     assert all(abs(m["depth"] - (deck["depth"] + 22)) < 1e-6 for m in trays)
     # every tray but those at the left edge has its seam, as three solids
-    stems = _parts(out, "over_up")
+    stems = _parts(out, "under_up")
     assert {len(_parts(out, k)) for k in PARTS} == {len(stems)} and len(stems) >= len([m for m in trays if _span(m, 0)[0] > 1.0])
     # a seam only where two trays meet: none at the face's left edge, none beside the window
     assert all(_span(m, 0)[0] > 1.0 for m in stems)
@@ -82,35 +82,55 @@ def test_vertical_trays_on_a_deck_on_vertical_battens(wall, centres):
     assert abs(buildup_depth(p) - face) < 1e-6
 
 
+def _boxes_clear(piece):
+    """No two sheets of a seam overlap (as boxes across the seam and out from the tray)."""
+    bx = [(_span(m, 0), (m["depth"], m["depth"] + m["thickness"])) for m in piece.values()]
+    for i, ((a0, a1), (b0, b1)) in enumerate(bx):
+        for (c0, c1), (d0, d1) in bx[i + 1:]:
+            if min(a1, c1) - max(a0, c0) > 1e-6 and min(b1, d1) - max(b0, d0) > 1e-6:
+                return False
+    return True
+
+
 def test_the_seam_is_a_closed_double_lock(wall):
-    """Both trays turn up into the seam: the one on the left the undercloak (up, over the top,
-    down as a flange), this one the overcloak (up, over inside it, down, round the flange and
-    back up). Each a sheet thick; the head five sheets, 12 deep, a 1 mm bend off the stem.
-    25 high, 0.6 sheet: 4.0 across."""
+    """Both trays turn up into the seam, rolled rather than doubled back: the tray on the left
+    the overcloak, outermost all the way (up, over the top, down the outside, round the foot
+    of the head, back up inside); this tray the undercloak, up, over inside it and down
+    between. Each a sheet thick, with air between them that makes up the overall size: the
+    upstands 3 apart (the clip's room), the head 12 across and 17 deep, 25 high overall."""
     t = 0.6
     _params, out = _build(wall, plank_orient="vertical", set_out_from_openings=False)
     by = {k: _parts(out, k) for k in PARTS}
-    for i, up in enumerate(by["over_up"]):
+    assert len({len(v) for v in by.values()}) == 1
+    for i, up in enumerate(by["under_up"]):
         line, face = up["seam_line"], up["seam_face"]
         piece = {k: by[k][i] for k in PARTS}
         assert {m["seam_line"] for m in piece.values()} == {line}
         assert {_span(m, 1) for m in piece.values()} == {_span(up, 1)}          # one length
-        assert {m["seam_side"] for k, m in piece.items() if k.startswith("under")} == {"-"}
-        assert {m["seam_side"] for k, m in piece.items() if k.startswith("over")} == {"+"}
-        across = lambda k: tuple(round(x - line, 3) for x in _span(piece[k], 0))
-        assert across("under_up") == (-t, 0.0) and across("over_up") == (0.0, t)            # two upstands
-        assert across("under_cap") == (-t, 3.4)                         # over the top: 4.0 across, five sheets and the gap
-        assert [across(k)[1] - across(k)[0] for k in ("over_return", "under_flange")] == pytest.approx([t, t])
-        assert across("over_return")[0] == pytest.approx(t + 1.0)                            # the bend's gap
-        top = max(m["depth"] + m["thickness"] for m in piece.values())
-        low = min(m["depth"] for k, m in piece.items() if k in ("over_return", "over_turn"))
-        assert top == pytest.approx(face + 25.0) and low == pytest.approx(face + 25.0 - 12.0)
+        assert {m["seam_side"] for k, m in piece.items() if k.startswith("over")} == {"-"}
+        assert {m["seam_side"] for k, m in piece.items() if k.startswith("under")} == {"+"}
+        assert all(m["thickness"] == pytest.approx(t) or k in ("over_up", "under_up", "over_outer", "over_lip",
+                   "under_flange") for k, m in piece.items())
+        x = lambda k: tuple(round(v - line, 3) for v in _span(piece[k], 0))
+        z = lambda k: (round(piece[k]["depth"] - face, 3), round(piece[k]["depth"] + piece[k]["thickness"] - face, 3))
+        assert x("under_up")[0] - x("over_up")[1] == pytest.approx(3.0)              # the clip's room
+        assert x("over_cap")[1] - x("over_cap")[0] == pytest.approx(12.0)            # the head, outside to outside
+        assert z("over_cap") == pytest.approx((25 - t, 25.0)) and z("over_turn")[0] == pytest.approx(25 - 17)
+        # across the head from the stem out: undercloak, air, overcloak lip, air, undercloak flange, air, overcloak outer
+        order = [x(k) for k in ("over_up", "under_up", "over_lip", "under_flange", "over_outer")]
+        gaps = [b[0] - a[1] for a, b in zip(order, order[1:])]
+        assert all(g > 1.0 for g in gaps)
+        assert gaps[1] == pytest.approx(gaps[2]) == pytest.approx(gaps[3])        # the folds evenly spaced
+        # the undercloak's bend inside the cap, with the clip's room between; its end inside the turn
+        assert z("over_cap")[0] - z("under_bend")[1] == pytest.approx(3.0)
+        assert z("under_flange")[0] > z("over_turn")[1]
+        assert x("over_turn")[0] <= x("over_lip")[0] and x("over_turn")[1] == pytest.approx(x("over_outer")[1])
+        assert _boxes_clear(piece)
         assert min(m["depth"] for m in piece.values()) == pytest.approx(face)
-        assert all(m["depth"] >= face - 1e-9 for m in piece.values())
     _params, out = _build(wall, plank_orient="vertical", seam_h=38, seam_t=0.8, set_out_from_openings=False)
-    cap = _parts(out, "under_cap")[0]
+    cap = _parts(out, "over_cap")[0]
     assert cap["depth"] + cap["thickness"] == pytest.approx(cap["seam_face"] + 38.0)
-    assert _span(cap, 0)[1] - _span(cap, 0)[0] == pytest.approx(0.8 * 5 + 1.0)
+    assert _span(cap, 0)[1] - _span(cap, 0)[0] == pytest.approx(12.0)
 
 
 def test_seams_on_the_reveal_corners_run_on_past_the_opening(wall):
@@ -215,7 +235,7 @@ def test_seams_fold_down_where_they_run_out_not_at_cross_joints(wall, orient):
             joined += joined_lo + joined_hi
     assert folded and joined          # both kinds of end are there
     # the head's top is drawn back the full seam height
-    head = next(m for m, *_r, jl, jh in _ends(out, "under_cap") if not jh)
+    head = next(m for m, *_r, jl, jh in _ends(out, "over_cap") if not jh)
     k = 1 if head["seam_v"] else 0
     top = ring_at(head, 0, head["depth"] + head["thickness"])
     assert _span(head, k)[1] - max(q[k] for q in top) == pytest.approx(sh)

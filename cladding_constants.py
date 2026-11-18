@@ -24,9 +24,12 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#a8c66c", 1.0), "gasket": ("#1c1c1c", 1.0),
     "deck": ("#c9a46a", 1.0), "seam": ("#6f7b88", 1.0)}
 # A standing seam as modelled: a closed double lock, sheet by sheet (cladding_geometry.
-# _double_lock): each tray turns up one upstand, and the top is folded over 180° twice, so the
-# head is five sheets, hanging beside the stem a bend's width off it, SEAM_LOCK deep.
-SEAM_GAP, SEAM_LOCK = 1.0, 12.0     # mm – the bend's gap, and the fold's depth (10 lip + bend)
+# _double_lock), rolled, with the air between the folds that makes up its overall size: the
+# two upstands SEAM_CLIP_GAP apart in the stem (where the clip runs), and the head
+# SEAM_HEAD_W across and SEAM_HEAD_D deep from the top, the folds spaced evenly inside it.
+SEAM_CLIP_GAP = 3.0     # mm – between the two upstands
+SEAM_HEAD_W = 12.0      # mm – the closed head, outside to outside (GreenCoat: 12.5-14 before closing)
+SEAM_HEAD_D = 17.0      # mm – from the top of the seam to the foot of the head
 SEAM_CENTRES = (430.0, 530.0)   # mm – the standard tray widths, seam to seam
 DECK_T = {"boards": 22.0, "ply": 18.0}   # mm – softwood boarding, or WBP plywood
 EPDM_T, EPDM_LAP = 2.0, 15.0    # EPDM gasket on vertical timbers: thickness, and past the timber each side

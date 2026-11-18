@@ -8,7 +8,7 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 
 import math
 
-from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_GAP, SEAM_LOCK
+from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_CLIP_GAP, SEAM_HEAD_W, SEAM_HEAD_D
 from cladding_booleans import clip_region, strip_intervals, iter_polygons, polygon_to_rings
 from cladding_constants import frame_to_world
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
@@ -494,33 +494,43 @@ def _shared(s, e, runs, least=5.0):
 
 
 # The closed double lock sheet by sheet, across the seam line (x, + toward the head side) and
-# up from the tray face (z), in sheets t, the bend gap g, the fold F and the seam height h:
-# (part, whose tray, x0, x1, z0, z1). The tray on the - side turns up the undercloak: up, over
-# the top and down as a flange. The tray on the + side turns up the overcloak: up, over inside
-# it, down, round the flange's end and back up outside it. So the head is five sheets.
-def _double_lock(t, g, F, h):
-    r = t + g + 3.0 * t                  # the head's outer face
-    return (("under_up", "-", -t, 0.0, 0.0, h - t),
-            ("under_cap", "-", -t, r, h - t, h),
-            ("under_flange", "-", t + g + t, t + g + 2 * t, h - F + t, h - t),
-            ("over_up", "+", 0.0, t, 0.0, h - 2 * t),
-            ("over_bend", "+", 0.0, t + g + t, h - 2 * t, h - t),
-            ("over_return", "+", t + g, t + g + t, h - F, h - 2 * t),
-            ("over_turn", "+", t + g, r, h - F, h - F + t),
-            ("over_outer", "+", t + g + 2 * t, r, h - F + t, h - t))
+# up from the tray face (z): (part, whose tray, x0, x1, z0, z1), each a sheet t thick. Rolled,
+# not doubled back: the first fold takes the overcloak (the tray on the - side) over the
+# undercloak's top; the second turns that head down 180° the same way. So the overcloak runs
+# outermost all the way: up, over the top, down the outside, round the foot of the head and
+# back up inside. The undercloak (this tray) runs up, over inside it and down between. There
+# is air between every layer, which is how the seam gets to its overall size: the upstands
+# *c* apart (the clip's room, also left over the undercloak's top), the head *w* across from
+# outside to outside and *d* deep from the top, its folds evenly spaced inside it.
+def _double_lock(t, h, c=SEAM_CLIP_GAP, w=SEAM_HEAD_W, d=SEAM_HEAD_D):
+    x0 = -c / 2.0 - t                    # the overcloak's outer face, up the stem
+    x1 = x0 + w                          # the head's outer face
+    a = max(0.3, (w - c - 5.0 * t) / 3.0)        # the air between the folds across the head
+    lip = c / 2.0 + t + a                # the overcloak's lip, then the undercloak's flange
+    fl = lip + t + a
+    top_u = h - t - c                    # the undercloak's bend, the clip's room under the cap
+    foot = h - d                         # the overcloak's turn round the foot of the head
+    return (("over_up", "-", x0, x0 + t, 0.0, h - t),
+            ("over_cap", "-", x0, x1, h - t, h),
+            ("over_outer", "-", x1 - t, x1, foot + t, h - t),
+            ("over_turn", "-", lip, x1, foot, foot + t),
+            ("over_lip", "-", lip, lip + t, foot + t, top_u - t - a),
+            ("under_up", "+", c / 2.0, c / 2.0 + t, 0.0, top_u - t),
+            ("under_bend", "+", c / 2.0, fl + t, top_u - t, top_u),
+            ("under_flange", "+", fl, fl + t, foot + t + a, top_u - t))
 
 
-SEAM_PARTS = {"under_up": "undercloak", "under_cap": "undercloak bend", "under_flange": "undercloak flange",
-              "over_up": "overcloak", "over_bend": "overcloak bend", "over_return": "overcloak return",
-              "over_turn": "overcloak turn", "over_outer": "overcloak outer"}
+SEAM_PARTS = {"over_up": "overcloak", "over_cap": "overcloak bend", "over_outer": "overcloak outer",
+              "over_turn": "overcloak turn", "over_lip": "overcloak lip",
+              "under_up": "undercloak", "under_bend": "undercloak bend", "under_flange": "undercloak flange"}
 
 
 def _seam(p, meshes, frame, name, elevation, face, along_v, line, a, b):
     """The closed double-lock seam on a tray's edge at *line* (u for vertical trays, v for
     horizontal), from *a* to *b* along it, sheet by sheet: the tray on the - side (left, or
-    below) turns up the undercloak, this tray turns up the overcloak, and the two lock round
-    each other, the head folded down on this tray's side (_double_lock). No clips."""
-    for part, side, c0, c1, z0, z1 in _double_lock(p["seam_t"], SEAM_GAP, SEAM_LOCK, p["seam_h"]):
+    below) turns up the overcloak, this tray the undercloak, rolled together with the head
+    turned down on this tray's side (_double_lock). No clips."""
+    for part, side, c0, c1, z0, z1 in _double_lock(p["seam_t"], p["seam_h"]):
         ring = _rect(line + c0, a, line + c1, b) if along_v else _rect(a, line + c0, b, line + c1)
         m = _prism(ring, face + z0, z1 - z0, frame, "seam", "%s Seam %s" % (name, SEAM_PARTS[part]), elevation)
         m.update(seam_part=part, seam_side=side, seam_v=along_v, seam_line=line, seam_face=face)   # for finish_seams
