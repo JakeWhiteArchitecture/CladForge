@@ -370,19 +370,16 @@ def finish_seams(meshes, p):
     trimmed seams, so a seam cut by a roof line is ended there too.
 
     "folded" (the default): the seam is folded down onto the tray, its end sloping from the
-    tray to its full height over the seam height (a shift with depth, "vshift").
-    "flat": the seam stops SEAM_FLAT_L short and that length lies pressed flat on the tray,
-    to the side of the head, as a thin tab ("... Seam end")."""
-    if not p.get("seam"):
+    tray to its full height over the seam height (a shift with depth, "vshift"). "flat": the
+    seam runs to the tray's end and stops square, flush with it, so nothing changes."""
+    if not p.get("seam") or p.get("seam_end") == "flat":
         return meshes
-    from cladding_constants import SEAM_FLAT_L, SEAM_STEM
-    flat, sh = p.get("seam_end") == "flat", float(p["seam_h"])
+    sh = float(p["seam_h"])
     groups = {}
     for m in meshes:
         if m.get("ifc_type") == "seam" and m.get("seam_part"):
             key = (m.get("elevation"), m["seam_part"], m["seam_v"], round(float(m["seam_line"]), 1))
             groups.setdefault(key, []).append(m)
-    tabs = []
     for ms in groups.values():
         spans = [_seam_span(m) for m in ms]
         for m, (lo, hi) in zip(ms, spans):
@@ -393,37 +390,15 @@ def finish_seams(meshes, p):
             if not (free_lo or free_hi):
                 continue
             room = (hi - lo) / (2.0 if free_lo and free_hi else 1.0) - 1.0
-            pull = min(SEAM_FLAT_L if flat else sh, room)
+            k = min(sh, room) / sh                 # 45°, or steeper on a piece too short for it
             ax, face = (1 if m["seam_v"] else 0), float(m["seam_face"])
             tol = min(30.0, (hi - lo) / 3.0)
             ends = ([(-1, lo)] if free_lo else []) + ([(1, hi)] if free_hi else [])
-            side = [next((sign for sign, at in ends if abs(float(q[ax]) - at) <= tol), 0) for q in m["profile"]]
-            if flat:
-                prof = [[float(u), float(v)] for u, v in m["profile"]]
-                for q, sign in zip(prof, side):
-                    q[ax] -= sign * pull
-                m["profile"] = prof
-                if m["seam_part"] == "stem":
-                    line = float(m["seam_line"])
-                    for sign, at in ends:
-                        a, b = sorted((at, at - sign * pull))
-                        c0, c1 = line - SEAM_STEM / 2, line - SEAM_STEM / 2 + sh
-                        ring = ([[a, c0], [b, c0], [b, c1], [a, c1]] if not m["seam_v"]
-                                else [[c0, a], [c1, a], [c1, b], [c0, b]])
-                        tab = dict(m, profile=ring, holes=[], depth=face, name="%s end %s" % (m["name"], ("top" if sign > 0 else "bottom") if m["seam_v"]
-                                                                    else ("right" if sign > 0 else "left")),
-                                   thickness=max(4.0 * float(p.get("seam_t", 0.6)), 2.0), seam_part="end")
-                        tab.pop("vshift", None)
-                        tabs.append(tab)
-            else:
-                k = pull / sh
-                shifts = []
-                for sign in side:
-                    a, b = sign * k * face, -sign * k      # along the seam: a + b·s, s the depth
-                    shifts.append((a, b, 0.0, 0.0) if ax == 0 else (0.0, 0.0, a, b))
-                if any(any(sh_) for sh_ in shifts):
-                    m["vshift"] = [[list(x) for x in shifts]] + [[[0.0] * 4 for _ in h] for h in (m.get("holes") or [])]
-    if tabs and p.get("trim"):
-        from cladding_booleans import apply_boolean_ops
-        tabs = apply_boolean_ops(tabs, p)
-    return meshes + tabs
+            shifts = []
+            for q in m["profile"]:
+                sign = next((sg for sg, at in ends if abs(float(q[ax]) - at) <= tol), 0)
+                a, b = sign * k * face, -sign * k      # along the seam: a + b·s, s the depth
+                shifts.append((a, b, 0.0, 0.0) if ax == 0 else (0.0, 0.0, a, b))
+            if any(any(x) for x in shifts):
+                m["vshift"] = [[list(x) for x in shifts]] + [[[0.0] * 4 for _ in h] for h in (m.get("holes") or [])]
+    return meshes

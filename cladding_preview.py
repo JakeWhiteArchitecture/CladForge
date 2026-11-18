@@ -46,6 +46,10 @@ def generate_preview(params):
     # holes left by trimming are mitred as well as the ends that land on a jamb.
     meshes = mitre_to_linings(meshes, p, infos)
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
+    if p.get("seam"):                    # a metal facade reads solid: its reveal linings too
+        for m in meshes:
+            if m.get("ifc_type") == "reveal":
+                m["opacity"] = 1.0
     return {"geometry": _ensure_unique_names(meshes), "dimensions": dims, "info": infos}
 
 

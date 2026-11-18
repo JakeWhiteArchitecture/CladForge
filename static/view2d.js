@@ -122,11 +122,13 @@ function apply2DLook(on) {
     if (on && !view2d.faded.length) {
         modelGroup.traverse(o => {
             if (!o.material) return;
-            view2d.faded.push([o.material, o.material.opacity, o.material.depthWrite]);
-            o.material.opacity = VIEW2D_FADE; o.material.depthWrite = false;
+            view2d.faded.push([o.material, o.material.opacity, o.material.depthWrite, o.material.transparent]);
+            o.material.opacity = VIEW2D_FADE; o.material.depthWrite = false; o.material.transparent = true; o.material.needsUpdate = true;
         });
     } else if (!on) {
-        for (const [mat, opacity, depthWrite] of view2d.faded) { mat.opacity = opacity; mat.depthWrite = depthWrite; }
+        for (const [mat, opacity, depthWrite, transparent] of view2d.faded) {
+            mat.opacity = opacity; mat.depthWrite = depthWrite; mat.transparent = transparent; mat.needsUpdate = true;
+        }
         view2d.faded = [];
     }
     filter2D();

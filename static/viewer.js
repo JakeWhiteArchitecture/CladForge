@@ -247,7 +247,7 @@ function buildScene(raw, context, warnings) {
         geo.computeBoundingBox();
         const isWall = /WALL/i.test(r.type);
         const mat = new THREE.MeshPhongMaterial({ color: isWall ? 0xd8d8d8 : 0xa8a8b8, flatShading: true,
-                                                  side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
+                                                  side: THREE.DoubleSide, transparent: false, opacity: 1 });   // solid; the 2D view fades it
         const th = new THREE.Mesh(geo, mat);
         th.userData.index = allMeshes.length;
         modelGroup.add(th);
@@ -515,7 +515,7 @@ function shapeFromRings(profile, holes) {
 const _layerOf = { sheathing: 'sheathing', insulation: 'insulation', counter_batten: 'counter_batten',
                    batten: 'batten', cross_batten: 'batten', panel: 'cladding', plank: 'cladding',
                    reveal: 'cladding', closer: 'closer', corner_profile: 'cladding', corner_trim: 'cladding', gasket: 'batten',
-                   deck: 'sheathing', membrane: 'sheathing', seam: 'cladding' };
+                   deck: 'sheathing', seam: 'cladding' };
 
 function applyCorner(geo, m, tol = 0.6) {
     // Move the vertices on a corner end to u_end -/+ (ext + k x depth): k shears the
@@ -591,8 +591,12 @@ function renderGeometry(meshes) {
         try { geo = m.vshift ? prismGeometry(m) : new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false }); }
         catch (e) { continue; }
         applyCorner(geo, m);
+        // A standing seam's deck lies right behind trays under a millimetre thick: pushed back in
+        // depth, so from across the street it does not show through them.
+        const behind = m.ifc_type === 'deck';
         const mat = new THREE.MeshPhongMaterial({ color: new THREE.Color(m.color), flatShading: true, transparent: m.opacity < 1,
-                                                  opacity: m.opacity, side: THREE.DoubleSide, depthWrite: m.opacity >= 1 });
+                                                  opacity: m.opacity, side: THREE.DoubleSide, depthWrite: m.opacity >= 1,
+                                                  polygonOffset: behind, polygonOffsetFactor: behind ? 4 : 0, polygonOffsetUnits: behind ? 8 : 0 });
         const mesh = new THREE.Mesh(geo, mat);
         mesh.matrixAutoUpdate = false;
         mesh.matrix.copy(frameMatrix(m.frame, m.depth));

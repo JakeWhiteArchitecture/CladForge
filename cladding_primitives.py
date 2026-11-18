@@ -370,8 +370,8 @@ def buildup_depth(p):
     """Depth of the cladding outer face from the wall face (mm)."""
     d = (p["sheathing_t"] if p["sheathing"] else 0.0) + (p["insulation_t"] if p["insulation"] else 0.0)
     d += (p["cb_d"] if p["has_cb"] else 0.0) + p["batten_d"]
-    if p.get("seam"):                      # a standing seam's deck and membrane, under the trays
-        d += p["deck_t"] + 1.0
+    if p.get("seam"):                      # a standing seam's deck, under the trays
+        d += p["deck_t"]
     return d + (p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"])
 
 

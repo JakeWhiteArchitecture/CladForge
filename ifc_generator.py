@@ -44,7 +44,6 @@ _IFC_TYPE_MAP = {
     "corner_trim":    ("IfcMember",   "USERDEFINED", "Corner trim"),
     "gasket":         ("IfcCovering", "MEMBRANE",    "EPDM gasket"),
     "deck":           ("IfcPlate",    "SHEET",       "Deck boarding"),
-    "membrane":       ("IfcCovering", "MEMBRANE",    "Breather membrane"),
     "seam":           ("IfcCovering", "CLADDING",    "Standing seam"),
 }
 _MATERIALS = {
@@ -55,7 +54,7 @@ _MATERIALS = {
     "reveal": ("Reveal lining", "cladding"), "corner_profile": ("Aluminium corner profile", "aluminium"),
     "corner_trim": ("Timber (solid) corner trim", "wood"),
     "gasket": ("EPDM foam gasket", "rubber"),
-    "deck": ("Timber deck (softwood boarding or WBP plywood)", "wood"), "membrane": ("Structured breather membrane", "membrane"),
+    "deck": ("Timber deck (softwood boarding or WBP plywood)", "wood"),
     "seam": ("Standing seam sheet", "metal"),
 }
 

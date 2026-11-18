@@ -22,14 +22,13 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
     "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
     "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#a8c66c", 1.0), "gasket": ("#1c1c1c", 1.0),
-    "deck": ("#c9a46a", 1.0), "membrane": ("#5b8fc7", 0.55), "seam": ("#6f7b88", 1.0)}
-# A standing seam as modelled: the two upstands closed together as a stem, and the double
-# fold as a head on its top, to one side (GreenCoat PLX: 25 high, 12.5-14 head, ~5 stem).
-SEAM_STEM, SEAM_HEAD_W, SEAM_HEAD_H = 5.0, 12.0, 12.0     # mm
+    "deck": ("#c9a46a", 1.0), "seam": ("#6f7b88", 1.0)}
+# A standing seam as modelled: a closed double lock. The two upstands make a stem two sheets
+# thick; the top is folded over 180° twice, so the head is five sheets: a cap (the bend) and
+# a lock three sheets thick hanging beside the stem, a bend's width off it, SEAM_LOCK deep.
+SEAM_GAP, SEAM_LOCK = 1.0, 12.0     # mm – the bend's gap, and the fold's depth (10 lip + bend)
 SEAM_CENTRES = (430.0, 530.0)   # mm – the standard tray widths, seam to seam
-SEAM_FLAT_L = 40.0              # mm – the length of a seam end pressed flat onto the tray
 DECK_T = {"boards": 22.0, "ply": 18.0}   # mm – softwood boarding, or WBP plywood
-MEMBRANE_T = 1.0       # mm – the structured breather membrane under the trays, as drawn
 EPDM_T, EPDM_LAP = 2.0, 15.0    # EPDM gasket on vertical timbers: thickness, and past the timber each side
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
@@ -70,7 +69,7 @@ def _parse(params):
         p["plank_w"], p["plank_gap"], p["plank_lap"], p["plank_t"] = p["seam_centres"], 0.0, 0.0, p["seam_t"]
     p["seam_deck"] = "ply" if params.get("seam_deck") == "ply" else "boards"
     # Where a seam runs out (the base, the top, an opening): folded down to the tray on a
-    # slope, or stopped short and its end pressed flat onto the tray.
+    # slope, or run to the tray's end and stopped square, flush with it.
     p["seam_end"] = "flat" if params.get("seam_end") == "flat" else "folded"
     p["deck_t"] = DECK_T[p["seam_deck"]]
     # every job-wide corner detail the toggle offers (cladding_primitives.CORNER_DETAILS)
