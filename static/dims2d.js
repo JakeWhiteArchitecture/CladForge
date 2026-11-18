@@ -49,6 +49,7 @@ function renderDims2D() {
     }
     edgeLines(e, layer);
     jointLines(e, layer);
+    postLines(e, layer);
     cornerBadges(e, layer);
     if (D2.editing) {            // the preview was rebuilt under an open editor: re-anchor it
         const again = D2.items.concat(D2.edges).find(i => i.el.dataset.key === D2.editing.key);
@@ -234,6 +235,55 @@ function toggleJoint(e, hj) {
     renderElevationList();
     onNumeric();
     return true;
+}
+
+// ─── CLIENT BATTENS ───
+// The battens the client's model has standing on the face (IfcColumns), each a line up its
+// centre. Clicking one cycles it: on (a batten a panel joint may land on) → fixing only (a
+// batten, but no joint on it) → off (not used: no batten of ours on its line) → on. The
+// panels then set out on the ones left on (cladding_geometry._posts).
+const POST_LOOK = { on: ['#22c55e', null, '0.9', 'On: a batten, and a panel joint may land on it'],
+                    fix: ['#f59e0b', '10 6', '0.9', 'Fixing only: a batten, but no joint on it'],
+                    off: ['#9ca3af', '2 6', '0.6', 'Off: not used, no batten on this line'] };
+const POST_NEXT = { on: 'fix', fix: 'off', off: 'on' };
+function postKey(u) { return String(Math.round(u)); }
+
+function postLines(e, layer) {
+    const info = (window._lastPreview.info || []).find(i => i.elevation === e.result.name);
+    if (!info || !info.posts || !info.posts.length) return;
+    const M = frameMatrix(e.result.frame, 60), ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'edge2d-svg');
+    const H = e.result.height || 0;
+    info.posts.forEach((q, n) => {
+        const [colour, dash, opacity, what] = POST_LOOK[q.state] || POST_LOOK.on;
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('stroke', colour);
+        line.setAttribute('stroke-opacity', opacity);
+        line.setAttribute('class', 'post2d');
+        if (dash) line.setAttribute('stroke-dasharray', dash);
+        line.dataset.kind = 'post';
+        line.dataset.key = 'post:' + postKey(q.u);
+        const title = document.createElementNS(ns, 'title');
+        title.textContent = `Client batten at ${Math.round(q.u)} — ${what}. Click for ${POST_LOOK[POST_NEXT[q.state]][3].split(':')[0].toLowerCase()}.`;
+        line.appendChild(title);
+        line.addEventListener('click', ev => { ev.stopPropagation(); cyclePost(e, q); });
+        svg.appendChild(line);
+        const v0 = q.v0 === null || q.v0 === undefined ? 0 : q.v0, v1 = q.v1 === null || q.v1 === undefined ? H : q.v1;
+        D2.edges.push({ post: q, el: line, a: new THREE.Vector3(q.u, v0, 0).applyMatrix4(M),
+                        b: new THREE.Vector3(q.u, v1, 0).applyMatrix4(M) });
+    });
+    layer.appendChild(svg);
+}
+
+function cyclePost(e, q) {
+    const next = POST_NEXT[q.state] || 'fix', states = Object.assign({}, e.postStates || {});
+    if (next === 'on') delete states[postKey(q.u)]; else states[postKey(q.u)] = next;
+    e.postStates = Object.keys(states).length ? states : null;
+    setStatus(`Client batten at ${Math.round(q.u)} on ${e.name}: ${POST_LOOK[next][3]}`, 'ready');
+    renderElevationList();
+    onNumeric();
+    return next;
 }
 
 // The chain corner at the end of *e* that an orange corner edge sits on.
