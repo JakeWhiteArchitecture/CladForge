@@ -77,6 +77,7 @@ def build_elevation(p, elev, layout=None):
         depth = _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
     else:
         depth = _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region)
+    dims += _client_batten_dims(name, meshes, info, H)
     # Openings are closed and lined whatever the cladding is: the closer is solid
     # timber filling the cavity, so it does not depend on the board above it.
     board = p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"]
@@ -433,12 +434,36 @@ def _batten_dims(name, battens, pitch, along_u, H_or_W, lock=None):
     return out
 
 
-def _centres_string(name, us, H, lock=LOCK_POSTS):
-    """A running string of the centres between every vertical batten in use, across the top
-    of the face: on the client's columns the spacing is theirs, uneven, and changes as columns
-    are toggled in the 2D view, so each bay is dimensioned rather than one c/c."""
-    us = sorted(us)
-    return _widths_string(name, list(zip(us, us[1:])), H, lock)
+def _client_batten_dims(name, meshes, info, H):
+    """On a face set out on the client's battens: a running string across the top from one
+    client batten in use (on, drawn green in the 2D view) to the next, and, inside the panel
+    layout, a dimension from each of our own vertical battens (drawn blue: at the ends, where
+    a joint has no client batten in reach, on an opening's reveal line) to the nearest green
+    one, so where ours sit is read off theirs."""
+    posts = info.get("posts") or []
+    greens = sorted(q["u"] for q in posts if q["state"] == "on")
+    if not greens:
+        return []
+    out = _widths_string(name, list(zip(greens, greens[1:])), H)
+    ours = set()
+    for m in meshes:
+        if m.get("elevation") != name or m.get("ifc_type") not in ("batten", "counter_batten"):
+            continue
+        us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+        w = max(us) - min(us)
+        if max(vs) - min(vs) < 3 * w:
+            continue                                   # vertical ones only
+        u = (min(us) + max(us)) / 2.0
+        if all(abs(u - q["u"]) > w / 2.0 for q in posts):
+            ours.add(round(u, 1))
+    for k, u in enumerate(sorted(ours)):
+        g = min(greens, key=lambda x: abs(x - u))
+        if abs(u - g) < 1.0:
+            continue
+        v = H - (300.0 if k % 2 == 0 else 520.0)       # inside the layout, stepped
+        out.append(_dim(name, [min(g, u), v], [max(g, u), v], "%.0f" % abs(u - g), 0.0, [0, 1],
+                        lock=LOCK_POSTS, ours=round(u, 1)))
+    return out
 
 
 def _widths_string(name, spans, H, lock=LOCK_POSTS):
@@ -630,8 +655,6 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
     dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else None)
-    if posts:
-        dims += _centres_string(name, battens, H)
     full = [v for v in courses if v >= v0 - 0.5]
     if full:
         dims.append(_dim(name, [W, full[0]], [W, full[0] + cover], "Course %.0f" % cover, 300, [1, 0],
@@ -654,8 +677,6 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
         cbs = (dedupe_priority([posts, [p["cb_w"] / 2, W - p["cb_w"] / 2]], p["cb_w"]) if posts
                else batten_positions(W, p["cb_w"], p["cb_centres"], 0.0))
         depth = _vertical_battens(p, cbs, meshes, name, frame, depth, H, "counter_batten", p["cb_w"], p["cb_d"])
-        if posts:
-            dims += _centres_string(name, cbs, H)
     bw = p["batten_w"]
     battens = dedupe(stacked_positions(v0 + bw / 2, H - bw / 2, p["batten_centres"]) + [H - bw / 2], bw)
     depth = _horizontal_battens(p, battens, meshes, name, frame, depth, W)
@@ -781,8 +802,6 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
                 closing_cut_top=0.0, closing_cut_left=left_cut, closing_cut_right=right_cut,
                 set_out_from_openings=from_openings, tray_widths=sorted({round(b - a) for a, b in cols if a >= 0 and b <= W}))
     dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else None)
-    if posts:
-        dims += _centres_string(name, battens, H)
     if cols:
         u0, u1 = cols[0]
         lock = {"lock": LOCK_SEAMS} if from_openings else {}
@@ -909,9 +928,6 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
                 set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
     dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else LOCK_CENTRES)
-    if posts:
-        # on the client's battens the panels come out of uneven widths: each one dimensioned
-        dims += _widths_string(name, [(max(0.0, a), min(W, b)) for a, b, _f in panels], H)
     # The left closing cut and the first full panel set out the face: typing a cut solves
     # for the offset, typing the panel sets the panel width. Set out from the openings,
     # the bays follow the jambs instead and both are read-only.

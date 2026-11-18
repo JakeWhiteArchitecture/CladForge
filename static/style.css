@@ -193,6 +193,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .edge2d-svg line { stroke-width: 4; stroke-linecap: round; pointer-events: stroke; cursor: pointer; opacity: 0.9; }
 .edge2d-svg line:hover { stroke-width: 7; opacity: 1; }
 .edge2d-svg line.post2d { stroke-width: 5; }
+.edge2d-svg line.support2d { stroke-width: 3; opacity: 0.75; pointer-events: none; cursor: default; }
 .dim2d-editor .d2-row { width: 100%; display: flex; align-items: center; gap: 6px; }
 .dim2d-editor .d2-ask { width: 100%; padding: 6px; border: 1px solid #ffd166; border-radius: 4px; color: #ffd166; }
 .dim2d.opening-badge { background: #ff9800; border-color: #ff9800; }

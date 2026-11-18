@@ -49,6 +49,7 @@ function renderDims2D() {
     }
     edgeLines(e, layer);
     jointLines(e, layer);
+    supportLines(e, layer);
     postLines(e, layer);
     cornerBadges(e, layer);
     if (D2.editing) {            // the preview was rebuilt under an open editor: re-anchor it
@@ -273,6 +274,33 @@ function postLines(e, layer) {
         D2.edges.push({ post: q, el: line, a: new THREE.Vector3(q.u, v0, 0).applyMatrix4(M),
                         b: new THREE.Vector3(q.u, v1, 0).applyMatrix4(M) });
     });
+    layer.appendChild(svg);
+}
+
+// Our own vertical supports under the client's: the battens we add (at the ends, where a
+// joint has no client batten in reach, above and below an opening on its reveal line) and
+// the cavity closers that carry a panel edge beside a jamb. Drawn quieter, and not
+// clickable, so every panel edge in the dimension string visibly lands on something.
+const SUPPORT_LOOK = { batten: '#60a5fa', counter_batten: '#60a5fa', closer: '#c2410c' };
+function supportLines(e, layer) {
+    const geo = (window._lastPreview && window._lastPreview.geometry) || [];
+    const mine = geo.filter(m => m.elevation === e.result.name && SUPPORT_LOOK[m.ifc_type] && m.profile);
+    if (!mine.length) return;
+    const M = frameMatrix(e.result.frame, 60), ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'edge2d-svg');
+    for (const m of mine) {
+        const us = m.profile.map(q => q[0]), vs = m.profile.map(q => q[1]);
+        const u0 = Math.min(...us), u1 = Math.max(...us), v0 = Math.min(...vs), v1 = Math.max(...vs);
+        if (v1 - v0 < 3 * (u1 - u0)) continue;                 // vertical ones only
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('stroke', SUPPORT_LOOK[m.ifc_type]);
+        line.setAttribute('class', 'support2d');
+        const u = (u0 + u1) / 2;
+        svg.appendChild(line);
+        D2.edges.push({ support: m.name, el: line, a: new THREE.Vector3(u, v0, 0).applyMatrix4(M),
+                        b: new THREE.Vector3(u, v1, 0).applyMatrix4(M) });
+    }
     layer.appendChild(svg);
 }
 
