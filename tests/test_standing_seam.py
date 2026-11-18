@@ -96,8 +96,8 @@ def test_the_seam_is_a_closed_double_lock(wall):
     """Both trays turn up into the seam, rolled rather than doubled back: the tray on the left
     the overcloak, outermost all the way (up, over the top, down the outside, round the foot
     of the head, back up inside); this tray the undercloak, up, over inside it and down
-    between. Each a sheet thick, with air between them that makes up the overall size: the
-    upstands 3 apart (the clip's room), the head 12 across and 17 deep, 25 high overall."""
+    between. Each a sheet thick, the same 1.8 of air off the sheet parallel to it throughout,
+    which makes up the overall size: the head 5 sheets and 4 airs across, 17 deep, 25 high."""
     t = 0.6
     _params, out = _build(wall, plank_orient="vertical", set_out_from_openings=False)
     by = {k: _parts(out, k) for k in PARTS}
@@ -113,16 +113,18 @@ def test_the_seam_is_a_closed_double_lock(wall):
                    "under_flange") for k, m in piece.items())
         x = lambda k: tuple(round(v - line, 3) for v in _span(piece[k], 0))
         z = lambda k: (round(piece[k]["depth"] - face, 3), round(piece[k]["depth"] + piece[k]["thickness"] - face, 3))
-        assert x("under_up")[0] - x("over_up")[1] == pytest.approx(3.0)              # the clip's room
-        assert x("over_cap")[1] - x("over_cap")[0] == pytest.approx(12.0)            # the head, outside to outside
+        air = 1.8
+        assert x("under_up")[0] - x("over_up")[1] == pytest.approx(air)              # the clip runs in it
+        assert x("over_cap")[1] - x("over_cap")[0] == pytest.approx(5 * t + 4 * air)  # the head, outside to outside
         assert z("over_cap") == pytest.approx((25 - t, 25.0)) and z("over_turn")[0] == pytest.approx(25 - 17)
-        # across the head from the stem out: undercloak, air, overcloak lip, air, undercloak flange, air, overcloak outer
+        # across the head from the stem out: overcloak, undercloak, overcloak lip, undercloak flange, overcloak outer,
+        # each the same air off the one parallel to it
         order = [x(k) for k in ("over_up", "under_up", "over_lip", "under_flange", "over_outer")]
-        gaps = [b[0] - a[1] for a, b in zip(order, order[1:])]
-        assert all(g > 1.0 for g in gaps)
-        assert gaps[1] == pytest.approx(gaps[2]) == pytest.approx(gaps[3])        # the folds evenly spaced
-        # the undercloak's bend inside the cap, with the clip's room between; its end inside the turn
-        assert z("over_cap")[0] - z("under_bend")[1] == pytest.approx(3.0)
+        assert [b[0] - a[1] for a, b in zip(order, order[1:])] == pytest.approx([air] * 4)
+        # and up and down: the undercloak's bend under the cap, the lip under the bend, the flange over the turn
+        assert z("over_cap")[0] - z("under_bend")[1] == pytest.approx(air)
+        assert z("under_bend")[0] - z("over_lip")[1] == pytest.approx(air)
+        assert z("under_flange")[0] - z("over_turn")[1] == pytest.approx(air)
         assert z("under_flange")[0] > z("over_turn")[1]
         assert x("over_turn")[0] <= x("over_lip")[0] and x("over_turn")[1] == pytest.approx(x("over_outer")[1])
         assert _boxes_clear(piece)
@@ -130,7 +132,7 @@ def test_the_seam_is_a_closed_double_lock(wall):
     _params, out = _build(wall, plank_orient="vertical", seam_h=38, seam_t=0.8, set_out_from_openings=False)
     cap = _parts(out, "over_cap")[0]
     assert cap["depth"] + cap["thickness"] == pytest.approx(cap["seam_face"] + 38.0)
-    assert _span(cap, 0)[1] - _span(cap, 0)[0] == pytest.approx(12.0)
+    assert _span(cap, 0)[1] - _span(cap, 0)[0] == pytest.approx(5 * 0.8 + 4 * 1.8)
 
 
 def test_seams_on_the_reveal_corners_run_on_past_the_opening(wall):

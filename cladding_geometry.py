@@ -8,7 +8,7 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 
 import math
 
-from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_CLIP_GAP, SEAM_HEAD_W, SEAM_HEAD_D
+from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_AIR, SEAM_HEAD_D
 from cladding_booleans import clip_region, strip_intervals, iter_polygons, polygon_to_rings
 from cladding_constants import frame_to_world
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
@@ -498,26 +498,25 @@ def _shared(s, e, runs, least=5.0):
 # not doubled back: the first fold takes the overcloak (the tray on the - side) over the
 # undercloak's top; the second turns that head down 180° the same way. So the overcloak runs
 # outermost all the way: up, over the top, down the outside, round the foot of the head and
-# back up inside. The undercloak (this tray) runs up, over inside it and down between. There
-# is air between every layer, which is how the seam gets to its overall size: the upstands
-# *c* apart (the clip's room, also left over the undercloak's top), the head *w* across from
-# outside to outside and *d* deep from the top, its folds evenly spaced inside it.
-def _double_lock(t, h, c=SEAM_CLIP_GAP, w=SEAM_HEAD_W, d=SEAM_HEAD_D):
-    x0 = -c / 2.0 - t                    # the overcloak's outer face, up the stem
-    x1 = x0 + w                          # the head's outer face
-    a = max(0.3, (w - c - 5.0 * t) / 3.0)        # the air between the folds across the head
-    lip = c / 2.0 + t + a                # the overcloak's lip, then the undercloak's flange
+# back up inside. The undercloak (this tray) runs up, over inside it and down between. Every
+# sheet keeps the same air *a* to the one parallel to it (the clip runs in it between the
+# upstands), so the head is 5t + 4a across; it hangs *d* from the top.
+def _double_lock(t, h, a=SEAM_AIR, d=SEAM_HEAD_D):
+    x0 = -a / 2.0 - t                    # the overcloak, up the stem
+    xu = a / 2.0                         # the undercloak, up the stem
+    lip = xu + t + a                     # then the overcloak's lip, the undercloak's flange
     fl = lip + t + a
-    top_u = h - t - c                    # the undercloak's bend, the clip's room under the cap
+    x1 = fl + t + a + t                  # the overcloak's outer face
+    bend = h - t - a                     # the top of the undercloak's bend, under the cap
     foot = h - d                         # the overcloak's turn round the foot of the head
     return (("over_up", "-", x0, x0 + t, 0.0, h - t),
             ("over_cap", "-", x0, x1, h - t, h),
             ("over_outer", "-", x1 - t, x1, foot + t, h - t),
             ("over_turn", "-", lip, x1, foot, foot + t),
-            ("over_lip", "-", lip, lip + t, foot + t, top_u - t - a),
-            ("under_up", "+", c / 2.0, c / 2.0 + t, 0.0, top_u - t),
-            ("under_bend", "+", c / 2.0, fl + t, top_u - t, top_u),
-            ("under_flange", "+", fl, fl + t, foot + t + a, top_u - t))
+            ("over_lip", "-", lip, lip + t, foot + t, bend - t - a),
+            ("under_up", "+", xu, xu + t, 0.0, bend - t),
+            ("under_bend", "+", xu, fl + t, bend - t, bend),
+            ("under_flange", "+", fl, fl + t, foot + t + a, bend - t))
 
 
 SEAM_PARTS = {"over_up": "overcloak", "over_cap": "overcloak bend", "over_outer": "overcloak outer",
