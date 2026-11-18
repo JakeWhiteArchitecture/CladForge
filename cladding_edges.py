@@ -369,12 +369,24 @@ def finish_seams(meshes, p):
     edge) rather than at a cross joint, where the next tray's seam carries on. Runs on the
     trimmed seams, so a seam cut by a roof line is ended there too.
 
-    "folded" (the default): the seam is folded down onto the tray, its end sloping from the
-    tray to its full height over the seam height (a shift with depth, "vshift"). "flat": the
-    seam runs to the tray's end and stops square, flush with it, so nothing changes."""
-    if not p.get("seam") or p.get("seam_end") == "flat":
+    Per chain, as carried on each elevation record: "seam_fold" turns the 45° fold on or off
+    for the whole chain, and with it on "seam_top" and "seam_bottom" set the top ends (a seam
+    running out upward: the head, under a sill) and the bottom ends (the base, over a head)
+    each "folded" or "flat". A horizontal seam runs out sideways, so only seam_fold applies.
+    Without them the job's "seam_end" stands for the lot.
+
+    "folded": the seam is folded down onto the tray, its end sloping from the tray to its full
+    height over the seam height (a shift with depth, "vshift"). "flat": the seam runs to the
+    tray's end and stops square, flush with it, so nothing changes."""
+    if not p.get("seam"):
         return meshes
     sh = float(p["seam_h"])
+    default = p.get("seam_end") != "flat"
+    rules = {}
+    for elev in p.get("elevations", []):
+        fold = elev.get("seam_fold")
+        fold = default if fold is None else bool(fold)
+        rules[elev.get("name")] = (fold, elev.get("seam_top") != "flat", elev.get("seam_bottom") != "flat")
     groups = {}
     for m in meshes:
         if m.get("ifc_type") == "seam" and m.get("seam_part"):
@@ -387,6 +399,11 @@ def finish_seams(meshes, p):
                 continue
             free_lo = not any(abs(h - lo) < 1.0 for o, (_l, h) in zip(ms, spans) if o is not m)
             free_hi = not any(abs(l - hi) < 1.0 for o, (l, _h) in zip(ms, spans) if o is not m)
+            fold, top, bottom = rules.get(m.get("elevation"), (default, True, True))
+            if m["seam_v"]:                        # a vertical seam: its low end is a bottom end
+                free_lo, free_hi = free_lo and fold and bottom, free_hi and fold and top
+            else:
+                free_lo, free_hi = free_lo and fold, free_hi and fold
             if not (free_lo or free_hi):
                 continue
             room = (hi - lo) / (2.0 if free_lo and free_hi else 1.0) - 1.0

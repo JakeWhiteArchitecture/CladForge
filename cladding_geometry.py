@@ -524,12 +524,15 @@ SEAM_PARTS = {"over_up": "overcloak", "over_cap": "overcloak bend", "over_outer"
               "under_up": "undercloak", "under_bend": "undercloak bend", "under_flange": "undercloak flange"}
 
 
-def _seam(p, meshes, frame, name, elevation, face, along_v, line, a, b):
+def _seam(p, meshes, frame, name, elevation, face, along_v, line, a, b, mirror=False):
     """The closed double-lock seam on a tray's edge at *line* (u for vertical trays, v for
     horizontal), from *a* to *b* along it, sheet by sheet: the tray on the - side (left, or
     below) turns up the overcloak, this tray the undercloak, rolled together with the head
-    turned down on this tray's side (_double_lock). No clips."""
+    turned down on this tray's side (_double_lock). *mirror* turns the head the other way,
+    as on the left jamb of an opening, so it stays on the face. No clips."""
     for part, side, c0, c1, z0, z1 in _double_lock(p["seam_t"], p["seam_h"]):
+        if mirror:
+            c0, c1, side = -c1, -c0, ("+" if side == "-" else "-")
         ring = _rect(line + c0, a, line + c1, b) if along_v else _rect(a, line + c0, b, line + c1)
         m = _prism(ring, face + z0, z1 - z0, frame, "seam", "%s Seam %s" % (name, SEAM_PARTS[part]), elevation)
         m.update(seam_part=part, seam_side=side, seam_v=along_v, seam_line=line, seam_face=face)   # for finish_seams
@@ -656,6 +659,32 @@ def seam_columns(W, cover, offset, jambs):
     return [(u, u + cover) for u in centred_positions(W, cover, offset, cover)]
 
 
+def _tray_seams(p, meshes, frame, name, face, laid, holes):
+    """The seams between vertical tray columns, *laid* left to right as (u, runs, trays),
+    each tray (s, e, label). A seam runs where the trays either side of its line meet. On a
+    reveal corner (a jamb, set out from the openings) it carries straight on up past the
+    opening through the reveal detail, where only one tray is there, so the jamb line reads
+    as one seam the full height: kept on the face, its outer sheet on the corner and its head
+    turned away from the opening (mirrored on a left jamb, the opening on its + side)."""
+    off = SEAM_AIR / 2.0 + p["seam_t"]          # the seam line to its outer sheet
+    for (_u0, left, ltrays), (u, runs, trays) in zip(laid, laid[1:]):
+        jamb = next((side for o in holes for side, x in ((-1, o[0]), (1, o[1])) if abs(u - x) < 1.0), 0)
+        if not jamb:
+            for s, e, label in trays:
+                for a2, b2 in _shared(s, e, left):
+                    _seam(p, meshes, frame, label, name, face, True, u, a2, b2)
+            continue
+        line, mirror = u + jamb * off, jamb < 0
+        pieces = [(s, e, label) for s, e, label in trays]
+        for s, e, label in ltrays:                # past the opening: the tray on the other side alone
+            spans = [(s, e)]
+            for a, b in runs:
+                spans = [q for x0, x1 in spans for q in ((x0, min(x1, a)), (max(x0, b), x1)) if q[1] - q[0] > 1.0]
+            pieces += [(x0, x1, label) for x0, x1 in spans]
+        for s, e, label in sorted(pieces):
+            _seam(p, meshes, frame, label, name, face, True, line, s, e, mirror=mirror)
+
+
 def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Vertical standing seam trays: vertical battens (on the model's columns where it has
     them), the deck, then trays a seam-centre wide set out across the face like vertical
@@ -672,11 +701,11 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
     jambs = [u for o in openings(elev) for u in (o[0], o[1])] if p["set_out_from_openings"] else []
     cols = seam_columns(W, cover, offset, jambs)
     from_openings = bool(jambs) and len(cols) > 0 and abs(cols[0][0]) < 1e-6 and abs(cols[-1][1] - W) < 1e-6
-    beside, left = [], []        # the joints, and the runs, of the column to the left
+    beside, laid = [], []        # the joints of the column to the left; every column's runs and trays
     for j, (u, u1) in enumerate(cols):
         runs = strip_intervals(region, u, u1, across=True) if region is not None else [(v0, H)]
         runs = [(max(a, v0), b) for a, b in runs if b - max(a, v0) > 1.0]
-        piece, mine = 0, []
+        piece, mine, trays = 0, [], []
         for a, b in runs:
             segs, bad = split_run(a, b, p["plank_len"], stops, j % 2 == 1, 0.0, p["plank_min"], p["plank_target"],
                                   beside, p["batten_centres"])
@@ -686,9 +715,10 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
                 piece += 1
                 label = "%s Tray C%d-%d" % (name, j + 1, piece)
                 meshes.append(_tray(p, _rect(u, s, u1, e), depth, frame, label, name))
-                for a2, b2 in _shared(s, e, left):     # the seam with the tray to its left
-                    _seam(p, meshes, frame, label, name, depth + p["plank_t"], True, u, a2, b2)
-        beside, left = mine, runs
+                trays.append((s, e, label))
+        beside = mine
+        laid.append((u, runs, trays))
+    _tray_seams(p, meshes, frame, name, depth + p["plank_t"], laid, openings(elev) if from_openings else [])
     left_cut = cols[0][1] if cols and cols[0][0] < 0 else 0.0
     right_cut = (W - cols[-1][0]) if cols and cols[-1][1] > W else 0.0
     info.update(n_courses=len(cols), cover=cover, batten_centres=p["batten_centres"],

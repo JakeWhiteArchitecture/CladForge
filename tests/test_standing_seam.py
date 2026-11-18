@@ -136,23 +136,34 @@ def test_the_seam_is_a_closed_double_lock(wall):
 
 
 def test_seams_on_the_reveal_corners_run_on_past_the_opening(wall):
-    """Set out from the openings, each jamb (2000, 3200) is a seam line, carried up past the
-    window head and down past its sill, and each span is split into equal trays within the
-    seam centres: no closing cut."""
-    _params, out = _build(wall, plank_orient="vertical", seam_centres=430)
+    """Set out from the openings, each jamb (2000, 3200) is a seam line, and the seam on it
+    carries straight on up past the window through the reveal detail: one line the full
+    height, its outer sheet on the reveal corner, its head turned onto the face (mirrored on
+    the left jamb), so nothing of it stands over the opening. Each span is split into equal
+    trays within the seam centres: no closing cut."""
+    _params, out = _build(wall, plank_orient="vertical", seam_centres=430, trim=True)
     assert out["info"][0]["set_out_from_openings"]
-    lines = {round(m["seam_line"], 1) for m in _parts(out, "over_up")}
-    assert {2000.0, 3200.0} <= lines
     widths = sorted({round(_span(m, 0)[1] - _span(m, 0)[0], 1) for m in _of(out, "plank")})
     assert max(widths) <= 430 and widths == [400.0]           # 2000 = 5 x 400, 1200 = 3 x 400, 4800 = 12 x 400
-    for jamb in (2000.0, 3200.0):
-        spans = [_span(m, 1) for m in _parts(out, "over_up") if abs(m["seam_line"] - jamb) < 0.1]
-        assert any(hi <= 900 + 1 for _lo, hi in spans) and any(lo >= 2100 - 1 for lo, _hi in spans)   # below and above
-        assert not any(lo < 1500 < hi for lo, hi in spans)      # none beside the window: the tray turns into the reveal
-    # free set-out instead: the seams at the regular centres
+    seams = [m for m in _of(out, "seam") if m.get("seam_part")]
+    for jamb, side in ((2000.0, -1), (3200.0, 1)):
+        at = [m for m in seams if abs(m["seam_line"] - jamb) < 5]
+        line = at[0]["seam_line"]
+        assert line == pytest.approx(jamb + side * (0.9 + 0.6))               # off the corner by its outer sheet
+        ups = sorted(_span(m, 1) for m in at if m["seam_part"] == "over_up")
+        assert ups[0][0] == pytest.approx(160.0) and ups[-1][1] == pytest.approx(2990.0)
+        assert all(b[0] == pytest.approx(a[1]) for a, b in zip(ups, ups[1:]))   # unbroken, base to top
+        assert any(lo < 1500 < hi for lo, hi in ups)                           # past the window
+        xs = [_span(m, 0) for m in at]
+        assert all(x1 <= jamb + 1e-6 for _x0, x1 in xs) if side < 0 else all(x0 >= jamb - 1e-6 for x0, _x1 in xs)
+    # nothing over the opening, and folded only at the base and the top
+    for m in seams:
+        (u0, u1), (v0, v1) = _span(m, 0), _span(m, 1)
+        assert not (u1 > 2000 + 1e-6 and u0 < 3200 - 1e-6 and v1 > 900 + 1e-6 and v0 < 2100 - 1e-6)
+    # free set-out instead: the seams at the regular centres, none on the jambs
     _params, out = _build(wall, plank_orient="vertical", seam_centres=430, set_out_from_openings=False)
     assert not out["info"][0]["set_out_from_openings"]
-    assert 2000.0 not in {round(m["seam_line"], 1) for m in _parts(out, "over_up")}
+    assert not any(abs(m["seam_line"] - 2000) < 5 for m in _parts(out, "over_up"))
 
 
 def test_horizontal_trays_seam_along_the_tray_below(wall):
@@ -255,3 +266,25 @@ def test_flat_seam_ends_run_square_to_the_end_of_the_tray(wall, orient):
             assert t_lo - 0.01 <= lo < hi <= t_hi + 0.01
             flush += abs(lo - t_lo) < 0.01 or abs(hi - t_hi) < 0.01
     assert flush > len(_of(out, "seam")) / 2      # square, flush with the tray (not where a pipe cuts it)
+
+
+def test_seam_ends_are_set_per_chain_top_and_bottom_apart(wall):
+    """The chain's Edges panel: the 45° fold on or off for the whole chain, and with it on the
+    top ends (a seam running out upward: the head, under a sill) and the bottom ends (the base,
+    over a head) each folded or flat."""
+    def folded(**edges):
+        w = dict(wall, **edges)
+        _params, out = _build(w, plank_orient="vertical", trim=True)
+        lo = hi = 0
+        for m, k, a, b, _jl, _jh in _ends(out, "over_cap"):
+            sh = m.get("vshift")
+            if sh:
+                lo += any(x[3] > 0 for x in sh[0])          # the low end pushed up as it rises
+                hi += any(x[3] < 0 for x in sh[0])          # the high end pulled down
+        return lo, hi
+    lo, hi = folded()
+    assert lo and hi                                         # default: both folded
+    assert folded(seam_fold=False) == (0, 0)                 # the chain's fold off: all flat
+    assert folded(seam_fold=True, seam_top="flat") == (lo, 0)
+    assert folded(seam_fold=True, seam_bottom="flat") == (0, hi)
+    assert folded(seam_fold=True, seam_top="flat", seam_bottom="flat") == (0, 0)
