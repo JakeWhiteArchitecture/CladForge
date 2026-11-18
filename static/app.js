@@ -6,7 +6,11 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 
 // Edge settings, per chain: offsets (mm) pulling the buildup back from its top, bottom and
 // free-end edges, the gap in every mitre, and how a window or door head is ventilated.
-const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50 };
+// Standing seam ends, per chain too: folded at 45° or not at all, and if so the top ends (a
+// seam running out upward: the head, under a sill) and bottom ends (the base, over a head) each
+// folded or flat.
+const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded' };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -68,6 +72,12 @@ function syncEdgeFields() {
         if (el && document.activeElement !== el) el.value = ed[k];
     }
     selectToggle('head-vent', ed.vent);
+    selectToggle('seam-fold', ed.fold === 'off' ? 'off' : 'on');
+    for (const k of ['seamTop', 'seamBottom']) {
+        const el = document.getElementById('edge-' + k);
+        el.value = ed[k] === 'flat' ? 'flat' : 'folded';
+        el.disabled = ed.fold === 'off';
+    }
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
     document.getElementById('edge-chain').textContent = e ? 'for ' + e.chain.name : 'for the active chain';
 }
@@ -75,6 +85,8 @@ function syncEdgeFields() {
 function setEdge(e, key, value) {
     if (!e) return false;
     if (key === 'vent') e.chain.edges.vent = value === 'back' ? 'back' : 'front';
+    else if (key === 'fold') e.chain.edges.fold = value === 'off' ? 'off' : 'on';
+    else if (key === 'seamTop' || key === 'seamBottom') e.chain.edges[key] = value === 'flat' ? 'flat' : 'folded';
     else {
         const v = parseFloat(value);
         if (!isFinite(v)) return false;
@@ -667,7 +679,8 @@ _json.dumps(_ex(_pl))`);
 const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
              'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
-             'plank_len', 'plank_min', 'plank_splice', 'closer_w', 'board_w', 'board_h', 'kerf', 'board_trim'];
+             'plank_len', 'plank_min', 'plank_splice', 'closer_w', 'board_w', 'board_h', 'kerf', 'board_trim',
+             'seam_centres', 'seam_h', 'seam_t'];
 
 // The piece length the splices slider sets out to: the stock length at Fewer, the
 // shortest piece at More (cladding_constants._parse, plank_target).
@@ -704,6 +717,9 @@ function elevationRecords() {
                                                    head_vent: chain.edges.vent, head_air: chain.edges.air,
                                                    profile_gap: chain.edges.pgap === undefined ? 1 : chain.edges.pgap,
                                                    frame_setback: chain.edges.frame === undefined ? 50 : chain.edges.frame,
+                                                   seam_fold: chain.edges.fold !== 'off',
+                                                   seam_top: chain.edges.seamTop === 'flat' ? 'flat' : 'folded',
+                                                   seam_bottom: chain.edges.seamBottom === 'flat' ? 'flat' : 'folded',
                                                    opening_details: e.openingDetails || {} }));
         }
     }
@@ -730,6 +746,8 @@ function getParams() {
     p.panels_as_walls = document.getElementById('panels_as_walls').checked;
     p.share_offcuts = document.getElementById('share_offcuts').checked;
     p.plank_orient = toggleValue('plank-orient');
+    p.plank_profile = toggleValue('plank-profile') || 'board';
+    p.seam_deck = val('seam_deck');
     p.counter_batten = val('counter_batten');
     return p;
 }
@@ -747,6 +765,13 @@ function onTypeChange() {
     }
     document.getElementById('panel-section').style.display = panel ? '' : 'none';
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
+    // Standing seam is a plank profile: its own fields for the board's, and its stock length is a tray's
+    const seam = !panel && toggleValue('plank-profile') === 'seam';
+    document.getElementById('board-fields').style.display = seam ? 'none' : '';
+    document.getElementById('seam-fields').style.display = seam ? '' : 'none';
+    document.getElementById('seam-edge-fields').style.display = seam ? '' : 'none';
+    document.getElementById('plank-len-label').innerHTML = seam ? 'Longest tray <span class="unit">mm, about 4000 on a facade</span>'
+                                                               : 'Stock length <span class="unit">1800–6000, as supplied</span>';
     // kerf and trim serve both: a panel board is squared on all four edges, a plank length at its ends
     document.getElementById('trim-label').innerHTML = panel ? 'Edge trim <span class="unit">mm off each board edge</span>'
                                                             : 'End trim <span class="unit">mm off each end of a length</span>';
@@ -761,6 +786,7 @@ function updateSliderRange() {
     const p = getParams();
     let half;
     if (p.cladding_type === 'panel') half = (p.panel_w + p.panel_gap) / 2;
+    else if (p.plank_orient === 'vertical' && p.plank_profile === 'seam') half = p.seam_centres / 2;
     else if (p.plank_orient === 'vertical') half = (p.plank_lap > 0 ? p.plank_w - p.plank_lap : p.plank_w + p.plank_gap) / 2;
     else half = p.batten_centres / 2;
     const s = document.getElementById('offset');
@@ -908,7 +934,7 @@ function setStatus(text, cls) {
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
 const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls'];
-const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient'];
+const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient', 'plank-profile'];
 
 function snapshotState() {
     const settings = {};
@@ -916,6 +942,7 @@ function snapshotState() {
     for (const k of STATE_CHECKS) settings[k] = document.getElementById(k).checked;
     for (const k of STATE_TOGGLES) settings[k] = toggleValue(k);
     settings.counter_batten = val('counter_batten');
+    settings.seam_deck = val('seam_deck');
     const elevation = e => ({
         name: e.name, storey: e.storey || null, start: e.start || 0, rev: !!e.rev, link: e.link || null, offset: e.offset || 0,
         cornerLo: e.cornerLo || 0, cornerHi: e.cornerHi || 0, masterLo: !!e.masterLo, masterHi: !!e.masterHi,
@@ -1007,6 +1034,7 @@ function restoreState(st) {
     for (const k of STATE_CHECKS) if (typeof s[k] === 'boolean') document.getElementById(k).checked = s[k];
     for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
     if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
+    if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
     const byName = {};
     for (const c of st.chains || []) {
         const chain = { name: c.name, members: [], length: 0, built: !!c.built,
@@ -1207,9 +1235,10 @@ function renderReadout(plan) {
     box.style.display = '';
     document.getElementById('run-open').style.display = '';
     const plank = plan.kind === 'plank';
-    set('wr-title', `${plan.title || 'Panels'} · ${plank ? 'planks' : 'panels'} · ${plan.deep ? 'optimised' : 'quick check'}`);
+    const seam = plank && toggleValue('plank-profile') === 'seam';
+    set('wr-title', `${plan.title || 'Panels'} · ${seam ? 'standing seam' : plank ? 'planks' : 'panels'} · ${plan.deep ? 'optimised' : 'quick check'}`);
     set('wr-area', `${plan.clad_area.toFixed(1)} m²`);
-    set('wr-boards-label', plank ? 'Lengths' : 'Boards');
+    set('wr-boards-label', seam ? 'Trays' : plank ? 'Lengths' : 'Boards');
     set('wr-boards', plank ? `${plan.n_boards} of ${plan.board[0]}` : `${plan.n_boards} of ${plan.board[0]} × ${plan.board[1]}`);
     // Packed per elevation; the pooled count shows what keeping elevations apart costs.
     const extra = plan.n_boards - (plan.whole_job_boards || plan.n_boards);

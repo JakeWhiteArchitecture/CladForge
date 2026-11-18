@@ -12,6 +12,8 @@ const WIZ_GROUPS = {
     plank: [['plank_w', 'Face width', '75–250 mm'], ['plank_t', 'Thickness', '12–32 mm'],
             ['plank_lap', 'Lap', '0 = open joint'], ['plank_gap', 'Joint gap', '0–15 mm'],
             ['plank_len', 'Stock length', '1800–6000 mm']],
+    seam: [['seam_centres', 'Seam centres', '430 or 530'], ['seam_t', 'Sheet', '0.5–1.0 mm'],
+           ['plank_len', 'Longest tray', 'about 4000 mm']],
     panel: [['panel_t', 'Thickness', '6–20 mm'], ['panel_w', 'Cut width', '600–1500 mm'],
             ['panel_h', 'Cut height', '1200–3000 mm'], ['panel_gap', 'Joint gap', '0–15 mm']],
     battens: [['batten_centres', 'Max centres', '300–600 mm'], ['batten_w', 'Width', '25–100 mm'],
@@ -43,12 +45,12 @@ function updateMakeChain() {
 function wizNeedsCb() {
     const forced = document.getElementById('counter_batten').value;
     if (forced !== 'auto') return forced === 'yes';
-    return WIZ.draft.type === 'plank' && WIZ.draft.orient === 'vertical';
+    return WIZ.draft.type === 'plank' && WIZ.draft.orient === 'vertical';     // trays lie on a deck on vertical battens
 }
 
 function wizStepIds() {
     const ids = ['type'];
-    if (WIZ.draft.type === 'plank') ids.push('orient');
+    if (WIZ.draft.type !== 'panel') ids.push('orient');
     ids.push('dims', 'battens');
     if (wizNeedsCb()) ids.push('cbattens');
     ids.push('base');
@@ -57,7 +59,8 @@ function wizStepIds() {
 
 function openWizard() {
     if (!readyChains().length) return;
-    WIZ.draft = { type: toggleValue('cladding-type') || 'plank',
+    const seam = toggleValue('cladding-type') !== 'panel' && toggleValue('plank-profile') === 'seam';
+    WIZ.draft = { type: seam ? 'seam' : (toggleValue('cladding-type') || 'plank'),
                   orient: toggleValue('plank-orient') || 'horizontal', base: 'foot', dims: {} };
     for (const group of Object.keys(WIZ_GROUPS)) for (const [id] of WIZ_GROUPS[group]) WIZ.draft.dims[id] = val(id);
     WIZ.step = 0;
@@ -73,12 +76,12 @@ function closeWizard() {
 function wizBattenRun() { return WIZ.draft.type === 'plank' && WIZ.draft.orient === 'vertical' ? 'Horizontal' : 'Vertical'; }
 
 function wizTitle(id) {
-    if (id === 'type') return 'Plank or panel?';
+    if (id === 'type') return 'Plank, panel or standing seam?';
     if (id === 'orient') return 'Horizontal or vertical?';
     if (id === 'battens') return wizBattenRun() + ' battens';
     if (id === 'cbattens') return 'Counter-battens';
     if (id === 'base') return 'Where does the cladding start?';
-    return WIZ.draft.type === 'panel' ? 'Panel dimensions' : 'Plank dimensions';
+    return WIZ.draft.type === 'panel' ? 'Panel dimensions' : WIZ.draft.type === 'seam' ? 'Standing seam' : 'Plank dimensions';
 }
 
 function wizNote(id) {
@@ -113,10 +116,11 @@ function wizFields(group) {
 function wizBody(id) {
     if (id === 'type') return wizChoice('type', [
         ['plank', 'Plank', 'Boards coursed across the face, lapped or open-jointed'],
-        ['panel', 'Panel', 'Sheet panels on open joints, set out from the openings']]);
+        ['panel', 'Panel', 'Sheet panels on open joints, set out from the openings'],
+        ['seam', 'Standing seam', 'Metal trays on a deck, joined at standing seams (430 or 530 centres)']]);
     if (id === 'orient') return wizChoice('orient', [
-        ['horizontal', 'Horizontal', 'Planks run along the elevation on vertical battens'],
-        ['vertical', 'Vertical', 'Planks run up the elevation on horizontal battens over counter-battens']]);
+        ['horizontal', 'Horizontal', WIZ.draft.type === 'seam' ? 'Trays run along the elevation' : 'Planks run along the elevation on vertical battens'],
+        ['vertical', 'Vertical', WIZ.draft.type === 'seam' ? 'Trays run up the elevation' : 'Planks run up the elevation on horizontal battens over counter-battens']]);
     if (id === 'base') return wizChoice('base', [
         ['foot', 'At the foot of the wall', 'Nothing meets the wall here, so the boards run all the way down'],
         ['splash', 'Above a splash zone', `A ${val('splash')} mm band is left at the base, as at any other abutment`]])
@@ -146,7 +150,10 @@ function wizNext() {
 
 function wizBuild() {
     const d = WIZ.draft, built = pendingChains(), steps = wizStepIds();
-    selectToggle('cladding-type', d.type);
+    selectToggle('cladding-type', d.type === 'seam' ? 'plank' : d.type);
+    if (d.type !== 'panel') selectToggle('plank-profile', d.type === 'seam' ? 'seam' : 'board');
+    if (d.type === 'seam')          // the standard centres only
+        d.dims.seam_centres = String([430, 530].reduce((a, b) => Math.abs(b - d.dims.seam_centres) < Math.abs(a - d.dims.seam_centres) ? b : a));
     selectToggle('plank-orient', d.orient);
     for (const group of [d.type, 'battens'].concat(steps.indexOf('cbattens') >= 0 ? ['cbattens'] : [])) {
         for (const [fid] of WIZ_GROUPS[group]) if (!wizDerived(fid)) document.getElementById(fid).value = d.dims[fid];

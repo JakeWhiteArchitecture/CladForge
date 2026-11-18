@@ -136,6 +136,19 @@
                     </div></div>
                 <div class="field"><label>Air space <span class="unit">over the head lining and off the frame, vented at back</span></label>
                     <input type="number" id="edge-air" value="10" min="0" max="100" step="1" oninput="onEdgeField('air', this.value)"></div>
+                <div id="seam-edge-fields" style="display:none">
+                <div class="field"><label>Seam ends <span class="unit">standing seam, where a seam runs out rather than carrying on into the next tray</span></label>
+                    <div id="seam-fold" class="turn-toggle">
+                        <button class="turn-btn active" data-value="on" onclick="onEdgeField('fold', 'on')">Folded at 45°</button>
+                        <button class="turn-btn" data-value="off" onclick="onEdgeField('fold', 'off')">All flat</button>
+                    </div></div>
+                <div class="row edge-row">
+                    <div class="field"><label>Top ends <span class="unit">the head, under sills</span></label>
+                        <select id="edge-seamTop" onchange="onEdgeField('seamTop', this.value)"><option value="folded" selected>Folded</option><option value="flat">Flat</option></select></div>
+                    <div class="field"><label>Bottom ends <span class="unit">the base, over heads</span></label>
+                        <select id="edge-seamBottom" onchange="onEdgeField('seamBottom', this.value)"><option value="folded" selected>Folded</option><option value="flat">Flat</option></select></div>
+                </div>
+                </div>
                 <p class="hint">Offsets pull the battens, counter-battens and boards back from the top, bottom and free-end edges. Chain corners and window or door jambs take no offset; where boards are mitred the mitre gap opens between them. In the 2D view the edges are drawn in these colours: click one to type its value. Every value applies to the whole chain.</p>
             </div>
 
@@ -166,6 +179,13 @@
                         <button class="turn-btn" data-value="vertical" onclick="selectToggle('plank-orient','vertical'); onTypeChange()">Vertical</button>
                     </div>
                 </div>
+                <div class="field"><label>Profile</label>
+                    <div id="plank-profile" class="turn-toggle">
+                        <button class="turn-btn active" data-value="board" onclick="selectToggle('plank-profile','board'); onTypeChange()">Boards</button>
+                        <button class="turn-btn" data-value="seam" onclick="selectToggle('plank-profile','seam'); onTypeChange()">Standing seam</button>
+                    </div>
+                </div>
+                <div id="board-fields">
                 <div class="row pair">
                     <div class="field"><label>Face width <span class="unit">75–250</span></label><input type="number" id="plank_w" value="150" min="75" max="250" step="5" oninput="onNumeric()"></div>
                     <div class="field"><label>Thickness <span class="unit">12–32</span></label><input type="number" id="plank_t" value="20" min="12" max="32" oninput="onNumeric()"></div>
@@ -174,8 +194,23 @@
                     <div class="field"><label>Lap <span class="unit">0 = open joint</span></label><input type="number" id="plank_lap" value="0" min="0" max="50" oninput="onNumeric()"></div>
                     <div class="field"><label>Joint gap <span class="unit">0–15</span></label><input type="number" id="plank_gap" value="8" min="0" max="15" oninput="onNumeric()"></div>
                 </div>
+                </div>
+                <div id="seam-fields" style="display:none">
                 <div class="row pair">
-                    <div class="field"><label>Stock length <span class="unit">1800–6000, as supplied</span></label><input type="number" id="plank_len" value="3600" min="1800" max="6000" step="100" oninput="onNumeric()"></div>
+                    <div class="field"><label>Seam centres <span class="unit">tray width</span></label>
+                        <select id="seam_centres" onchange="onNumeric()"><option value="430">430</option><option value="530" selected>530</option></select></div>
+                    <div class="field"><label>Seam height</label>
+                        <select id="seam_h" onchange="onNumeric()"><option value="25" selected>25</option><option value="38">38</option></select></div>
+                </div>
+                <div class="row pair">
+                    <div class="field"><label>Sheet <span class="unit">0.5–1.0 mm</span></label><input type="number" id="seam_t" value="0.6" min="0.5" max="1.0" step="0.1" oninput="onNumeric()"></div>
+                    <div class="field"><label>Deck</label>
+                        <select id="seam_deck" onchange="updatePreview()"><option value="boards" selected>Softwood boarding 22</option><option value="ply">WBP plywood 18</option></select></div>
+                </div>
+                <p class="hint">Opaque metal trays a seam-centre wide on a continuous deck, on vertical battens so the cavity drains whichever way the trays run. Each seam is a closed double lock (25 or 38 high), both trays rolled together with 1.8 of air in every fold: head about 11 across, 17 deep; clips are not modelled. A seam runs only where two trays meet: where it runs out it is folded down to the tray at 45°, or stops square, flush with the tray's end, set per chain under <b>Edges</b>, top and bottom ends apart. With <b>Set out from the structural openings</b> on, vertical trays put a seam on each reveal corner, running the full height up past the window, the reveal lining locked into it as the second tray. The metal stands 2 off the deck and off the reveal. Cross joints follow the plank rules below, anywhere on the deck. The stock length is the longest tray.</p>
+                </div>
+                <div class="row pair">
+                    <div class="field"><label id="plank-len-label">Stock length <span class="unit">1800–6000, as supplied</span></label><input type="number" id="plank_len" value="3600" min="1800" max="6000" step="100" oninput="onNumeric()"></div>
                     <div class="field"><label>Shortest piece <span class="unit">a splice may leave</span></label><input type="number" id="plank_min" value="300" min="100" max="3000" step="50" oninput="onNumeric()"></div>
                 </div>
                 <div class="field"><label>Splices <span class="unit">fewer: pieces up to the stock length · more: down to the shortest piece</span></label>

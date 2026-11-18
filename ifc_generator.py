@@ -43,6 +43,8 @@ _IFC_TYPE_MAP = {
     "corner_profile": ("IfcMember",   "USERDEFINED", "Corner profile"),
     "corner_trim":    ("IfcMember",   "USERDEFINED", "Corner trim"),
     "gasket":         ("IfcCovering", "MEMBRANE",    "EPDM gasket"),
+    "deck":           ("IfcPlate",    "SHEET",       "Deck boarding"),
+    "seam":           ("IfcCovering", "CLADDING",    "Standing seam"),
 }
 _MATERIALS = {
     "batten": ("Timber (softwood) batten", "wood"), "counter_batten": ("Timber (softwood) batten", "wood"),
@@ -52,6 +54,8 @@ _MATERIALS = {
     "reveal": ("Reveal lining", "cladding"), "corner_profile": ("Aluminium corner profile", "aluminium"),
     "corner_trim": ("Timber (solid) corner trim", "wood"),
     "gasket": ("EPDM foam gasket", "rubber"),
+    "deck": ("Timber deck (softwood boarding or WBP plywood)", "wood"),
+    "seam": ("Standing seam sheet", "metal"),
 }
 
 
@@ -344,6 +348,8 @@ def meshes_to_ifc(meshes, params, infos=None):
         parts = []
         for mesh in by_elev.get(name, []):
             ifc_class, predefined, label = _IFC_TYPE_MAP.get(mesh.get("ifc_type"), ("IfcBuildingElementProxy", None, None))
+            if mesh.get("ifc_type") == "plank" and p["seam"]:
+                label = "Standing seam tray"
             if mesh.get("ifc_type") == "panel" and p["panels_as_walls"]:
                 ifc_class, predefined = "IfcWall", "USERDEFINED"
             try:
@@ -386,6 +392,8 @@ def meshes_to_ifc(meshes, params, infos=None):
 
     for ifc_type, elems in by_material.items():
         mat_name, category = _MATERIALS.get(ifc_type, (ifc_type, None))
+        if ifc_type == "plank" and p["seam"]:
+            mat_name, category = "Standing seam sheet", "metal"
         try:
             material = ifc.create_entity("IfcMaterial", Name=mat_name, Category=category)
             ifc.create_entity("IfcRelAssociatesMaterial", GlobalId=ifcopenshell.guid.new(), OwnerHistory=_owner(ifc),

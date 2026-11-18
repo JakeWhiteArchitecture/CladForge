@@ -330,7 +330,7 @@ def mitre_to_linings(meshes, p, infos):
     by trimming included, to the reveal linings with that opening's corner detail
     (mitred by default). Runs on the finished boards, after trimming, and records the
     result as a shift per ring vertex ("vshift")."""
-    if not p.get("reveals", True):
+    if not p.get("reveals", True) or p.get("seam"):     # standing seam: the metal meets square
         return meshes
     face_by = {i["elevation"]: i.get("total_depth", 0.0) for i in infos}
     board = p["panel_t"] if p.get("cladding_type") == "panel" else p["plank_t"]
@@ -355,4 +355,67 @@ def mitre_to_linings(meshes, p, infos):
         m["profile"] = [[round(u, 3), round(v, 3)] for u, v in done[0][0]]
         m["holes"] = [[[round(u, 3), round(v, 3)] for u, v in r] for r, _s in done[1:]]
         m["vshift"] = [[list(sh) for sh in shifts] for _r, shifts in done]
+    return meshes
+
+
+def _seam_span(m):
+    ax = 1 if m["seam_v"] else 0
+    cs = [float(q[ax]) for q in m["profile"]]
+    return min(cs), max(cs)
+
+
+def finish_seams(meshes, p):
+    """End each standing seam where it runs out (the base, the top, an opening, a trimmed
+    edge) rather than at a cross joint, where the next tray's seam carries on. Runs on the
+    trimmed seams, so a seam cut by a roof line is ended there too.
+
+    Per chain, as carried on each elevation record: "seam_fold" turns the 45° fold on or off
+    for the whole chain, and with it on "seam_top" and "seam_bottom" set the top ends (a seam
+    running out upward: the head, under a sill) and the bottom ends (the base, over a head)
+    each "folded" or "flat". A horizontal seam runs out sideways, so only seam_fold applies.
+    Without them the job's "seam_end" stands for the lot.
+
+    "folded": the seam is folded down onto the tray, its end sloping from the tray to its full
+    height over the seam height (a shift with depth, "vshift"). "flat": the seam runs to the
+    tray's end and stops square, flush with it, so nothing changes."""
+    if not p.get("seam"):
+        return meshes
+    sh = float(p["seam_h"])
+    default = p.get("seam_end") != "flat"
+    rules = {}
+    for elev in p.get("elevations", []):
+        fold = elev.get("seam_fold")
+        fold = default if fold is None else bool(fold)
+        rules[elev.get("name")] = (fold, elev.get("seam_top") != "flat", elev.get("seam_bottom") != "flat")
+    groups = {}
+    for m in meshes:
+        if m.get("ifc_type") == "seam" and m.get("seam_part"):
+            key = (m.get("elevation"), m["seam_part"], m["seam_v"], round(float(m["seam_line"]), 1))
+            groups.setdefault(key, []).append(m)
+    for ms in groups.values():
+        spans = [_seam_span(m) for m in ms]
+        for m, (lo, hi) in zip(ms, spans):
+            if hi - lo < 4.0:
+                continue
+            free_lo = not any(abs(h - lo) < 1.0 for o, (_l, h) in zip(ms, spans) if o is not m)
+            free_hi = not any(abs(l - hi) < 1.0 for o, (l, _h) in zip(ms, spans) if o is not m)
+            fold, top, bottom = rules.get(m.get("elevation"), (default, True, True))
+            if m["seam_v"]:                        # a vertical seam: its low end is a bottom end
+                free_lo, free_hi = free_lo and fold and bottom, free_hi and fold and top
+            else:
+                free_lo, free_hi = free_lo and fold, free_hi and fold
+            if not (free_lo or free_hi):
+                continue
+            room = (hi - lo) / (2.0 if free_lo and free_hi else 1.0) - 1.0
+            k = min(sh, room) / sh                 # 45°, or steeper on a piece too short for it
+            ax, face = (1 if m["seam_v"] else 0), float(m["seam_face"])
+            tol = min(30.0, (hi - lo) / 3.0)
+            ends = ([(-1, lo)] if free_lo else []) + ([(1, hi)] if free_hi else [])
+            shifts = []
+            for q in m["profile"]:
+                sign = next((sg for sg, at in ends if abs(float(q[ax]) - at) <= tol), 0)
+                a, b = sign * k * face, -sign * k      # along the seam: a + b·s, s the depth
+                shifts.append((a, b, 0.0, 0.0) if ax == 0 else (0.0, 0.0, a, b))
+            if any(any(x) for x in shifts):
+                m["vshift"] = [[list(x) for x in shifts]] + [[[0.0] * 4 for _ in h] for h in (m.get("holes") or [])]
     return meshes
