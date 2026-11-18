@@ -316,16 +316,20 @@ def test_client_battens_toggled_in_2d_on_fixing_only_off():
                           and max(q[1] for q in m["profile"]) - min(q[1] for q in m["profile"]) > 1000})
         edges = sorted({round(x) for m in g if m["ifc_type"] == "panel" for x in (min(q[0] for q in m["profile"]),
                                                                                  max(q[0] for q in m["profile"]))})
-        top = sorted((d["p1"][0], d["p2"][0], d["label"]) for d in out["dimensions"]
+        greens = sorted(q["u"] for q in out["info"][0]["posts"] if q["state"] == "on")
+        top = sorted((d["p1"][0], d["p2"][0], d["label"], d["offset"]) for d in out["dimensions"]
                      if d["p1"][1] == d["p2"][1] == 3000.0 and d.get("offset") in (480, 640))
-        # the panel widths across the top, joint to joint: one dimension per panel
-        assert top[0][0] == 0.0 and top[-1][1] == 8000.0                     # end to end
-        assert all(abs(n[0] - (p[1] + 10.0)) < 0.01 for p, n in zip(top, top[1:]))   # panel, 10 joint, panel
-        assert all(lab == "%.0f" % (b - a) for a, b, lab in top)
-        assert top and all(500 <= b - a <= 1201 for a, b, _l in top if 0 < a and b < 8000)
-        offs = [d["offset"] for d in sorted((d for d in out["dimensions"] if d.get("offset") in (480, 640)
-                                             and d["p1"][1] == 3000.0), key=lambda d: d["p1"][0])]
-        assert offs == [480 if k % 2 == 0 else 640 for k in range(len(offs))]   # stepped up and down
+        # across the top: green to green only, one dimension per pair of client battens in use
+        assert [(a, b) for a, b, _l, _o in top] == list(zip(greens, greens[1:]))
+        assert all(lab == "%.0f" % (b - a) for a, b, lab, _o in top)
+        assert [o for *_r, o in top] == [480 if k % 2 == 0 else 640 for k in range(len(top))]   # stepped
+        # inside the layout: each of our own battens dimensioned from the nearest green one
+        ours = [d for d in out["dimensions"] if "ours" in d]
+        mine = [u for u in battens if all(abs(u - q["u"]) > 25 for q in out["info"][0]["posts"])]
+        assert sorted(round(d["ours"]) for d in ours) == mine
+        for d in ours:
+            g = min(greens, key=lambda x: abs(x - d["ours"]))
+            assert sorted((d["p1"][0], d["p2"][0])) == sorted((g, d["ours"])) and d["p1"][1] < 3000.0
         return out["info"][0], battens, edges
 
     def joint_at(edges, u):
