@@ -50,6 +50,13 @@ _NUMERIC = {  # name: (default, min, max)
 }
 
 
+def chain_params(params, elev):
+    """The job's params with this face's chain settings over them: each chain carries its own
+    cladding (type, sizes, battens, build-up) on its elevation records as "settings"."""
+    st = elev.get("settings") if isinstance(elev, dict) else None
+    return dict(params, **st) if st else params
+
+
 def _parse(params):
     """Clean parameter dict with defaults, clamped ranges and derived values."""
     p = {"elevations": list(params.get("elevations") or []), "context": params.get("context") or {}}

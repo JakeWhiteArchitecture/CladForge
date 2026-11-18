@@ -11,7 +11,7 @@ COUNTER_BATTEN, BATTEN, CLADDING, CLOSER, DIMS, NOTES. Output is DXF R12
 
 import math
 
-from cladding_constants import (_parse, TOOL_NAME, IFC_SCHEMA_LABEL, SCOPE_NOTE, QUANTITY_NOTE,
+from cladding_constants import (_parse, chain_params, TOOL_NAME, IFC_SCHEMA_LABEL, SCOPE_NOTE, QUANTITY_NOTE,
                                 DISCLAIMER)
 from cladding_primitives import buildup_depth, ring_at, splash_rings
 
@@ -202,8 +202,8 @@ def _schedule(p, info, meshes):
 
 def meshes_to_dxf_string(meshes, params, infos=None):
     p = _parse(params)
-    from cladding_preview import _build_all
-    _m, dims, built = _build_all(p)          # one build gives both dims and infos
+    from cladding_preview import build_all_groups
+    _m, dims, built = build_all_groups(params)    # one build gives both dims and infos
     info_by_name = {i["elevation"]: i for i in (infos or built)}
     dxf = _DxfWriter()
     dxf.add_linetype("DASHED", [10.0, 6.35, -3.175])
@@ -221,11 +221,12 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         name = elev.get("name", "Elevation")
         W, H = float(elev["width"]), float(elev["height"])
         info = info_by_name.get(name, {})
+        pe = _parse(chain_params(params, elev))      # this face's chain settings
         for poly in elev["polygons"]:
             dxf.add_ring(poly["exterior"], "WALL", ox, 0.0)
             for hole in poly.get("holes", []):
                 dxf.add_ring(hole, "OPENING", ox, 0.0)
-        for ring in splash_rings(elev, p["splash"]):
+        for ring in splash_rings(elev, pe["splash"]):
             dxf.add_ring(ring, "SPLASH_ZONE", ox, 0.0)
         for m in by_elev.get(name, []):
             if m["ifc_type"] == "reveal":
@@ -249,7 +250,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         dxf.add_text(title, (ox, H + 500.0), _TITLE, "NOTES")
         dxf.add_text("Flattened elevation in the region plane, moved to origin. Looking at the face from outside.",
                      (ox, H + 350.0), _TEXT, "NOTES")
-        y_end = _text_block(dxf, _schedule(p, info, by_elev.get(name, [])), ox, -1500.0)
+        y_end = _text_block(dxf, _schedule(pe, info, by_elev.get(name, [])), ox, -1500.0)
         sheet_min_y = min(sheet_min_y, y_end)
         ox += W + _ELEV_GAP
         sheet_max_x = ox - _ELEV_GAP

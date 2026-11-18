@@ -159,6 +159,16 @@ function wizBuild() {
         for (const [fid] of WIZ_GROUPS[group]) if (!wizDerived(fid)) document.getElementById(fid).value = d.dims[fid];
     }
     built.forEach(c => c.built = true);
+    // The answers are the new chains' own settings (or, rebuilding, the active chain's):
+    // no other chain changes. The sidebar then shows the chain just built.
+    const targets = built.length ? built : [activeChain()].filter(Boolean);
+    const snap = formSettings();
+    for (const c of targets) c.settings = Object.assign({}, snap);
+    if (targets.length) {
+        state.formChain = targets[0];
+        const k = state.elevations.findIndex(e => e.chain === targets[0]);
+        if (k >= 0) state.active = k;
+    }
     // The synthetic "Elevation base" line is the only splash zone this answers for;
     // a detected slab or roof keeps its own either way.
     for (const chain of (built.length ? built : readyChains())) {

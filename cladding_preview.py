@@ -1,13 +1,19 @@
 """CladForge — thin facade for Pyodide and Flask: generate_preview(params) ->
 {"geometry", "dimensions", "info"}; generate_preview_geometry(params) -> list[prism].
-check_rules is re-exported here so callers have one import."""
+check_rules is wrapped here so callers have one import.
 
-from cladding_constants import _parse
+Each chain carries its own cladding settings on its elevation records ("settings"): the
+job's params are the defaults, a chain's settings go over them, and every group of faces
+sharing settings is built on its own, so one chain's choices never change another's."""
+
+import json
+
+from cladding_constants import _parse, chain_params
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
 from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
 from cladding_edges import mitre_to_linings, finish_seams
-from cladding_checks import check_rules  # noqa: F401 — public API lives here
+from cladding_checks import check_rules as _check_rules
 
 
 def _build_all(p):
@@ -37,7 +43,64 @@ def _build_all(p):
     return meshes, dims, infos
 
 
+def setting_groups(params):
+    """The job's faces grouped by their chain's settings, in order: [(params for the group,
+    its elevation records)]. Faces without settings (an old state) take the job's own."""
+    groups = {}
+    for e in params.get("elevations") or []:
+        st = e.get("settings") or {}
+        groups.setdefault(json.dumps(st, sort_keys=True), (st, []))[1].append(e)
+    if not groups:
+        return [(params, [])]
+    return [(dict(params, **st, elevations=elevs), elevs) for st, elevs in groups.values()]
+
+
+def params_for(params, names):
+    """The params a set of faces (one chain's, by name) is built with: the first named face's
+    chain settings over the job's."""
+    names = set(names or [])
+    elev = next((e for e in params.get("elevations") or [] if e.get("name") in names), None)
+    return chain_params(params, elev)
+
+
+def parse_for(params, names):
+    return _parse(params_for(params, names))
+
+
+def check_rules(params, infos=None):
+    """The checks, chain by chain where the chains differ (each named with its chain)."""
+    groups = setting_groups(params)
+    if len(groups) <= 1 or infos is None:
+        return _check_rules(groups[0][0], infos)
+    out = []
+    for sub, elevs in groups:
+        names = {e.get("name") for e in elevs}
+        label = ", ".join(sorted({str(e.get("chain") or e.get("name")) for e in elevs}))
+        for c in _check_rules(sub, [i for i in infos if i.get("elevation") in names]):
+            out.append(dict(c, name="%s · %s" % (label, c["name"])))
+    return out
+
+
+def build_all_groups(params):
+    """(meshes, dims, infos) for every face, each group with its chain's settings, untrimmed:
+    the exporters' quick source of dimensions and setting-out info."""
+    meshes, dims, infos = [], [], []
+    for sub, _elevs in setting_groups(params):
+        m, d, i = _build_all(_parse(sub))
+        meshes, dims, infos = meshes + m, dims + d, infos + i
+    return meshes, dims, infos
+
+
 def generate_preview(params):
+    meshes, dims, infos = [], [], []
+    for sub, _elevs in setting_groups(params):
+        m, d, i = _preview_one(sub)
+        meshes, dims, infos = meshes + m, dims + d, infos + i
+    return {"geometry": _ensure_unique_names(meshes), "dimensions": dims, "info": infos}
+
+
+def _preview_one(params):
+    """One group of faces sharing their settings, built, trimmed, mitred and finished."""
     p = _parse(params)
     meshes, dims, infos = _build_all(p)
     if p["trim"]:
@@ -50,7 +113,7 @@ def generate_preview(params):
         for m in meshes:
             if m.get("ifc_type") == "reveal":
                 m["opacity"] = 1.0
-    return {"geometry": _ensure_unique_names(meshes), "dimensions": dims, "info": infos}
+    return meshes, dims, infos
 
 
 def generate_preview_geometry(params):
@@ -80,7 +143,7 @@ def splice_trial(params, names, area):
     given elevations. The stock length and the shortest piece stay as set, and joints
     still land on battens. The app runs one per call, so it can say how far it has got."""
     from cladding_nesting import chain_plan
-    p = _parse(params)
+    p = parse_for(params, names)
     out = generate_preview(params)
     plan = chain_plan(out["geometry"], p, names, area)
     return {"splice": p["plank_splice"], "piece": round(p["plank_target"]), "n_boards": plan["n_boards"],

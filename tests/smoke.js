@@ -770,6 +770,11 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     await page.waitForTimeout(1500);
     const perCorner = await page.evaluate(async () => {
         const chain = state.elevations[4].chain;
+        // Each chain has its own settings: the master lap is a panel detail, so make this
+        // chain panels (with one of its faces active, so the sidebar edits this chain).
+        setActive(state.elevations.indexOf(chain.members[0]));
+        selectToggle('cladding-type', 'panel'); onTypeChange();
+        await updatePreview();
         const rows = () => Array.from(document.querySelectorAll('.corner-row')).map(r => r.dataset.detail);
         const before = rows();
         setCornerDetail(chain.name, 1, 'lap');

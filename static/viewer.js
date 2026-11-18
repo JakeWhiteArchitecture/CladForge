@@ -632,11 +632,13 @@ function renderOutlines(elevations, splash) {
             outlineGroup.add(ringLine(poly.exterior, e.frame, 2, OUTLINE_COLOR, false));
             for (const h of poly.holes) outlineGroup.add(ringLine(h, e.frame, 2, 0xff5c5c, false));
         }
+        // each face's own chain's splash zone, where it carries settings of its own
+        const sz = e.settings && typeof e.settings.splash === 'number' ? e.settings.splash : splash;
         for (const ab of e.abutments) {
-            if (!ab.enabled || splash <= 0) continue;
+            if (!ab.enabled || sz <= 0) continue;
             // The band follows the abutment line: level for slabs, sloped where a roof pitches.
             const line = ab.line || [[ab.u0, ab.v], [ab.u1, ab.v]];
-            const ring = line.concat(line.slice().reverse().map(p => [p[0], p[1] + splash]));
+            const ring = line.concat(line.slice().reverse().map(p => [p[0], p[1] + sz]));
             outlineGroup.add(ringLine(ring, e.frame, 3, 0xe94560, true));
         }
     });
