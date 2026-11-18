@@ -31,7 +31,8 @@ SEAM_AIR = 1.8          # mm – between each sheet and the next, throughout
 SEAM_HEAD_D = 17.0      # mm – from the top of the seam to the foot of the head
 SEAM_STANDOFF = 2.0     # mm – the metal off the deck, and off the reveal behind its linings
 SEAM_CENTRES = (430.0, 530.0)   # mm – the standard tray widths, seam to seam
-DECK_T = {"boards": 22.0, "ply": 18.0}   # mm – softwood boarding, or WBP plywood
+DECK_T = {"boards": 22.0, "ply": 18.0}   # mm – softwood boarding, or WBP plywood (the default)
+DECK_SPAN = {"boards": 600.0, "ply": 600.0}   # mm – the most batten centres each deck spans
 EPDM_T, EPDM_LAP = 2.0, 15.0    # EPDM gasket on vertical timbers: thickness, and past the timber each side
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
@@ -70,7 +71,7 @@ def _parse(params):
         p["seam_centres"] = min(SEAM_CENTRES, key=lambda c: abs(c - p["seam_centres"]))
         p["seam_h"] = 38.0 if p["seam_h"] > 31.5 else 25.0
         p["plank_w"], p["plank_gap"], p["plank_lap"], p["plank_t"] = p["seam_centres"], 0.0, 0.0, p["seam_t"]
-    p["seam_deck"] = "ply" if params.get("seam_deck") == "ply" else "boards"
+    p["seam_deck"] = "boards" if params.get("seam_deck") == "boards" else "ply"     # 18 WBP ply unless boarding
     # Where a seam runs out (the base, the top, an opening): folded down to the tray on a
     # slope, or run to the tray's end and stopped square, flush with it.
     p["seam_end"] = "flat" if params.get("seam_end") == "flat" else "folded"

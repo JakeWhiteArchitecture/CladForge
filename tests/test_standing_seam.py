@@ -42,7 +42,9 @@ def _span(m, k):
 def test_only_the_standard_centres_and_seam_heights():
     assert _parse({"plank_profile": "seam", "seam_centres": 470})["plank_w"] == 430
     assert _parse({"plank_profile": "seam", "seam_centres": 500})["plank_w"] == 530
-    p = _parse({"plank_profile": "seam", "seam_h": 30, "seam_t": 0.7, "seam_deck": "ply"})
+    assert _parse({"plank_profile": "seam"})["seam_deck"] == "ply"                # 18 WBP ply by default
+    assert _parse({"plank_profile": "seam", "seam_deck": "boards"})["deck_t"] == 22
+    p = _parse({"plank_profile": "seam", "seam_h": 30, "seam_t": 0.7})
     assert p["seam_h"] == 25 and p["plank_t"] == 0.7 and p["plank_gap"] == 0 and p["deck_t"] == 18
     assert p["cover"] == 530 and p["battens"] == "vertical" and not p["has_cb"]
     # a board profile is untouched
@@ -70,8 +72,8 @@ def test_vertical_trays_on_a_deck_on_vertical_battens(wall, centres):
     assert all(_span(m, 1)[1] - _span(m, 1)[0] > _span(m, 0)[1] - _span(m, 0)[0] for m in _of(out, "batten"))
     (deck,) = _of(out, "deck")
     assert not _of(out, "membrane")
-    assert len(deck["holes"]) == 2 and deck["thickness"] == 22         # window and pipe
-    assert all(abs(m["depth"] - (deck["depth"] + 22 + 2)) < 1e-6 for m in trays)   # 2 off the deck
+    assert len(deck["holes"]) == 2 and deck["thickness"] == 18         # 18 ply; window and pipe cut out
+    assert all(abs(m["depth"] - (deck["depth"] + 18 + 2)) < 1e-6 for m in trays)   # 2 off the deck
     # every tray but those at the left edge has its seam, as three solids
     stems = _parts(out, "under_up")
     assert {len(_parts(out, k)) for k in PARTS} == {len(stems)} and len(stems) >= len([m for m in trays if _span(m, 0)[0] > 1.0])
@@ -235,7 +237,7 @@ def test_trimmed_and_exported(wall, tmp_path, end):
 
 def test_the_deck_is_what_spans_the_battens():
     from cladding_checks import check_rules
-    for deck, centres, status in (("boards", 600, "pass"), ("ply", 600, "fail"), ("ply", 500, "pass")):
+    for deck, centres, status in (("boards", 600, "pass"), ("ply", 600, "pass"), ("ply", 450, "pass")):
         checks = {c["name"]: c for c in check_rules({"cladding_type": "plank", "plank_profile": "seam", "seam_deck": deck,
                                                        "batten_centres": centres}, infos=[])}
         assert "Batten centres" not in checks and checks["Deck span"]["status"] == status

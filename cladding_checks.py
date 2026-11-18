@@ -1,6 +1,6 @@
 """CladForge — the validation table from the requirements. Not a compliance check."""
 
-from cladding_constants import (_parse, PLANK_SPAN_TABLE, MIN_CAVITY, FIXING_EMBEDMENT,
+from cladding_constants import (_parse, PLANK_SPAN_TABLE, DECK_SPAN, MIN_CAVITY, FIXING_EMBEDMENT,
                                 MAX_BATTEN_SPAN)
 from cladding_primitives import ROW_MIN
 from cladding_corners import PANEL_SIZES as PROFILE_SIZES, TRIM_SIZE, TRIM_LEG
@@ -16,7 +16,7 @@ def check_rules(params, infos=None):
 
     if p["seam"]:
         # Trays lie on a continuous deck, so it is the deck that spans the battens.
-        max_span = max([400.0] + [span for min_t, span in PLANK_SPAN_TABLE if p["deck_t"] >= min_t])
+        max_span = DECK_SPAN[p["seam_deck"]]
         c = p["batten_centres"]
         status = "pass" if c <= max_span + 0.5 else "fail"
         add("Deck span", status, "Batten centres %.0fmm vs %.0fmm max span for the %.0fmm %s deck%s"
