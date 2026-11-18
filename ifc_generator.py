@@ -22,7 +22,7 @@ import ifcopenshell.api
 import ifcopenshell.api.owner.settings
 import ifcopenshell.guid
 
-from cladding_constants import (_parse, TOOL_NAME, TOOL_URL, IFC_SCHEMA_LABEL, SCOPE_NOTE,
+from cladding_constants import (_parse, chain_params, TOOL_NAME, TOOL_URL, IFC_SCHEMA_LABEL, SCOPE_NOTE,
                                 QUANTITY_NOTE, DISCLAIMER, frame_to_world)
 from cladding_primitives import corner_ring, ring_at
 
@@ -309,8 +309,8 @@ def meshes_to_ifc(meshes, params, infos=None):
     """Convert prism meshes into an IFC4X3 file. Returns the temp file path."""
     p = _parse(params)
     if infos is None:
-        from cladding_preview import _build_all
-        infos = _build_all(p)[2]
+        from cladding_preview import build_all_groups
+        infos = build_all_groups(params)[2]
     info_by_name = {i["elevation"]: i for i in infos}
     context = p.get("context") or {}
     meshes = _unshift(meshes, context.get("offset"))
@@ -335,11 +335,12 @@ def meshes_to_ifc(meshes, params, infos=None):
     elements, fingerprints, assemblies, by_material = [], {}, [], {}
     for elev in elevations:
         name = elev.get("name", "Elevation")
+        pe = _parse(chain_params(params, elev))      # this face's chain settings
         storey = storeys[(elev.get("storey") or {}).get("name") or "Ground Floor"]
         assembly = ifcopenshell.api.run("root.create_entity", ifc, ifc_class="IfcElementAssembly",
                                         name="%s cladding" % name)
         for attr, value in (("PredefinedType", "USERDEFINED"), ("ObjectType", "Cladding system"),
-                            ("Description", "%s %s buildup on %s" % (TOOL_NAME, p["cladding_type"], name))):
+                            ("Description", "%s %s buildup on %s" % (TOOL_NAME, pe["cladding_type"], name))):
             try:
                 setattr(assembly, attr, value)
             except Exception:
@@ -348,9 +349,9 @@ def meshes_to_ifc(meshes, params, infos=None):
         parts = []
         for mesh in by_elev.get(name, []):
             ifc_class, predefined, label = _IFC_TYPE_MAP.get(mesh.get("ifc_type"), ("IfcBuildingElementProxy", None, None))
-            if mesh.get("ifc_type") == "plank" and p["seam"]:
+            if mesh.get("ifc_type") == "plank" and pe["seam"]:
                 label = "Standing seam tray"
-            if mesh.get("ifc_type") == "panel" and p["panels_as_walls"]:
+            if mesh.get("ifc_type") == "panel" and pe["panels_as_walls"]:
                 ifc_class, predefined = "IfcWall", "USERDEFINED"
             try:
                 elem = _make_element(ifc, body, ifc_class, mesh.get("name") or label, _prism_solid(ifc, mesh),
@@ -359,7 +360,8 @@ def meshes_to_ifc(meshes, params, infos=None):
                 continue
             parts.append(elem)
             fingerprints[elem.id()] = "%s|%s|%s" % (ifc_class, mesh.get("name", ""), _mesh_fingerprint(mesh))
-            by_material.setdefault(mesh.get("ifc_type"), []).append(elem)
+            seam_tray = mesh.get("ifc_type") == "plank" and pe["seam"]
+            by_material.setdefault((mesh.get("ifc_type"), seam_tray), []).append(elem)
             common = {"Reference": ("IfcIdentifier", label), "IsExternal": ("IfcBoolean", True)}
             if ifc_class == "IfcCovering":
                 _pset(ifc, [elem], "Pset_CoveringCommon", common)
@@ -388,13 +390,13 @@ def meshes_to_ifc(meshes, params, infos=None):
         if parts:
             ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=assembly, products=parts)
         _pset(ifc, [assembly], "%s_SettingOut" % TOOL_NAME,
-              _setting_out_props(p, info_by_name.get(name, {}), elev, _schema_label(ifc)))
+              _setting_out_props(pe, info_by_name.get(name, {}), elev, _schema_label(ifc)))
         elements += parts
         assemblies.append((name, assembly))
 
-    for ifc_type, elems in by_material.items():
+    for (ifc_type, seam_tray), elems in by_material.items():
         mat_name, category = _MATERIALS.get(ifc_type, (ifc_type, None))
-        if ifc_type == "plank" and p["seam"]:
+        if seam_tray:
             mat_name, category = "Standing seam sheet", "metal"
         try:
             material = ifc.create_entity("IfcMaterial", Name=mat_name, Category=category)

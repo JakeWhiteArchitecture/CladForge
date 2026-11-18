@@ -19,7 +19,8 @@ const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', ai
 // turns it into cladding. See static/wizard.js.
 function newChain() {
     const chain = { name: 'Chain ' + (++state.seq), members: [], length: 0, built: false,
-                    topZ: null, bottomZ: null, edges: Object.assign({}, EDGE_DEFAULTS) };
+                    topZ: null, bottomZ: null, edges: Object.assign({}, EDGE_DEFAULTS),
+                    settings: typeof formSettings === 'function' ? formSettings() : null };
     state.chains.push(chain);
     return chain;
 }
@@ -106,6 +107,7 @@ function setActive(i) {
     // Selecting never moves the chain's course datum: that locks on the first row or
     // course edit (lockDatum), so choosing a face with a different base moves nothing.
     const picked = state.elevations[i];
+    showActiveChainSettings();         // the sidebar follows the face's chain
     syncEdgeFields();
     // Flat on an elevation, choosing another swings the view across to it.
     if (in2D() && picked && picked.result && picked.result.ok) enter2D(picked.result.name, picked.result.frame, cladBox(picked));
@@ -690,6 +692,48 @@ function splicePiece() {
     return Math.round(len - s / 100 * (len - min)) + ' mm';
 }
 function val(id) { return document.getElementById(id).value; }
+
+// ─── PER-CHAIN SETTINGS ───
+// Each chain carries its own cladding (type, sizes, battens, build-up, corner detail) as
+// chain.settings, sent on its elevation records; the engine builds each chain with its own
+// (cladding_preview.setting_groups). The sidebar shows the active face's chain: selecting a
+// face of another chain loads that chain's settings into it, and any edit is kept by the
+// chain shown (state.formChain), so one chain's choices never change another's. Live trim,
+// panels as walls and shared offcuts stay job-wide.
+const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model'];
+function formSettings() {
+    const s = { corner: toggleValue('corner-type') || 'mitre' };
+    for (const k of NUM) { const v = parseFloat(val(k)); if (isFinite(v)) s[k] = v; }
+    for (const k of CHAIN_CHECKS) s[k] = document.getElementById(k).checked;
+    s.cladding_type = toggleValue('cladding-type') || 'plank';
+    s.plank_orient = toggleValue('plank-orient') || 'horizontal';
+    s.plank_profile = toggleValue('plank-profile') || 'board';
+    s.seam_deck = val('seam_deck');
+    s.counter_batten = val('counter_batten');
+    return s;
+}
+function applySettings(s) {
+    if (!s) return;
+    for (const k of NUM) if (typeof s[k] === 'number' && isFinite(s[k])) document.getElementById(k).value = s[k];
+    for (const k of CHAIN_CHECKS) if (typeof s[k] === 'boolean') document.getElementById(k).checked = s[k];
+    if (s.corner) selectToggle('corner-type', s.corner);
+    if (s.cladding_type) selectToggle('cladding-type', s.cladding_type);
+    if (s.plank_orient) selectToggle('plank-orient', s.plank_orient);
+    if (s.plank_profile) selectToggle('plank-profile', s.plank_profile);
+    if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
+    if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
+}
+function activeChain() { const e = state.elevations[state.active]; return e ? e.chain : null; }
+// Keep the chain shown in the sidebar, then show the active face's chain if it is another.
+function showActiveChainSettings() {
+    const c = activeChain();
+    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = formSettings();
+    if (!c || c === state.formChain) { state.formChain = c || state.formChain; return false; }
+    state.formChain = c;
+    if (c.settings) { applySettings(c.settings); syncTypeUI(); }
+    else c.settings = formSettings();
+    return true;
+}
 function toggleValue(id) { const b = document.querySelector('#' + id + ' .turn-btn.active'); return b ? b.dataset.value : null; }
 function selectToggle(id, value) {
     document.querySelectorAll('#' + id + ' .turn-btn').forEach(b => b.classList.toggle('active', b.dataset.value === value));
@@ -713,6 +757,7 @@ function elevationRecords() {
                                                    cover: e.cover || null, panel_rows: e.panelRows || null,
                                                    panel_joints: e.panelJoints || null,
                                                    post_states: e.postStates || null,
+                                                   settings: chain.settings || null,
                                                    course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
                                                    edge_bottom: chain.edges.bottom, mitre_gap: chain.edges.gap,
@@ -734,6 +779,7 @@ function vLocal(e, z) {
 }
 
 function getParams() {
+    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = formSettings();
     const p = { elevations: elevationRecords(), context: Object.assign({ offset: modelOffset }, modelContext),
                 corner: toggleValue('corner-type') || 'mitre',
                 trim: !state.sliderDragging && document.getElementById('live-trim').checked };
@@ -755,6 +801,14 @@ function getParams() {
 }
 
 function onTypeChange() {
+    syncTypeUI();
+    renderElevationList();              // the corner rows say which detail is in force
+    updateSliderRange();
+    updatePreview();
+}
+
+// The sidebar's sections and labels for the cladding type and profile shown.
+function syncTypeUI() {
     const panel = toggleValue('cladding-type') === 'panel';
     // The master-lap needs a board to run past the corner, so it is a panel detail.
     // Profile is offered either way: with planks it is the Marley-type corner profile.
@@ -779,9 +833,6 @@ function onTypeChange() {
                                                             : 'End trim <span class="unit">mm off each end of a length</span>';
     document.getElementById('plank_splice_val').textContent = splicePiece();
     document.getElementById('batten_centres').readOnly = panel;
-    renderElevationList();              // the corner rows say which detail is in force
-    updateSliderRange();
-    updatePreview();
 }
 
 function updateSliderRange() {
@@ -960,6 +1011,7 @@ function snapshotState() {
         surface: e.result });
     const chains = state.chains.map(c => ({
         name: c.name, built: !!c.built, topZ: c.topZ, bottomZ: c.bottomZ, edges: Object.assign({}, c.edges),
+        settings: c.settings ? Object.assign({}, c.settings) : null,
         datumFrom: c.datumFrom ? c.datumFrom.name : null,
         members: c.members.filter(e => e.result && e.result.ok).map(elevation) }));
     const act = state.elevations[state.active];
@@ -1043,7 +1095,8 @@ function restoreState(st) {
         const chain = { name: c.name, members: [], length: 0, built: !!c.built,
                         topZ: c.topZ === null || c.topZ === undefined ? null : c.topZ + d[2],
                         bottomZ: c.bottomZ === null || c.bottomZ === undefined ? null : c.bottomZ + d[2],
-                        edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}) };
+                        edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}),
+                        settings: c.settings ? Object.assign({}, c.settings) : null };
         for (const m of c.members || []) {
             const surface = m.surface;
             if (!surface || !surface.ok) continue;
@@ -1064,6 +1117,10 @@ function restoreState(st) {
         if (chain.members.length) { relayoutChain(chain); state.chains.push(chain); }
     }
     state.seq = Math.max(st.seq || 0, state.chains.length);
+    // A state saved before chains had their own settings: each chain takes the job's.
+    const job = formSettings();
+    for (const ch of state.chains) if (!ch.settings) ch.settings = Object.assign({}, job);
+    state.formChain = null;            // setActive shows the active face's chain
     onTypeChange();
     const active = state.elevations.findIndex(e => e.name === st.active);
     setActive(active >= 0 ? active : state.elevations.length ? 0 : -1);
@@ -1179,11 +1236,25 @@ function scheduleNesting() {
     _nestTimer = setTimeout(() => runNesting(false), 300);
 }
 
+// The cutting job: the active chain and every other built chain cut from the same material
+// (cladding, profile and stock sizes alike), packed together so they share offcuts. A chain
+// in another material has its own job, shown when one of its faces is active.
+const MATERIAL_KEYS = ['cladding_type', 'plank_profile', 'board_w', 'board_h', 'panel_t', 'plank_w', 'plank_t',
+                       'plank_len', 'seam_centres', 'seam_t'];
+function materialOf(c) {
+    const s = c.settings || {};
+    return MATERIAL_KEYS.map(k => s.cladding_type === 'panel' && /^(plank|seam)/.test(k) ? '' :
+                                  s.cladding_type !== 'panel' && /^(board_|panel_)/.test(k) ? '' : String(s[k])).join('|');
+}
 function jobRecords() {
-    const chains = state.chains.filter(c => c.built && c.members.some(m => m.result && m.result.ok));
+    const built = state.chains.filter(c => c.built && c.members.some(m => m.result && m.result.ok));
+    const act = activeChain(), here = act && built.includes(act) ? act : built[0];
+    const chains = here ? built.filter(c => materialOf(c) === materialOf(here)) : [];
     const names = chains.flatMap(c => c.members.filter(m => m.result && m.result.ok).map(m => m.result.name));
     const area = (window._lastPreview.info || []).filter(i => names.includes(i.elevation)).reduce((a, i) => a + (i.clad_area || 0), 0);
-    return { names, area, title: chains.length === 1 ? chains[0].name : `All ${chains.length} chains` };
+    const title = chains.length === 1 ? chains[0].name
+        : chains.length === built.length ? `All ${chains.length} chains` : chains.map(c => c.name).join(' + ');
+    return { names, area, title };
 }
 
 async function runNesting(deep) {
@@ -1201,10 +1272,10 @@ async function runNesting(deep) {
         const out = await pyodide.runPythonAsync(`
 import json as _json, time as _time
 from cladding_nesting import chain_plan as _cp
-from cladding_constants import _parse as _prs
+from cladding_preview import parse_for as _pf
 _n = _json.loads(_nest_json)
 _t0 = _time.perf_counter()
-_plan = _cp(_o["geometry"], _prs(_p), _n["names"], _n["area"], _n["deep"])
+_plan = _cp(_o["geometry"], _pf(_p, _n["names"]), _n["names"], _n["area"], _n["deep"])
 _plan["ms"] = round((_time.perf_counter() - _t0) * 1000)
 _plan.pop("boards")
 _json.dumps(_plan)`);
@@ -1290,12 +1361,11 @@ async function cuttingPlan(asDxf) {
     pyodide.globals.set('_as_dxf', !!asDxf);
     const out = await pyodide.runPythonAsync(`
 import json as _json
-from cladding_preview import generate_preview as _gp
-from cladding_constants import _parse as _prs
+from cladding_preview import generate_preview as _gp, parse_for as _pf
 from cladding_nesting import chain_plan as _cp, plan_dxf as _pd
 _xp = _json.loads(_params_json)
 _job = _json.loads(_job_json)
-_xplan = _cp(_gp(_xp)["geometry"], _prs(_xp), _job["names"], _job["area"], True)
+_xplan = _cp(_gp(_xp)["geometry"], _pf(_xp, _job["names"]), _job["names"], _job["area"], True)
 _pd([(_job["title"], _xplan)]) if _as_dxf else _json.dumps(_xplan)`);
     if (asDxf) return out;
     const plan = JSON.parse(out);
@@ -1323,7 +1393,10 @@ async function optimiseSplices() {
         for (let i = 0; i < settings.length; i++) {
             btn.textContent = `Trying splices ${settings[i]}% (${i + 1} of ${settings.length})…`;
             await new Promise(r => setTimeout(r, 20));          // let the label paint before Python blocks
-            pyodide.globals.set('_st_json', JSON.stringify({ params: Object.assign({}, params, { plank_splice: settings[i] }),
+            const tp = Object.assign({}, params, { plank_splice: settings[i] });
+            tp.elevations = params.elevations.map(r => job.names.includes(r.name) && r.settings
+                ? Object.assign({}, r, { settings: Object.assign({}, r.settings, { plank_splice: settings[i] }) }) : r);
+            pyodide.globals.set('_st_json', JSON.stringify({ params: tp,
                                                              names: job.names, area: job.area }));
             trials.push(JSON.parse(await pyodide.runPythonAsync(`
 import json as _json
