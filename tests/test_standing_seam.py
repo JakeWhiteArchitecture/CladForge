@@ -49,6 +49,9 @@ def test_only_the_standard_centres_and_seam_heights():
     assert not _parse({"plank_orient": "vertical"})["seam"] and _parse({"plank_orient": "vertical"})["battens"] == "horizontal"
 
 
+PARTS = ("under_up", "under_cap", "under_flange", "over_up", "over_bend", "over_return", "over_turn", "over_outer")
+
+
 def _parts(out, part):
     return [m for m in _of(out, "seam") if m.get("seam_part") == part]
 
@@ -70,8 +73,8 @@ def test_vertical_trays_on_a_deck_on_vertical_battens(wall, centres):
     assert len(deck["holes"]) == 2 and deck["thickness"] == 22         # window and pipe
     assert all(abs(m["depth"] - (deck["depth"] + 22)) < 1e-6 for m in trays)
     # every tray but those at the left edge has its seam, as three solids
-    stems, locks, caps = _parts(out, "stem"), _parts(out, "lock"), _parts(out, "cap")
-    assert len(stems) == len(locks) == len(caps) >= len([m for m in trays if _span(m, 0)[0] > 1.0])
+    stems = _parts(out, "over_up")
+    assert {len(_parts(out, k)) for k in PARTS} == {len(stems)} and len(stems) >= len([m for m in trays if _span(m, 0)[0] > 1.0])
     # a seam only where two trays meet: none at the face's left edge, none beside the window
     assert all(_span(m, 0)[0] > 1.0 for m in stems)
     assert not any(_span(m, 1)[0] < 1500 < _span(m, 1)[1] and 2000 <= m["seam_line"] <= 3200 for m in stems)
@@ -80,20 +83,32 @@ def test_vertical_trays_on_a_deck_on_vertical_battens(wall, centres):
 
 
 def test_the_seam_is_a_closed_double_lock(wall):
-    """Two sheets of stem; a cap (the 180° bend) over the top; the lock, three sheets, hanging
-    12 deep beside the stem a 1 mm bend off it. 25 high, 0.6 sheet: 4.6 across."""
+    """Both trays turn up into the seam: the one on the left the undercloak (up, over the top,
+    down as a flange), this one the overcloak (up, over inside it, down, round the flange and
+    back up). Each a sheet thick; the head five sheets, 12 deep, a 1 mm bend off the stem.
+    25 high, 0.6 sheet: 4.0 across."""
+    t = 0.6
     _params, out = _build(wall, plank_orient="vertical", set_out_from_openings=False)
-    for stem, lock, cap in zip(_parts(out, "stem"), _parts(out, "lock"), _parts(out, "cap")):
-        line, face = stem["seam_line"], stem["seam_face"]
-        assert _span(stem, 0) == pytest.approx((line - 0.6, line + 0.6))
-        assert _span(lock, 0) == pytest.approx((line + 1.6, line + 3.4))
-        assert _span(cap, 0) == pytest.approx((line - 0.6, line + 3.4))
-        assert stem["depth"] == pytest.approx(face) and stem["depth"] + stem["thickness"] == pytest.approx(cap["depth"])
-        assert cap["depth"] + cap["thickness"] == pytest.approx(face + 25.0)
-        assert lock["depth"] == pytest.approx(face + 25.0 - 12.0) and lock["depth"] + lock["thickness"] == pytest.approx(cap["depth"])
-        assert _span(stem, 1) == _span(lock, 1) == _span(cap, 1)
+    by = {k: _parts(out, k) for k in PARTS}
+    for i, up in enumerate(by["over_up"]):
+        line, face = up["seam_line"], up["seam_face"]
+        piece = {k: by[k][i] for k in PARTS}
+        assert {m["seam_line"] for m in piece.values()} == {line}
+        assert {_span(m, 1) for m in piece.values()} == {_span(up, 1)}          # one length
+        assert {m["seam_side"] for k, m in piece.items() if k.startswith("under")} == {"-"}
+        assert {m["seam_side"] for k, m in piece.items() if k.startswith("over")} == {"+"}
+        across = lambda k: tuple(round(x - line, 3) for x in _span(piece[k], 0))
+        assert across("under_up") == (-t, 0.0) and across("over_up") == (0.0, t)            # two upstands
+        assert across("under_cap") == (-t, 3.4)                         # over the top: 4.0 across, five sheets and the gap
+        assert [across(k)[1] - across(k)[0] for k in ("over_return", "under_flange")] == pytest.approx([t, t])
+        assert across("over_return")[0] == pytest.approx(t + 1.0)                            # the bend's gap
+        top = max(m["depth"] + m["thickness"] for m in piece.values())
+        low = min(m["depth"] for k, m in piece.items() if k in ("over_return", "over_turn"))
+        assert top == pytest.approx(face + 25.0) and low == pytest.approx(face + 25.0 - 12.0)
+        assert min(m["depth"] for m in piece.values()) == pytest.approx(face)
+        assert all(m["depth"] >= face - 1e-9 for m in piece.values())
     _params, out = _build(wall, plank_orient="vertical", seam_h=38, seam_t=0.8, set_out_from_openings=False)
-    cap = _parts(out, "cap")[0]
+    cap = _parts(out, "under_cap")[0]
     assert cap["depth"] + cap["thickness"] == pytest.approx(cap["seam_face"] + 38.0)
     assert _span(cap, 0)[1] - _span(cap, 0)[0] == pytest.approx(0.8 * 5 + 1.0)
 
@@ -104,26 +119,26 @@ def test_seams_on_the_reveal_corners_run_on_past_the_opening(wall):
     seam centres: no closing cut."""
     _params, out = _build(wall, plank_orient="vertical", seam_centres=430)
     assert out["info"][0]["set_out_from_openings"]
-    lines = {round(m["seam_line"], 1) for m in _parts(out, "stem")}
+    lines = {round(m["seam_line"], 1) for m in _parts(out, "over_up")}
     assert {2000.0, 3200.0} <= lines
     widths = sorted({round(_span(m, 0)[1] - _span(m, 0)[0], 1) for m in _of(out, "plank")})
     assert max(widths) <= 430 and widths == [400.0]           # 2000 = 5 x 400, 1200 = 3 x 400, 4800 = 12 x 400
     for jamb in (2000.0, 3200.0):
-        spans = [_span(m, 1) for m in _parts(out, "stem") if abs(m["seam_line"] - jamb) < 0.1]
+        spans = [_span(m, 1) for m in _parts(out, "over_up") if abs(m["seam_line"] - jamb) < 0.1]
         assert any(hi <= 900 + 1 for _lo, hi in spans) and any(lo >= 2100 - 1 for lo, _hi in spans)   # below and above
         assert not any(lo < 1500 < hi for lo, hi in spans)      # none beside the window: the tray turns into the reveal
     # free set-out instead: the seams at the regular centres
     _params, out = _build(wall, plank_orient="vertical", seam_centres=430, set_out_from_openings=False)
     assert not out["info"][0]["set_out_from_openings"]
-    assert 2000.0 not in {round(m["seam_line"], 1) for m in _parts(out, "stem")}
+    assert 2000.0 not in {round(m["seam_line"], 1) for m in _parts(out, "over_up")}
 
 
 def test_horizontal_trays_seam_along_the_tray_below(wall):
     _params, out = _build(wall, plank_orient="horizontal", seam_centres=430)
     trays = _of(out, "plank")
     assert max(round(_span(m, 1)[1] - _span(m, 1)[0]) for m in trays) == 430
-    stems = _parts(out, "stem")
-    assert stems and all(round(_span(m, 1)[1] - _span(m, 1)[0], 3) == 1.2 for m in stems)     # running along u
+    stems = _parts(out, "over_up")
+    assert stems and all(round(_span(m, 1)[1] - _span(m, 1)[0], 3) == 0.6 for m in stems)     # running along u
     # no seam along the bottom edge of the bottom course
     base = min(_span(m, 1)[0] for m in trays)
     assert all(_span(m, 1)[0] > base for m in stems)
@@ -188,7 +203,7 @@ def test_seams_fold_down_where_they_run_out_not_at_cross_joints(wall, orient):
     params, out = _build(wall, plank_orient=orient, trim=True, plank_len=1500)    # short trays: cross joints
     assert _parse(params)["seam_end"] == "folded"
     sh, folded, joined = 25.0, 0, 0
-    for part in ("stem", "lock", "cap"):
+    for part in PARTS:
         for m, k, lo, hi, joined_lo, joined_hi in _ends(out, part):
             face = m["seam_face"]
             for s in (m["depth"], m["depth"] + m["thickness"]):
@@ -200,7 +215,7 @@ def test_seams_fold_down_where_they_run_out_not_at_cross_joints(wall, orient):
             joined += joined_lo + joined_hi
     assert folded and joined          # both kinds of end are there
     # the head's top is drawn back the full seam height
-    head = next(m for m, *_r, jl, jh in _ends(out, "cap") if not jh)
+    head = next(m for m, *_r, jl, jh in _ends(out, "under_cap") if not jh)
     k = 1 if head["seam_v"] else 0
     top = ring_at(head, 0, head["depth"] + head["thickness"])
     assert _span(head, k)[1] - max(q[k] for q in top) == pytest.approx(sh)
@@ -212,7 +227,7 @@ def test_flat_seam_ends_run_square_to_the_end_of_the_tray(wall, orient):
     assert not any(m.get("vshift") for m in _of(out, "seam"))
     trays = {m["name"]: m for m in _of(out, "plank")}
     flush = 0
-    for part in ("stem", "lock", "cap"):
+    for part in PARTS:
         for m, k, lo, hi, _jl, _jh in _ends(out, part):
             t_lo, t_hi = _span(trays[m["name"].split(" Seam")[0]], k)
             assert t_lo - 0.01 <= lo < hi <= t_hi + 0.01

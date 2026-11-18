@@ -23,9 +23,9 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
     "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#a8c66c", 1.0), "gasket": ("#1c1c1c", 1.0),
     "deck": ("#c9a46a", 1.0), "seam": ("#6f7b88", 1.0)}
-# A standing seam as modelled: a closed double lock. The two upstands make a stem two sheets
-# thick; the top is folded over 180° twice, so the head is five sheets: a cap (the bend) and
-# a lock three sheets thick hanging beside the stem, a bend's width off it, SEAM_LOCK deep.
+# A standing seam as modelled: a closed double lock, sheet by sheet (cladding_geometry.
+# _double_lock): each tray turns up one upstand, and the top is folded over 180° twice, so the
+# head is five sheets, hanging beside the stem a bend's width off it, SEAM_LOCK deep.
 SEAM_GAP, SEAM_LOCK = 1.0, 12.0     # mm – the bend's gap, and the fold's depth (10 lip + bend)
 SEAM_CENTRES = (430.0, 530.0)   # mm – the standard tray widths, seam to seam
 DECK_T = {"boards": 22.0, "ply": 18.0}   # mm – softwood boarding, or WBP plywood
