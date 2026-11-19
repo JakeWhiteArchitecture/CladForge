@@ -1097,6 +1097,37 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || !loaded.restored || !/Not loaded: not a CladForge state file/.test(refusedState) || !noModel.ok || !noModel.back || !sameAgain)
         throw new Error('save and load state did not round-trip: ' + JSON.stringify({ savedLook: savedLook.elevations, loadedLook, loaded, refusedState, noModel, sameAgain }));
 
+    // Add states: a saved state's chains join the job that is open. The state the job was
+    // loaded from adds nothing (every face is already there); with a face deleted first it
+    // brings that face back, under a name that is free, and the rest are left out.
+    const jobNow = () => page.evaluate(() => ({ chains: state.chains.length, elevations: state.elevations.length,
+        names: state.elevations.map(e => e.name).sort().join(','), unique: new Set(state.elevations.map(e => e.name)).size === state.elevations.length,
+        chainNames: new Set(state.chains.map(c => c.name)).size === state.chains.length,
+        resultNames: state.elevations.every(e => e.result.name === e.name), status: document.getElementById('status-chip').textContent }));
+    const beforeAdd = await jobNow();
+    await page.setInputFiles('#state-add', statePath);
+    await page.waitForFunction(() => /^Added 1 of 1 state file/.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
+    const addedSame = await jobNow();
+    await page.evaluate(() => { setActive(state.elevations.length - 1); deleteElevation(); });
+    await settle();
+    const afterDelete = await jobNow();
+    await page.setInputFiles('#state-add', [{ name: 'smoke_out.state.xml', mimeType: 'application/xml', buffer: Buffer.from(stateText) },
+                                            { name: 'drawing.xml', mimeType: 'application/xml', buffer: Buffer.from('<svg/>') }]);
+    await page.waitForFunction(() => /^Added 1 of 2 state files/.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
+    await settle();
+    const addedBack = await jobNow();
+    console.log('add states:', JSON.stringify({ before: [beforeAdd.chains, beforeAdd.elevations], same: addedSame.status,
+                                                afterDelete: afterDelete.elevations, back: addedBack }));
+    if (addedSame.elevations !== beforeAdd.elevations || addedSame.chains !== beforeAdd.chains || !/already in the job/.test(addedSame.status)
+        || /renamed/.test(addedSame.status)        // nothing was added, so nothing was renamed
+        || afterDelete.elevations !== beforeAdd.elevations - 1 || addedBack.elevations !== beforeAdd.elevations
+        || !addedBack.unique || !addedBack.chainNames || !addedBack.resultNames || !/drawing\.xml: not loaded/.test(addedBack.status))
+        throw new Error('adding states did not merge as it should: ' + JSON.stringify({ beforeAdd, addedSame, afterDelete, addedBack }));
+    // back to the job as it was saved, for the steps that follow
+    await page.setInputFiles('#state-file', statePath);
+    await page.waitForFunction(() => /^Loaded /.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
+    await settle();
+
     // Hide elements (H): a click hides the element under it, and clicks then pass through
     // it; a whole type can be hidden; Show all brings everything back. Picking stays off.
     await page.keyboard.press('Escape');

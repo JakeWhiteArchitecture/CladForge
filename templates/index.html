@@ -26,9 +26,10 @@
                 <label class="chk"><input type="checkbox" id="show-model" checked onchange="setLayerVisible('model', this.checked)"> Show host model</label>
                 <div class="row" style="margin-top:6px">
                     <button class="btn btn-secondary btn-sm" id="save-state" onclick="saveState()">Save state (XML)</button>
-                    <label class="btn btn-secondary btn-sm" style="text-align:center">Load state<input type="file" id="state-file" accept=".xml" style="display:none" onchange="onStateChosen(this)"></label>
+                    <label class="btn btn-secondary btn-sm" style="text-align:center" title="Replace the job with a saved state (choose several: the first replaces, the rest are added)">Load state<input type="file" id="state-file" accept=".xml" multiple style="display:none" onchange="onStateChosen(this)"></label>
+                    <label class="btn btn-secondary btn-sm" style="text-align:center" title="Add the chains of one or more saved states to the job that is open">Add states<input type="file" id="state-add" accept=".xml" multiple style="display:none" onchange="onStateChosen(this, true)"></label>
                 </div>
-                <p class="hint">A state file holds every chain, the wall surfaces it is attached to, and every setting. It loads without the IFC; open the IFC first to see the host model, since opening a model starts afresh.</p>
+                <p class="hint">A state file holds every chain, the wall surfaces it is attached to, and every setting. It loads without the IFC; open the IFC first to see the host model, since opening a model starts afresh. <b>Load state</b> replaces the job; <b>Add states</b> adds the chains of one or more saved states to the job that is open, each chain keeping its own settings. A name already in use gets the next free one, and a wall face the job already has is left out.</p>
             </div>
 
             <div class="section">
