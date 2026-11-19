@@ -28,7 +28,9 @@ jobs:
 
   browser:
     name: Browser (smoke)
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: Playwright 1.56 has no Chromium for Ubuntu 26.04 yet. Move this
+    # and the Playwright version below together.
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
