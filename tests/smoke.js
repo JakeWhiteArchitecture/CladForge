@@ -1494,11 +1494,12 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     // A second model: two roof slopes falling towards each other. They stay in their own
     // chains, are joined by the valley they share, and one of them carries its gutter.
     await page.setInputFiles('#ifc-file', path.join(__dirname, 'valley_roof.ifc'));
-    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2 && !state.elevations.length,
-                               null, { timeout: 120000 });
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
     await page.evaluate(() => setPickMode('pick'));
     const seamRoof = () => page.evaluate(() => { openWizard(); WIZ.draft.type = 'seam'; WIZ.draft.orient = 'vertical'; wizBuild(); dismissLevels(); });
-    const picked = n => page.waitForFunction(n => state.elevations.length === n && state.elevations.every(e => !e._running && (e.result || e.error)),
+    const picked = n => page.waitForFunction(n => state.elevations.length === n && state.elevations.every(e => !e._running && e.picks.length && (e.result || e.error)),
                                              n, { timeout: 120000 });
     await lookAt('Roof A', [0.05, 0.87, 0.5]);
     await picked(1);
