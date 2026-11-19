@@ -47,6 +47,7 @@ _IFC_TYPE_MAP = {
     "seam":           ("IfcCovering", "CLADDING",    "Standing seam"),
     "ridge_cap":      ("IfcCovering", "ROOFING",     "Ridge cap"),
     "ridge_filler":   ("IfcMember",   "USERDEFINED", "Vented ridge filler"),
+    "verge_strip":    ("IfcCovering", "ROOFING",     "Verge strip"),
 }
 _MATERIALS = {
     "batten": ("Timber (softwood) batten", "wood"), "counter_batten": ("Timber (softwood) batten", "wood"),
@@ -59,6 +60,7 @@ _MATERIALS = {
     "deck": ("Timber deck (softwood boarding or WBP plywood)", "wood"),
     "seam": ("Standing seam sheet", "metal"),
     "ridge_cap": ("Ridge cap sheet", "metal"), "ridge_filler": ("Vented foam filler", "rubber"),
+    "verge_strip": ("Verge strip sheet", "metal"),
 }
 
 

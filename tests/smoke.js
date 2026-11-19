@@ -1467,6 +1467,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  cards: [...document.querySelectorAll('.elev-meta')].slice(-2).map(c => c.textContent.replace(/^.*openings?/, '')),
                  caps: named(a, /Ridge Cap/).length + named(b, /Ridge Cap/).length,
                  fillers: [named(a, /Ridge Filler/).length, named(b, /Ridge Filler/).length],
+                 upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Strip/).length + named(b, /Verge Strip/).length,
                  seams: [seams(a), seams(b)],
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)) };
     });
@@ -1475,7 +1476,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || !/ridge with/.test(ridge.cards[0]) || !/carries the cap/.test(ridge.cards.join()) || ridge.caps !== 1
         || ridge.fillers[0] < 4 || ridge.fillers[0] !== ridge.fillers[1] || ridge.seams[0].length < 4
         || ridge.seams[0].length !== ridge.seams[1].length || ridge.seams[0].some((x, k) => Math.abs(x - ridge.seams[1][k]) > 20)
-        || ridge.check.length !== 1)
+        || ridge.check.length !== 1 || ridge.upstands < 4 || ridge.verges !== 4)
         throw new Error('the two roof slopes did not join at a ridge: ' + JSON.stringify(ridge));
     await page.evaluate(async () => { for (let k = 0; k < 2; k++) { setActive(state.elevations.length - 1); deleteElevation(); await settled(); } });
 

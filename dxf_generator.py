@@ -231,7 +231,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for m in by_elev.get(name, []):
             if m["ifc_type"] == "reveal":
                 continue        # a reveal lining is perpendicular to this view
-            if m["ifc_type"] in ("corner_profile", "corner_trim", "ridge_cap"):
+            if m["ifc_type"] in ("corner_profile", "corner_trim", "ridge_cap", "verge_strip"):
                 continue        # its profile is a section; the elevation shows its strip
             layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
             for k in range(1 + len(m.get("holes") or [])):
@@ -240,6 +240,8 @@ def meshes_to_dxf_string(meshes, params, infos=None):
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         if info.get("ridge_strip"):                        # the leg of the ridge cap over this slope
             dxf.add_ring(info["ridge_strip"], "CORNER_PROFILE", ox, 0.0)
+        for ring in info.get("verge_strips") or []:        # each verge strip, from its lap on the deck to its nose
+            dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         for d in [d for d in dims if d["elevation"] == name]:
             _draw_dim_line(dxf, (d["p1"][0] + ox, d["p1"][1]), (d["p2"][0] + ox, d["p2"][1]),
                            d["offset"], d["label"], tuple(d["norm"]))

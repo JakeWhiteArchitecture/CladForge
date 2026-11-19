@@ -151,7 +151,7 @@ def test_the_cladding_stops_the_vent_slot_short_and_the_structure_meets(kw):
     _link, _params, out = _roof(**kw)
     kinds = set()
     for m in out["geometry"]:
-        if m["ifc_type"] in ("ridge_cap", "ridge_filler"):
+        if m["ifc_type"] in ("ridge_cap", "ridge_filler", "verge_strip"):
             continue
         near, _far = _off_ridge(m)
         kinds.add(m["ifc_type"])

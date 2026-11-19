@@ -16,6 +16,7 @@ from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip
 from cladding_edges import mitre_to_linings, finish_seams
 from cladding_checks import check_rules as _check_rules
 from cladding_ridge import ridge_ends, ridge_parts
+from cladding_verge import verge_parts
 
 
 def _build_all(p):
@@ -113,6 +114,7 @@ def _preview_one(params):
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
     meshes = ridge_ends(meshes, p, infos)    # two slopes meeting at a ridge: cut to it, the vent slot left
     meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
+    meshes = verge_parts(meshes, p, infos)   # a roof slope's free side edges: the last tray out over a verge strip
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too

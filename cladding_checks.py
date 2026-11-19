@@ -6,6 +6,7 @@ from cladding_constants import (_parse, PLANK_SPAN_TABLE, DECK_SPAN, MIN_CAVITY,
                                 MAX_BATTEN_SPAN)
 from cladding_primitives import ROW_MIN
 from cladding_corners import PANEL_SIZES as PROFILE_SIZES, TRIM_SIZE, TRIM_LEG, FLANGE_P
+from cladding_verge import VERGE_SEAM
 
 MIN_CLOSING_CUT = 100.0   # mm – narrower closing pieces are hard to fix and look wrong
 SEAM_MIN_PITCH = 3.0      # deg – below this a double-lock standing seam is generally not used at all
@@ -153,6 +154,24 @@ def check_rules(params, infos=None):
             else:
                 add("Ridge", "pass", what + ", the trays turned up 15 mm. The ridge clips, the insect mesh and laps between "
                     "lengths of cap are not drawn", r["length"])
+    # A verge's last seam stands 150 to 370 mm in from the tray's edge.
+    for i in infos:
+        verges = i.get("verges") or []
+        if not verges:
+            continue
+        lo, hi = VERGE_SEAM
+        side = {"l": "left", "r": "right"}
+        off = [v for v in verges if v.get("last_seam") is not None and not (lo - 0.5 <= v["last_seam"] <= hi + 0.5)]
+        if off:
+            add("Verge", "warn", "%s: the last seam is %s from the tray's edge at the verge; the detail takes %.0f to %.0f mm. "
+                "Move the setting-out (the offset) or change the tray width" % (
+                    i["elevation"], " and ".join("%.0f mm (%s)" % (v["last_seam"], side[v["side"]]) for v in off), lo, hi),
+                off[0]["last_seam"])
+        else:
+            add("Verge", "pass", "%s: a verge strip on the %s, the last seam %s from the tray's edge (%.0f to %.0f mm)" % (
+                i["elevation"], " and ".join(side[v["side"]] for v in verges),
+                " and ".join("%.0f mm" % v["last_seam"] for v in verges if v.get("last_seam") is not None) or "none", lo, hi),
+                len(verges))
     # Each corner end carries its own detail, so count the ends per detail.
     per = {}
     for c in (i.get("corner") or {} for i in infos):

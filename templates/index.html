@@ -149,6 +149,8 @@
                     <div class="field"><label>Bottom ends <span class="unit">the base, over heads</span></label>
                         <select id="edge-seamBottom" onchange="onEdgeField('seamBottom', this.value)"><option value="folded" selected>Folded</option><option value="flat">Flat</option></select></div>
                 </div>
+                <div class="field"><label>Verge strip <span class="unit">roof slopes: the free side edges, the last tray welted over a strip. Switch off a side that runs into a wall</span></label>
+                    <select id="edge-verge" onchange="onEdgeField('verge', this.value)"><option value="both" selected>Both sides</option><option value="start">Left only (of the chain's first face)</option><option value="end">Right only</option><option value="none">None</option></select></div>
                 </div>
                 <p class="hint">Offsets pull the battens, counter-battens and boards back from the top, bottom and free-end edges. Chain corners and window or door jambs take no offset; where boards are mitred the mitre gap opens between them. In the 2D view the edges are drawn in these colours: click one to type its value. Every value applies to the whole chain.</p>
             </div>
