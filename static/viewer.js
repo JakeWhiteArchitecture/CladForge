@@ -495,7 +495,10 @@ function meshTriangles(mesh) {
     return faceTriangles(mesh, Array.from({ length: count }, (_, i) => i));
 }
 
+function triCount(mesh) { const g = mesh.geometry; return (g.index ? g.index.count : g.attributes.position.count) / 3; }
+
 const CONTEXT_TRI_BUDGET = 60000;   // the engine runs in a fixed WASM heap: past this it dies
+const POSTISH = /^IFC(COLUMN|MEMBER|BUILDINGELEMENTPROXY|BUILDINGELEMENTPART|BEAM|PLATE|ELEMENTASSEMBLY)/i;   // fabric_extract.POST_TYPES and POST_LIKE_TYPES
 
 function contextFor(pickedMeshes, tris, margin, outward) {
     // Every other element that could touch the picked face: its bounding box overlaps the
@@ -516,12 +519,15 @@ function contextFor(pickedMeshes, tris, margin, outward) {
             const s = n.x * x + n.y * y + n.z * z - d; lo = Math.min(lo, s); hi = Math.max(hi, s);
         }
         if (hi < -margin || lo > margin) continue;
-        near.push({ meta, reach: Math.min(Math.abs(lo), Math.abs(hi)) });   // how close it comes to the face
+        near.push({ meta, reach: Math.min(Math.abs(lo), Math.abs(hi)),      // how close it comes to the face
+                    post: POSTISH.test(meta.type || '') && triCount(meta.mesh) <= 500 ? 0 : 1 });
     }
     // A big model can offer far more geometry than the engine's heap will hold, and
     // overrunning it kills the runtime outright rather than raising. Send the elements
     // that come closest to the face and report the rest rather than risking that.
-    near.sort((a, b) => a.reach - b.reach);
+    // What may be a client batten goes first: a dozen triangles each, and the set-out hangs
+    // on them, so a wall crowded with heavy windows never squeezes them out.
+    near.sort((a, b) => a.post - b.post || a.reach - b.reach);
     const elements = [];
     let used = 0, dropped = 0;
     for (const { meta } of near) {
@@ -614,6 +620,29 @@ function prismGeometry(m) {
     return geo;
 }
 
+// One prism's body, its corner ends applied: local z from 0 at its own depth.
+function prismBody(m) {
+    const geo = m.vshift ? prismGeometry(m) : new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false });
+    applyCorner(geo, m);
+    return geo;
+}
+
+// A plank of a custom profile (cladding_profiles): its section's slabs, each a prism at
+// its own depth, as one body placed at the plank's depth.
+function partsGeometry(m) {
+    const pos = [];
+    for (const part of m.parts) {
+        let g = prismBody(part);
+        if (g.index) g = g.toNonIndexed();
+        const p = g.attributes.position, dz = part.depth - m.depth;
+        for (let i = 0; i < p.count; i++) pos.push(p.getX(i), p.getY(i), p.getZ(i) + dz);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
+    return geo;
+}
+
 function highlightCorner(frame, u, height) {
     // Flash the corner edge so a row in the panel points at something in the model.
     clearGroup(cornerGroup);
@@ -637,9 +666,8 @@ function renderGeometry(meshes) {
         const layer = _layerOf[m.ifc_type] || 'cladding';
         if (!byLayer[layer]) { byLayer[layer] = new THREE.Group(); byLayer[layer].name = layer; cladGroup.add(byLayer[layer]); }
         let geo;
-        try { geo = m.vshift ? prismGeometry(m) : new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false }); }
+        try { geo = m.parts && m.parts.length ? partsGeometry(m) : prismBody(m); }
         catch (e) { continue; }
-        applyCorner(geo, m);
         // A standing seam's deck lies right behind trays under a millimetre thick: pushed back in
         // depth, so from across the street it does not show through them.
         const behind = m.ifc_type === 'deck';

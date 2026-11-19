@@ -72,7 +72,7 @@ def _parse(params):
     p["plank_orient"] = "vertical" if params.get("plank_orient") == "vertical" else "horizontal"
     # Standing seam is a plank profile: trays a seam-centre wide, run and joined like planks,
     # on a continuous deck (and membrane) on vertical battens, so the cavity always drains.
-    p["plank_profile"] = "seam" if params.get("plank_profile") == "seam" else "board"
+    p["plank_profile"] = params.get("plank_profile") if params.get("plank_profile") in ("seam", "custom") else "board"
     p["seam"] = p["cladding_type"] == "plank" and p["plank_profile"] == "seam"
     if p["seam"]:
         p["seam_centres"] = min(SEAM_CENTRES, key=lambda c: abs(c - p["seam_centres"]))
@@ -81,6 +81,17 @@ def _parse(params):
     # Full-length trays: each tray runs its whole run in one piece (cut from the coil), so
     # no tray is laid above another and there are no cross joints. Standing seam only.
     p["seam_full"] = p["seam"] and bool(params.get("seam_full_length"))
+    # A custom profile is a fixed plank, its real section (cladding_profiles): a library one
+    # by key, or one read from a drawing. It is laid as a lapped board, the section's full
+    # width at its cover, so the lap is the difference; it sets the plank's size.
+    p["section"] = None
+    if p["cladding_type"] == "plank" and p["plank_profile"] == "custom":
+        from cladding_profiles import section, DEFAULT
+        p["section"] = section(params.get("custom_section") or params.get("custom_profile") or DEFAULT) \
+            or section(DEFAULT)
+        sec = p["section"]
+        p["plank_w"], p["plank_t"] = sec["width"], sec["thickness"]
+        p["plank_lap"], p["plank_gap"] = round(sec["width"] - sec["cover"], 3), 0.0
     p["seam_deck"] = "boards" if params.get("seam_deck") == "boards" else "ply"     # 18 WBP ply unless boarding
     # Where a seam runs out (the base, the top, an opening): folded down to the tray on a
     # slope, or run to the tray's end and stopped square, flush with it.

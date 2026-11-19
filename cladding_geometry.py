@@ -506,11 +506,13 @@ def post_key(u):
     return str(int(math.floor(float(u) + 0.5)))      # half up, as the 2D view's Math.round
 
 
-def post_state(elev, u):
+def post_state(elev, u, default="on"):
     """A model column's use, as toggled in the 2D view: "on" (a batten a joint may land on,
-    the default), "fix" (a batten for fixing only: no joint on it), "off" (not used)."""
-    st = (elev.get("post_states") or {}).get(post_key(u), "on")
-    return st if st in POST_STATES else "on"
+    the default), "fix" (a batten for fixing only: no joint on it), "off" (not used: the
+    default for something batten-shaped that is not a column or member, until turned on)."""
+    default = default if default in POST_STATES else "on"
+    st = (elev.get("post_states") or {}).get(post_key(u), default)
+    return st if st in POST_STATES else default
 
 
 def _posts(p, elev, info):
@@ -522,7 +524,8 @@ def _posts(p, elev, info):
     Every column and its state go to info["posts"] for the 2D view."""
     cols = sorted(elev.get("posts") or [], key=lambda q: q["u"]) if p.get("battens_from_model", True) else []
     info["posts"] = [{"u": round(float(q["u"]), 1), "v0": q.get("v0"), "v1": q.get("v1"), "w": q.get("w"),
-                      "state": post_state(elev, q["u"])} for q in cols]
+                      "state": post_state(elev, q["u"], q.get("default", "on")), "default": q.get("default", "on"),
+                      "name": q.get("name", "")} for q in cols]
     us = [q["u"] for q in info["posts"] if q["state"] != "off"]
     info["model_posts"] = len(us)
     return us or None
@@ -653,8 +656,11 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
                 piece += 1
                 label = "%s %s C%d-%d" % (name, "Tray" if p["seam"] else "Plank", j + 1, piece)
                 ring = _rect(s, lo, e, v + face)
-                meshes.append(_tray(p, ring, depth, frame, label, name) if p["seam"]
-                              else _prism(ring, depth, p["plank_t"], frame, "plank", label, name))
+                plank = _tray(p, ring, depth, frame, label, name) if p["seam"] \
+                    else _prism(ring, depth, p["plank_t"], frame, "plank", label, name)
+                if p.get("section"):                 # its section's w = 0 at the course's foot
+                    plank.update(section_at=v, section_axis="v")
+                meshes.append(plank)
                 if p["seam"]:                        # the seam with the tray below, along its bottom edge
                     for a2, b2 in _shared(s, e, below):
                         _seam(p, meshes, frame, label, name, depth + p["plank_t"], False, lo, a2, b2)
@@ -701,8 +707,11 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1
-                meshes.append(_prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
-                                     "%s Plank C%d-%d" % (name, j + 1, piece), name))
+                plank = _prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
+                               "%s Plank C%d-%d" % (name, j + 1, piece), name)
+                if p.get("section"):                 # its section's w = 0 at its left edge
+                    plank.update(section_at=u, section_axis="u")
+                meshes.append(plank)
         beside = mine
     left_cut = (starts[0] + face) if starts and starts[0] < 0 else 0.0
     right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0
