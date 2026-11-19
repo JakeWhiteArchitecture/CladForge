@@ -17,7 +17,7 @@ import cladding_corners as profiles
 from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
                                  base_level, corner_ends, openings, buildup_depth, clip_bounds,
-                                 clip_bounds_v, panel_rows, row_height, bays_on_posts)
+                                 clip_bounds_v, panel_rows, row_height, bays_on_posts, end_master)
 
 
 def build_elevation(p, elev, layout=None):
@@ -95,8 +95,10 @@ def build_elevation(p, elev, layout=None):
     # Each end takes its own corner's detail: a lap at one end and a mitre at the other
     # treat the layers behind the boards differently, so the ends are applied apart.
     left, right, (d_left, d_right) = corner_ends(elev, p)
-    _apply_corner(meshes, {lo: left}, d_left, skip=("reveal", "closer"))
-    _apply_corner(meshes, {hi: right}, d_right, skip=("reveal", "closer"))
+    # behind a standing seam's corner seam the deck and battens mitre, as behind a mitre
+    behind = lambda d: "mitre" if p["seam"] and d == "lap" else d   # noqa: E731
+    _apply_corner(meshes, {lo: left}, behind(d_left), skip=("reveal", "closer"))
+    _apply_corner(meshes, {hi: right}, behind(d_right), skip=("reveal", "closer"))
     # A mitre leaves the chain's mitre gap between the two boards, straight across the
     # joint: each board's end is pulled back half of it. The layers behind still meet.
     gap = edge_settings(elev)["gap"]
@@ -107,7 +109,10 @@ def build_elevation(p, elev, layout=None):
             c = m.get("corner") or {}
             if m["ifc_type"] in ("panel", "plank") and ("k_" + side) in c and abs(c.get("u_" + side, -1e9) - u_end) < 0.6:
                 m["corner"] = dict(c, **{"ext_" + side: c.get("ext_" + side, 0.0) - mitre_pullback(gap, k)})
-    _profiled_corners(p, elev, meshes, prof, edges, depth, ((lo, left, d_left, "l"), (hi, right, d_right, "r")))
+    if p["seam"]:
+        _seam_corners(p, elev, meshes, info, depth, ((lo, left, d_left, "l"), (hi, right, d_right, "r")))
+    else:
+        _profiled_corners(p, elev, meshes, prof, edges, depth, ((lo, left, d_left, "l"), (hi, right, d_right, "r")))
     _across_corners(meshes, ((lo, left, "l"), (hi, right, "r")))
     if p["cladding_type"] == "panel":
         _gaskets(p, elev, meshes, depth - board)
@@ -130,6 +135,84 @@ def build_elevation(p, elev, layout=None):
     info["clad_area"] = round(outline.area / 1e6, 3)  # m², net of openings and splash zones
     info["n_boards"] = sum(1 for m in meshes if m["ifc_type"] in ("plank", "panel"))
     return meshes, dims, info
+
+
+SEAM_FLASHING = 50.0     # mm – each leg of a standing seam's corner flashing strip
+
+
+def _seam_corners(p, elev, meshes, info, face, ends):
+    """A standing seam chain's external right-angled corners, where the corner is not left
+    mitred (the deck and battens behind mitre either way).
+
+    Seam ("lap"): a seam stood on the corner like the one on a window's reveal corner. The
+    face that masters the corner carries it: its trays stop SEAM_AIR short of the other
+    face's metal and turn up, the other face's trays run on past the corner to this
+    face's metal and on out as the seam's second upstand, and the two are locked in a
+    double lock lying on the master face, its head turned away from the corner. Swapping
+    the master puts the seam on the other face (left or right of the corner).
+
+    Flashing ("profile"): the trays meet on the bisector as if mitred, and a flashing strip
+    covers the corner, a leg SEAM_FLASHING wide on each face, mitred to the other's."""
+    name, frame = elev["name"], elev["frame"]
+    t = p["plank_t"]
+    back = face - t                                     # the back of the metal, as depth
+    gap = edge_settings(elev)["gap"]
+    made = {"seam": 0, "flashing": 0}
+    for u_end, (k, _ext), detail, side in ends:
+        if not k or k < 0 or detail == "butt":
+            continue
+        toward = 1.0 if side == "r" else -1.0
+        seam = detail == "lap"
+        master = seam and end_master(elev, side)
+        # The metal's end: square for a corner seam (this face's stops SEAM_AIR short of the
+        # other's metal and turns up; the other's runs on to this face's metal), else on the
+        # bisector, pulled back half the mitre gap where it is left as a mitre.
+        k_end = 0.0 if seam else k
+        ext = ((back - SEAM_AIR) if master else face) if seam else (-mitre_pullback(gap, k) if detail == "mitre" else 0.0)
+        trays = []
+        for m in meshes:
+            c = m.get("corner") or {}
+            if m["ifc_type"] in ("plank", "seam") and ("k_" + side) in c and abs(c["u_" + side] - u_end) < 0.6:
+                m["corner"] = dict(c, **{"k_" + side: k_end, "ext_" + side: ext})   # ends on the corner: horizontal trays
+                if m["ifc_type"] == "plank":
+                    trays.append(m)
+            elif m["ifc_type"] == "plank" and not m.get("holes") and not c:
+                # Vertical trays are set out across the face and run on past its end: the one
+                # that reaches the corner is cut there and given the same end.
+                us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+                near, far = (min(us), max(us)) if toward > 0 else (max(us), min(us))
+                if (far - u_end) * toward < -0.5 or (near - u_end) * toward > -1.0:
+                    continue
+                lo_u, hi_u = sorted((near, u_end))
+                m["profile"] = _rect(lo_u, min(vs), hi_u, max(vs))
+                m["corner"] = {"k_" + side: k_end, "ext_" + side: ext, "u_" + side: u_end}
+                trays.append(m)
+        if not trays or detail == "mitre":
+            continue
+        if detail == "profile":
+            v0 = min(q[1] for m in trays for q in m["profile"])
+            v1 = max(q[1] for m in trays for q in m["profile"])
+            a, b = sorted((u_end, u_end - toward * SEAM_FLASHING))
+            leg = _prism(_rect(a, v0, b, v1), face, t, frame, "seam", "%s Corner Flashing" % name, name)
+            leg["opacity"] = 1.0
+            leg["corner"] = {"k_" + side: k, "ext_" + side: 0.0, "u_" + side: u_end}
+            leg["flashing"] = True
+            meshes.append(leg)
+            made["flashing"] += 1
+            continue
+        if not master:
+            continue
+        line = u_end + toward * (back - SEAM_AIR / 2.0)
+        for m in trays:
+            vs = [q[1] for q in m["profile"]]
+            n = len(meshes)
+            _seam(p, meshes, frame, m["name"], name, face, True, line, min(vs), max(vs), mirror=toward > 0)
+            for q in meshes[n:]:
+                # past the wall's corner line on purpose: trimmed in height only, like a corner timber
+                q["clip_v_at"] = sorted((u_end - toward * 2.0, u_end - toward * 0.5))
+                q["corner_seam"] = True
+            made["seam"] += 1
+    info["corner_seams"], info["corner_flashings"] = made["seam"], made["flashing"]
 
 
 def _profiled_corners(p, elev, meshes, prof, edges, face, ends):

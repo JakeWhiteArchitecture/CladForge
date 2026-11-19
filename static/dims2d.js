@@ -75,8 +75,8 @@ function cornerBadges(e, layer) {
         el.className = 'dim2d corner-badge';
         el.dataset.key = 'corner:' + i;
         el.textContent = CORNER_LETTER[detail] + (detail === 'lap' ? ' · ' + master : '');
-        el.title = `${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner: ${CORNER_LABEL[detail]}`
-            + (detail === 'lap' ? `, ${master} masters` : '');
+        el.title = `${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner: ${cornerLabel(detail)}`
+            + (detail === 'lap' ? (seamChain() ? `, on ${master}` : `, ${master} masters`) : '');
         const item = { corner: { chain: e.chain.name, index: i }, el,
                        at: new THREE.Vector3(u, box.v1 + 350, 0).applyMatrix4(M) };
         el.onclick = ev => { ev.stopPropagation(); openCornerEditor(item); };
@@ -396,7 +396,7 @@ function detailBlock(e, item, box) {
             if (sw) sw.onclick = () => { swapCorner(e.chain.name, i); closeDimEditor(); };
         };
         return `<div class="d2-row">Detail <select id="o2-detail">${cornerOptions(c.lo.detailHi || '', profileOffered(c.k), true)}</select>
-            ${detail === 'lap' ? '<button class="mini" id="o2-swap">Swap master</button>' : ''}</div>`;
+            ${detail === 'lap' ? `<button class="mini" id="o2-swap">${seamChain() ? 'Seam on the other face' : 'Swap master'}</button>` : ''}</div>`;
     }
     if (kind !== 'jamb' && kind !== 'head') return '';
     const o = openingAt(e, kind, item.edge.p1);
@@ -627,9 +627,9 @@ function openCornerEditor(item) {
     const detail = cornerDetailInForce(c), own = c.lo.detailHi || '';
     const panel = toggleValue('cladding-type') === 'panel';
     const ed = document.getElementById('dim2d-editor');
-    ed.innerHTML = `<div class="d2-title">${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner · ${CORNER_LABEL[detail]}</div>
+    ed.innerHTML = `<div class="d2-title">${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner · ${cornerLabel(detail)}</div>
         <select id="d2-corner">${cornerOptions(own, profileOffered(c.k), true)}</select>
-        ${detail === 'lap' ? `<button class="mini" id="d2-swap">Swap master</button>` : ''}
+        ${detail === 'lap' ? `<button class="mini" id="d2-swap">${seamChain() ? 'Seam on the other face' : 'Swap master'}</button>` : ''}
         <button class="mini" id="d2-close">Done</button>`;
     ed.style.display = '';
     document.getElementById('d2-corner').onchange = ev => { setCornerDetail(name, index, ev.target.value); closeDimEditor(); };

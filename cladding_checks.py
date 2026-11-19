@@ -99,8 +99,12 @@ def check_rules(params, infos=None):
     if per:
         add("Corners", "pass", "; ".join("%d corner end(s), %s" % (n, {
             "mitre": "mitred: the whole buildup wraps on the bisector plane",
-            "lap": "master: one board masters the corner and the other stops a joint gap clear of it",
-            "profile": "profiled: an aluminium outer corner profile, the panels butting its nose" if p["cladding_type"] == "panel"
+            "lap": "a seam stood on the corner: one face's trays turn up, the other's run on past as the second "
+                   "upstand, double-locked on the face that carries it" if p["seam"]
+                   else "master: one board masters the corner and the other stops a joint gap clear of it",
+            "profile": "a corner flashing strip over the trays, which meet on the bisector (detail to be agreed with "
+                       "the roofing contractor)" if p["seam"]
+                       else "profiled: an aluminium outer corner profile, the panels butting its nose" if p["cladding_type"] == "panel"
                        else "profiled: a Marley-type external corner profile, a %.0f mm nose with %.0f mm flanges flush "
                        "with the planks' backs, the planks butting its nose" % (TRIM_SIZE, FLANGE_P),
             "butt": "square: both boards stop at the wall corner"}[d]) for d, n in sorted(per.items())))

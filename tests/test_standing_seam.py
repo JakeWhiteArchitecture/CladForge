@@ -17,6 +17,7 @@ from cladding_preview import generate_preview  # noqa: E402
 from cladding_constants import _parse  # noqa: E402
 from cladding_primitives import buildup_depth  # noqa: E402
 from cladding_nesting import chain_plan  # noqa: E402
+from cladding_geometry import SEAM_PARTS  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -360,3 +361,99 @@ def test_full_length_trays_cut_from_the_coil_and_checked(wall):
     assert _parse({"cladding_type": "plank", "plank_profile": "board", "seam_full_length": True})["seam_full"] is False
     params, out = _build(wall, seam_full_length=True)
     assert {c["name"]: c for c in check_rules(params, out["info"])}["Tray length"]["status"] == "pass"
+
+
+# ── external corners: a seam on the corner, or a flashing strip ────────────
+
+def _corner_pair(wall, detail, master_first=True, **kw):
+    from synthetic import corner_payload
+    with contextlib.redirect_stdout(io.StringIO()):
+        b = extract_elevation(corner_payload())
+    common = dict(chain="Chain 1", chain_reversed=False, offset=0)
+    ra = dict(wall, chain_start=0, corner_hi=1.0, master_hi=master_first, detail_hi=detail, **common)
+    rb = dict(b, chain_start=wall["width"], corner_lo=1.0, master_lo=not master_first, detail_lo=detail, **common)
+    params = dict({"elevations": [ra, rb], "cladding_type": "plank", "plank_profile": "seam", "trim": True,
+                   "set_out_from_openings": False}, **kw)
+    with contextlib.redirect_stdout(io.StringIO()):
+        return params, generate_preview(params)
+
+
+def _reach(out, elevation, kind, side):
+    """How far the outer face of *kind* runs toward the corner on *elevation*."""
+    from cladding_primitives import ring_at
+    us = [q[0] for m in out["geometry"] if m["elevation"] == elevation and m["ifc_type"] == kind
+          for q in ring_at(m, 0, m["depth"] + m["thickness"])]
+    return max(us) if side == "r" else min(us)
+
+
+@pytest.mark.parametrize("orient", ["vertical", "horizontal"])
+@pytest.mark.parametrize("on_a", [True, False])
+def test_a_seam_on_the_corner_lies_on_the_face_that_masters_it(wall, orient, on_a):
+    """The master face's trays stop the seam's air short of the other face's metal and turn
+    up; the other's run on to the master's face and out as the second upstand; the double
+    lock lies on the master face, its head turned away from the corner."""
+    from cladding_constants import SEAM_AIR
+    params, out = _corner_pair(wall, "lap", on_a, plank_orient=orient)
+    face = out["info"][0]["total_depth"]
+    t = _parse(params)["plank_t"]
+    carries, other = ("Elevation A", "Elevation B") if on_a else ("Elevation B", "Elevation A")
+    end = {"Elevation A": (8000.0, 1.0, "r"), "Elevation B": (0.0, -1.0, "l")}
+    u0, toward, side = end[carries]
+    assert (_reach(out, carries, "plank", side) - u0) * toward == pytest.approx(face - t - SEAM_AIR)
+    u1, toward1, side1 = end[other]
+    assert (_reach(out, other, "plank", side1) - u1) * toward1 == pytest.approx(face)
+    # behind them the deck mitres, out to its own outer face
+    assert (_reach(out, carries, "deck", side) - u0) * toward == pytest.approx(face - t - 2.0)
+    seam = [m for m in out["geometry"] if m.get("corner_seam")]
+    assert seam and {m["elevation"] for m in seam} == {carries}
+    assert {m["seam_part"] for m in seam} == set(SEAM_PARTS) and all(m.get("clip_v_at") for m in seam)
+    # its outer upstand is in line with the other face's metal, and its head is on the carrying face
+    xs = [(q[0] - u0) * toward for m in seam for q in m["profile"]]
+    assert max(xs) == pytest.approx(face) and min(xs) < face - t - SEAM_AIR - 5.0
+    assert [i.get("corner_seams", 0) > 0 for i in out["info"]] == [on_a, not on_a]
+    assert not [m for m in out["geometry"] if m.get("flashing")]
+
+
+@pytest.mark.parametrize("orient", ["vertical", "horizontal"])
+def test_a_flashing_strip_over_trays_that_meet_as_if_mitred(wall, orient):
+    from cladding_geometry import SEAM_FLASHING
+    params, out = _corner_pair(wall, "profile", plank_orient=orient)
+    face = out["info"][0]["total_depth"]
+    t = _parse(params)["plank_t"]
+    for elevation, u0, toward, side in (("Elevation A", 8000.0, 1.0, "r"), ("Elevation B", 0.0, -1.0, "l")):
+        assert (_reach(out, elevation, "plank", side) - u0) * toward == pytest.approx(face)      # on the bisector
+        legs = [m for m in out["geometry"] if m.get("flashing") and m["elevation"] == elevation]
+        assert legs                    # one leg, in as many lengths as the cladding there is broken into
+        for leg in legs:
+            us = [q[0] for q in leg["profile"]]
+            assert max(us) - min(us) == pytest.approx(SEAM_FLASHING) and leg["depth"] == pytest.approx(face)
+            assert leg["thickness"] == pytest.approx(t) and leg["corner"]["k_" + side] == 1.0
+    assert not [m for m in out["geometry"] if m.get("corner_seam")]
+    assert not [m for m in out["geometry"] if m["ifc_type"] in ("corner_trim", "corner_profile")]
+
+
+def test_mitred_vertical_trays_reach_the_corner_too(wall):
+    """Vertical trays run on past the end of the face; the one at the corner is cut there
+    and mitred, less half the mitre gap, like a horizontal tray's end."""
+    _params, v = _corner_pair(wall, "mitre", plank_orient="vertical")
+    _params, h = _corner_pair(wall, "mitre", plank_orient="horizontal")
+    assert _reach(v, "Elevation A", "plank", "r") == pytest.approx(_reach(h, "Elevation A", "plank", "r"))
+    assert _reach(v, "Elevation A", "plank", "r") > 8040
+
+
+def test_corner_seam_and_flashing_checks_and_export(wall, tmp_path):
+    import ifcopenshell
+    from cladding_preview import check_rules
+    from ifc_generator import meshes_to_ifc
+    for detail, words in (("lap", "a seam stood on the corner"), ("profile", "corner flashing strip")):
+        params, out = _corner_pair(wall, detail)
+        corners = [c["message"] for c in check_rules(params, out["info"]) if c["name"] == "Corners"]
+        assert corners and words in corners[0]
+        ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
+        names = [e.Name for e in ifc.by_type("IfcCovering")]
+        assert any("Corner Flashing" in n for n in names) == (detail == "profile")
+    # a re-entrant corner has neither: it stays mitred
+    from cladding_primitives import corner_detail
+    p = _parse({"cladding_type": "plank", "plank_profile": "seam"})
+    assert corner_detail(p, "lap", -1.0) == "mitre" and corner_detail(p, "profile", -1.0) == "mitre"
+    assert corner_detail(p, "lap", 1.0) == "lap" and corner_detail(p, "profile", 1.0) == "profile"
