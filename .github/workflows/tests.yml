@@ -44,7 +44,19 @@ jobs:
           node-version: "22"
       # the version the test is run with by hand; Chromium to match
       - run: npm install --no-save playwright@1.56.1
-      - run: npx playwright install --with-deps chromium
+      # The browser is kept between runs, so only the first run downloads it, and only the
+      # headless shell the test uses (not the full browser as well).
+      - name: Browser cache
+        id: browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-1.56.1-ubuntu-24.04-shell
+      - name: Download the browser
+        if: steps.browser.outputs.cache-hit != 'true'
+        run: npx playwright install --only-shell chromium
+      - name: System packages the browser needs
+        run: npx playwright install-deps chromium
       - name: Start the app
         run: |
           python app.py > app.log 2>&1 &
