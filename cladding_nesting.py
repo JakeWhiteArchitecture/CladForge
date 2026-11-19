@@ -649,6 +649,10 @@ def chain_plan(geometry, p, elevations, clad_area, deep=False):
         # stock lengths: the plank's maximum length, a plank wide
         bw, bh = p["plank_len"], p["plank_w"]
         pieces = {e: plank_pieces(geometry, {e}, p["plank_orient"]) for e in order}
+        if p.get("seam_full"):
+            # full-length trays come off the coil: the stock is as long as the longest one
+            longest = max([q["length"] for ps in pieces.values() for q in ps] or [bw])
+            bw = max(bw, math.ceil(longest + 2 * max(0.0, float(p.get("board_trim", 0.0) or 0.0))))
         packer = lambda ps, deep=False, work_limit=DEEP_WORK: pack_lengths(  # noqa: E731
             ps, bw, bh, p["kerf"], p.get("board_trim", 0.0), deep, work_limit)
     else:

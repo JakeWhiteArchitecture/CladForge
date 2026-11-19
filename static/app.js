@@ -700,7 +700,7 @@ function val(id) { return document.getElementById(id).value; }
 // face of another chain loads that chain's settings into it, and any edit is kept by the
 // chain shown (state.formChain), so one chain's choices never change another's. Live trim,
 // panels as walls and shared offcuts stay job-wide.
-const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model'];
+const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model', 'seam_full_length'];
 function formSettings() {
     const s = { corner: toggleValue('corner-type') || 'mitre' };
     for (const k of NUM) { const v = parseFloat(val(k)); if (isFinite(v)) s[k] = v; }
@@ -791,6 +791,7 @@ function getParams() {
     p.cladding_type = toggleValue('cladding-type');
     p.rotate = document.getElementById('rotate').checked;
     p.battens_from_model = document.getElementById('battens_from_model').checked;
+    p.seam_full_length = document.getElementById('seam_full_length').checked;
     p.panels_as_walls = document.getElementById('panels_as_walls').checked;
     p.share_offcuts = document.getElementById('share_offcuts').checked;
     p.plank_orient = toggleValue('plank-orient');
@@ -826,6 +827,11 @@ function syncTypeUI() {
     document.getElementById('board-fields').style.display = seam ? 'none' : '';
     document.getElementById('seam-fields').style.display = seam ? '' : 'none';
     document.getElementById('seam-edge-fields').style.display = seam ? '' : 'none';
+    // full-length trays: one piece a run, so the stock length and the splices do not apply
+    const full = seam && document.getElementById('seam_full_length').checked;
+    const lf = document.getElementById('plank-length-fields');
+    lf.style.opacity = full ? '0.4' : '';
+    lf.querySelectorAll('input').forEach(i => { i.disabled = full; });
     document.getElementById('plank-len-label').innerHTML = seam ? 'Longest tray <span class="unit">mm, about 4000 on a facade</span>'
                                                                : 'Stock length <span class="unit">1800–6000, as supplied</span>';
     // kerf and trim serve both: a panel board is squared on all four edges, a plank length at its ends
@@ -986,7 +992,7 @@ function setStatus(text, cls) {
 // (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
-const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls'];
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls', 'seam_full_length'];
 const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient', 'plank-profile'];
 
 function snapshotState() {

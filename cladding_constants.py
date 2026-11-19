@@ -78,6 +78,9 @@ def _parse(params):
         p["seam_centres"] = min(SEAM_CENTRES, key=lambda c: abs(c - p["seam_centres"]))
         p["seam_h"] = 38.0 if p["seam_h"] > 31.5 else 25.0
         p["plank_w"], p["plank_gap"], p["plank_lap"], p["plank_t"] = p["seam_centres"], 0.0, 0.0, p["seam_t"]
+    # Full-length trays: each tray runs its whole run in one piece (cut from the coil), so
+    # no tray is laid above another and there are no cross joints. Standing seam only.
+    p["seam_full"] = p["seam"] and bool(params.get("seam_full_length"))
     p["seam_deck"] = "boards" if params.get("seam_deck") == "boards" else "ply"     # 18 WBP ply unless boarding
     # Where a seam runs out (the base, the top, an opening): folded down to the tray on a
     # slope, or run to the tray's end and stopped square, flush with it.
