@@ -183,7 +183,18 @@
                     <div id="plank-profile" class="turn-toggle">
                         <button class="turn-btn active" data-value="board" onclick="selectToggle('plank-profile','board'); onTypeChange()">Boards</button>
                         <button class="turn-btn" data-value="seam" onclick="selectToggle('plank-profile','seam'); onTypeChange()">Standing seam</button>
+                        <button class="turn-btn" data-value="custom" onclick="selectToggle('plank-profile','custom'); onTypeChange()">Custom</button>
                     </div>
+                </div>
+                <div id="custom-fields" style="display:none">
+                <div class="field"><label>Custom profile</label>
+                    <select id="custom_profile" onchange="onCustomProfile()"><option value="cedral_click" selected>Cedral Click</option></select></div>
+                <div class="row pair">
+                    <button class="btn" onclick="document.getElementById('profile-file').click()">Import profile (DXF)…</button>
+                    <input type="file" id="profile-file" accept=".dxf" style="display:none" onchange="importProfile(this.files[0]); this.value=''">
+                </div>
+                <p class="hint" id="custom-profile-info"></p>
+                <p class="hint">A fixed plank with its real section. Draw your own as a DXF: the section as a closed polyline, two or more copies at the spacing they are laid at (that spacing is the cover; a DWG needs saving as DXF first). The face is the side with more of the outline on it. Planks are set out as lapped boards, the section's full width at its cover; while a slider is dragged they are drawn as plain boards.</p>
                 </div>
                 <div id="board-fields">
                 <div class="row pair">

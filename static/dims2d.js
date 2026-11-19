@@ -268,7 +268,7 @@ function postLines(e, layer) {
         line.dataset.kind = 'post';
         line.dataset.key = 'post:' + postKey(q.u);
         const title = document.createElementNS(ns, 'title');
-        title.textContent = `Client batten at ${Math.round(q.u)} — ${what}. Click for ${POST_LOOK[POST_NEXT[q.state]][3].split(':')[0].toLowerCase()}.`;
+        title.textContent = `Client batten${q.name ? ' "' + q.name + '"' : ''} at ${Math.round(q.u)} — ${what}. Click for ${POST_LOOK[POST_NEXT[q.state]][3].split(':')[0].toLowerCase()}.`;
         line.appendChild(title);
         line.addEventListener('click', ev => { ev.stopPropagation(); cyclePost(e, q); });
         svg.appendChild(line);
@@ -356,7 +356,8 @@ function supportLines(e, layer) {
 
 function cyclePost(e, q) {
     const next = POST_NEXT[q.state] || 'fix', states = Object.assign({}, e.postStates || {});
-    if (next === 'on') delete states[postKey(q.u)]; else states[postKey(q.u)] = next;
+    // kept only where it differs from what the batten starts as (off for a look-alike, else on)
+    if (next === (q.default || 'on')) delete states[postKey(q.u)]; else states[postKey(q.u)] = next;
     e.postStates = Object.keys(states).length ? states : null;
     setStatus(`Client batten at ${Math.round(q.u)} on ${e.name}: ${POST_LOOK[next][3]}`, 'ready');
     renderElevationList();

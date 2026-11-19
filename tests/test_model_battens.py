@@ -11,6 +11,8 @@ import io  # noqa: E402
 from synthetic import payload, box_tris  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
+from cladding_geometry import post_key  # noqa: E402
+import pytest  # noqa: E402
 
 POSTS = [150.0, 750.0, 1350.0, 2000.0, 2600.0, 3300.0, 3850.0, 4450.0, 5050.0, 5700.0, 6300.0, 6900.0, 7500.0, 7850.0]
 
@@ -44,8 +46,13 @@ def _us(out, ifc_type, elevation="Elevation A"):
 
 def test_columns_standing_on_the_face_are_found_and_nothing_else():
     plain, elev = _elevation(posts=[], distractors=False), _elevation()
-    assert [q["u"] for q in elev["posts"]] == POSTS
-    assert all(abs(q["w"] - 45.0) < 0.5 and q["v1"] - q["v0"] > 2900 for q in elev["posts"])
+    used = [q for q in elev["posts"] if q.get("default") != "off"]
+    assert [q["u"] for q in used] == POSTS
+    assert all(abs(q["w"] - 45.0) < 0.5 and q["v1"] - q["v0"] > 2900 for q in used)
+    # the upright "beam" is batten-shaped but not a column: offered switched off, and said so
+    assert [(q["u"], q["name"]) for q in elev["posts"] if q.get("default") == "off"] == [(3000.0, "Rail")]
+    assert any("Rail" in w and "switched off" in w for w in elev["warnings"])
+    assert not any("Frame post" in w or "Block" in w or "Pier" in w for w in elev["warnings"])
     # standing in front of the face, they punch no holes in it
     assert elev["area"] == plain["area"] and elev["n_holes"] == plain["n_holes"]
 
@@ -105,3 +112,52 @@ def test_a_joint_with_no_column_in_reach_gets_a_batten_of_its_own():
     panels, joints, extra = bays_on_posts([0.0, 4000.0], [600.0, 1100.0, 3900.0], 1200.0, 10.0)
     assert joints == [1100.0, 2310.0, 3520.0] and extra == [2310.0, 3520.0]     # full 1200 panels past the last column
     assert all(e - s <= 1200.0 + 1e-6 for s, e, _f in panels) and panels[-1][1] == 4000.0
+
+
+# ── found more tolerantly, and saying why not ──────────────────────────────
+
+def _extract(context):
+    pl = payload()
+    pl["context"] = list(pl["context"]) + context
+    with contextlib.redirect_stdout(io.StringIO()):
+        return extract_elevation(pl)
+
+
+def test_members_are_battens_too():
+    elev = _extract([_column("Batten %d" % i, u, kind="IfcMember") for i, u in enumerate(POSTS)])
+    assert [q["u"] for q in elev["posts"]] == POSTS and not elev["posts_passed"]
+
+
+@pytest.mark.parametrize("d0, d1, found", [(0.0, 38.0, True), (12.0, 50.0, True), (-20.0, 30.0, True),
+                                           (-40.0, 30.0, False),      # 43% in front: sunk in
+                                           (-30.0, 50.0, True),       # 62% in front: a batten let into the face
+                                           (140.0, 190.0, True), (160.0, 210.0, False)])
+def test_a_batten_sunk_into_the_face_counts_while_half_of_it_stands_proud(d0, d1, found):
+    elev = _extract([_column("Batten %d" % i, u, d0=d0, d1=d1) for i, u in enumerate(POSTS)])
+    assert (len(elev["posts"]) == len(POSTS)) == found
+    if not found:        # and the face says what it saw, once for all of them
+        (line,) = elev["posts_passed"]
+        assert line.startswith("%d batten-shaped elements not used" % len(POSTS))
+        assert ("sunk 40 mm" in line and "43%" in line) if d0 < 0 else "160 mm in front" in line
+        assert line in elev["warnings"]
+
+
+def test_something_batten_shaped_is_offered_switched_off_and_can_be_turned_on():
+    proxies = [_column("OBJT-%d" % i, u, kind="IfcBuildingElementProxy") for i, u in enumerate(POSTS)]
+    elev = _extract(proxies)
+    assert [q["u"] for q in elev["posts"]] == POSTS and {q.get("default") for q in elev["posts"]} == {"off"}
+    assert "IfcBuildingElementProxy" in elev["posts_passed"][0] and "click one to use it" in elev["posts_passed"][0]
+    out = _preview(dict(elev, offset=0.0))
+    assert out["info"][0]["model_posts"] == 0 and {q["state"] for q in out["info"][0]["posts"]} == {"off"}
+    on = {post_key(u): "on" for u in POSTS}
+    out = _preview(dict(elev, offset=0.0, post_states=on))
+    assert out["info"][0]["model_posts"] == len(POSTS) and set(POSTS) <= set(_us(out, "batten"))
+    # barely proud of the face (a stud showing through), it is no batten and nothing is said
+    flush = _extract([_column("Stud %d" % i, u, d0=-100.0, d1=20.0) for i, u in enumerate(POSTS)])
+    assert not flush["posts"] and not flush["posts_passed"]
+    # called a batten, it is used from the start
+    named = _extract([_column("Counter batten 50x38", u, kind="IfcBuildingElementProxy") for u in POSTS])
+    assert not any(q.get("default") for q in named["posts"]) and not named["posts_passed"]
+    # a column or member on the same line as a look-alike wins
+    both = _extract(proxies[:1] + [_column("Batten", POSTS[0])])
+    assert len(both["posts"]) == 1 and "default" not in both["posts"][0]

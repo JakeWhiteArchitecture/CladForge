@@ -40,11 +40,18 @@ PITCH_TOL = 20.0          # mm – rise along an abutment line before it counts 
 DEFAULT_BUDGET_S = 20.0   # s – extraction gives up on context past this rather than hang
 # Type names are compared upper-cased: web-ifc reports IFCSLAB, IfcOpenShell IfcSlab.
 ABUTMENT_TYPES = frozenset({"IFCSLAB", "IFCSLABSTANDARDCASE", "IFCSLABELEMENTEDCASE", "IFCROOF"})
-# Columns: a designer's battens, modelled as columns standing on the face (_post_of).
-POST_TYPES = frozenset({"IFCCOLUMN", "IFCCOLUMNSTANDARDCASE"})
+# A designer's battens: columns or members standing on the face (_post_of). Anything else
+# shaped and placed like one (a generic object, a part, an upright beam) is taken too when
+# its name says batten, and otherwise reported, so it is plain why it was passed over.
+POST_TYPES = frozenset({"IFCCOLUMN", "IFCCOLUMNSTANDARDCASE", "IFCMEMBER", "IFCMEMBERSTANDARDCASE"})
+POST_LIKE_TYPES = frozenset({"IFCBUILDINGELEMENTPROXY", "IFCBUILDINGELEMENTPART", "IFCBEAM", "IFCBEAMSTANDARDCASE",
+                             "IFCPLATE", "IFCELEMENTASSEMBLY"})
+POST_NAMES = ("batten", "lath", "furring", "strapping")
 POST_WIDTH = (15.0, 150.0)  # mm – how wide a modelled batten can be, across the wall
 POST_MIN_HEIGHT = 600.0     # mm – and how tall at least: anything shorter is not a batten
+POST_DEPTH = 150.0          # mm – and how deep at most, out from the wall: more is a column
 POST_REACH = 150.0          # mm – its back within this of the face (it stands on the sarking)
+POST_INSIDE = 0.5           # at least this much of its section in front of the face, where its back is sunk in
 # Windows and doors: where a reveal lining runs back to (cladding_edges.opening_frames).
 FRAME_TYPES = frozenset({"IFCWINDOW", "IFCWINDOWSTANDARDCASE", "IFCDOOR", "IFCDOORSTANDARDCASE"})
 IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE", "IFCSPACE",
@@ -382,11 +389,15 @@ def _extract(payload):
                                                     region.bounds[3] - region.bounds[1]))
     clad_depth = float(options.get("clad_depth") or 0.0)
     abutments, cuts, frames, posts = [], [], [], []
+    passed = []          # batten-shaped elements passed over, and why (reported below)
     umin0, vmin0, umax0, vmax0 = region.bounds
     skipped = 0
     for elem in payload.get("context", []):
         etype = (elem.get("type") or "").upper()
-        if etype in IGNORE_TYPES or not elem.get("tris"):
+        # Members, plates and generic objects are otherwise left alone (they are not read as
+        # abutments or penetrations), but one may be a batten: those are still looked at.
+        ignored = etype in IGNORE_TYPES
+        if (ignored and etype not in POST_TYPES and etype not in POST_LIKE_TYPES) or not elem.get("tris"):
             continue
         if time.perf_counter() > deadline:
             timed_out = len(payload.get("context", [])) - len(clock)
@@ -400,12 +411,25 @@ def _extract(payload):
         _t0 = time.perf_counter()
         try:   # one awkward element must not sink the whole extraction
             tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
-            if etype in POST_TYPES:
-                post = _post_of(tris, n, d, u)
-                if post:
+            if etype in POST_TYPES or etype in POST_LIKE_TYPES:
+                post, why = _post_of(tris, n, d, u)
+                named = any(k in (elem.get("name") or "").lower() for k in POST_NAMES)
+                if post and (etype in POST_TYPES or named):
                     posts.append(dict(post, name=elem.get("name", "")))
                     clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
                     continue
+                if post:
+                    # Shaped and placed like a batten, but neither a column or member nor
+                    # called one: offered switched off (the 2D view turns it on), and it
+                    # goes on to be read as whatever else it is.
+                    posts.append(dict(post, name=elem.get("name", ""), default="off"))
+                    passed.append(("not a column or member (%s): shown switched off in the 2D view, click one to use it"
+                                   % (elem.get("type") or etype), elem.get("name", "")))
+                elif why and (etype in POST_TYPES or named):
+                    passed.append((why, elem.get("name", "")))
+            if ignored:
+                clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
+                continue
             if etype in FRAME_TYPES:
                 fr = _frame_of(tris, n, d, u)
                 if fr:
@@ -435,6 +459,9 @@ def _extract(payload):
     _say(dbg, "  context done, cutting %d penetration(s)" % len(cuts))
     if skipped:
         result["warnings"].append("%d context element(s) could not be sectioned and were ignored" % skipped)
+    result["posts_passed"] = _passed_report(passed)
+    for line in result["posts_passed"]:
+        result["warnings"].append(line)
     for cut_poly in cuts:
         try:
             if cut_poly.intersection(region).area > MIN_HOLE_AREA:
@@ -482,21 +509,45 @@ def _extract(payload):
 
 
 def _post_of(tris, n, d, u):
-    """A vertical column standing on the face: the designer's batten, set out to suit the
-    frame behind. Narrow across the wall (POST_WIDTH), at least POST_MIN_HEIGHT tall and
-    several times taller than wide, its back on the face or within POST_REACH in front of
-    it. Returns its centreline and extent before the local shift, or None: a structural
-    column inside the wall, a beam laid across it or a short block is not a batten."""
+    """A batten standing on the face: (post, None), or (None, why not). A batten is narrow
+    across the wall (POST_WIDTH), at least POST_MIN_HEIGHT tall and several times taller
+    than wide, no deeper than POST_DEPTH, and in the cavity: its back on the face (within
+    PLANE_TOL behind it) or up to POST_REACH in front, or, sunk further into the wall than
+    that, with at least POST_INSIDE of its section still in front of the face. *why* is
+    given only for something batten-shaped that stands in the wrong place; a structural
+    column, a beam laid across the wall or a short block is simply not one (None, None).
+    The post is its centreline and extent before the local shift."""
     pts = [(_dot(p, u), p[2], _dot(p, n) - d) for tri in tris for p in tri]
     if not pts:
-        return None
+        return None, None
     us, vs, ss = [q[0] for q in pts], [q[1] for q in pts], [q[2] for q in pts]
     w, h = max(us) - min(us), max(vs) - min(vs)
-    if not (POST_WIDTH[0] <= w <= POST_WIDTH[1]) or h < max(POST_MIN_HEIGHT, 5.0 * w):
-        return None
-    if min(ss) < -PLANE_TOL or min(ss) > POST_REACH:
-        return None
-    return {"u": (min(us) + max(us)) / 2.0, "w": w, "v0": min(vs), "v1": max(vs)}
+    back, front = min(ss), max(ss)
+    if not (POST_WIDTH[0] <= w <= POST_WIDTH[1]) or h < max(POST_MIN_HEIGHT, 5.0 * w) or front - back > POST_DEPTH:
+        return None, None
+    if back > POST_REACH:
+        return None, "stands %.0f mm in front of the face (over %.0f)" % (back, POST_REACH)
+    if back < -PLANE_TOL:
+        if front <= PLANE_TOL:
+            return None, None                         # in the wall, a stud or a post: not a batten, not news
+        inside = front / (front - back)
+        if inside < POST_INSIDE:
+            return None, "is sunk %.0f mm into the face, only %.0f%% of it in front" % (-back, 100.0 * inside)
+    return {"u": (min(us) + max(us)) / 2.0, "w": w, "v0": min(vs), "v1": max(vs)}, None
+
+
+def _passed_report(passed):
+    """One line per reason for the batten-shaped elements passed over: how many, a name,
+    and why, so a face that found none of the model's battens says what it saw."""
+    groups = {}
+    for why, name in passed:
+        groups.setdefault(why, []).append(name)
+    out = []
+    for why, names in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        eg = next((x for x in names if x), "")
+        out.append("%d batten-shaped element%s not used%s: %s" % (
+            len(names), "" if len(names) == 1 else "s", (' (e.g. "%s")' % eg) if eg else "", why))
+    return out
 
 
 def _merge_posts(posts, umin, vmin, width):
@@ -506,10 +557,13 @@ def _merge_posts(posts, umin, vmin, width):
     for q in sorted(posts, key=lambda q: q["u"]):
         if out and abs(q["u"] - out[-1]["u"]) <= 5.0:
             out[-1].update(v0=min(out[-1]["v0"], q["v0"]), v1=max(out[-1]["v1"], q["v1"]), w=max(out[-1]["w"], q["w"]))
+            if q.get("default") != "off":
+                out[-1].pop("default", None)          # a column or member on the line: it is used
         else:
             out.append(dict(q))
-    return [{"u": round(q["u"] - umin, 1), "w": round(q["w"], 1), "v0": round(q["v0"] - vmin, 1),
-             "v1": round(q["v1"] - vmin, 1), "name": q.get("name", "")}
+    return [dict({"u": round(q["u"] - umin, 1), "w": round(q["w"], 1), "v0": round(q["v0"] - vmin, 1),
+                  "v1": round(q["v1"] - vmin, 1), "name": q.get("name", "")},
+                 **({"default": "off"} if q.get("default") == "off" else {}))
             for q in out if -q["w"] <= q["u"] - umin <= width + q["w"]]
 
 
