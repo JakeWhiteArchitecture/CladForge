@@ -78,6 +78,9 @@ def _parse(params):
         p["seam_centres"] = min(SEAM_CENTRES, key=lambda c: abs(c - p["seam_centres"]))
         p["seam_h"] = 38.0 if p["seam_h"] > 31.5 else 25.0
         p["plank_w"], p["plank_gap"], p["plank_lap"], p["plank_t"] = p["seam_centres"], 0.0, 0.0, p["seam_t"]
+    # Full-length trays: each tray runs its whole run in one piece (cut from the coil), so
+    # no tray is laid above another and there are no cross joints. Standing seam only.
+    p["seam_full"] = p["seam"] and bool(params.get("seam_full_length"))
     # A custom profile is a fixed plank, its real section (cladding_profiles): a library one
     # by key, or one read from a drawing. It is laid as a lapped board, the section's full
     # width at its cover, so the lap is the difference; it sets the plank's size.
