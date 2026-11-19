@@ -225,6 +225,12 @@ function chainCorners(chain) {
 // Each corner can override the job's corner detail. The two faces meeting there hold the
 // same value (lo member's detailHi, hi member's detailLo), set together as the master is.
 const CORNER_LABEL = { mitre: 'Mitred', lap: 'Master', profile: 'Profile', butt: 'Square' };
+// A standing seam chain's corners read differently: "lap" is a seam stood on the corner (the
+// face that masters the corner carries it, so Swap moves it to the other face) and "profile"
+// a flashing strip over the trays, which meet as if mitred (cladding_geometry._seam_corners).
+const SEAM_CORNER_LABEL = { mitre: 'Mitred', lap: 'Seam', profile: 'Flashing strip', butt: 'Square' };
+function seamChain() { return toggleValue('cladding-type') !== 'panel' && toggleValue('plank-profile') === 'seam'; }
+function cornerLabel(detail) { return (seamChain() ? SEAM_CORNER_LABEL : CORNER_LABEL)[detail]; }
 const CORNER_LETTER = { mitre: 'M', lap: 'L', profile: 'P', butt: 'S' };
 
 // Profile is for right-angled external corners only: the aluminium profile with panels,
@@ -234,6 +240,7 @@ function profileOffered(k) { return k > 0 && Math.abs(k - 1) < 0.05; }
 function cornerDetailInForce(c) {
     const job = toggleValue('corner-type') || 'mitre';
     const d = c.lo.detailHi || job, panel = toggleValue('cladding-type') === 'panel';
+    if (seamChain()) return (d === 'lap' || d === 'profile') && !profileOffered(c.k) ? 'mitre' : d;
     if (d === 'lap' && !panel) return 'mitre';
     if (d === 'profile' && !profileOffered(c.k)) return 'mitre';
     return d;
@@ -242,11 +249,15 @@ function cornerDetailInForce(c) {
 // The four details as <option>s, Master and Profile greyed where they do not apply.
 function cornerOptions(own, profileOk, withDefault) {
     const panel = toggleValue('cladding-type') === 'panel';
-    return (withDefault ? [['', 'Job default']] : []).concat([['mitre', 'Mitred'], ['lap', 'Master'], ['profile', 'Profile'], ['butt', 'Square']])
+    // withDefault marks a chain corner (a window's or door's has no job default): there a
+    // standing seam chain offers its own corner seam and flashing strip
+    const seam = seamChain(), chainSeam = seam && withDefault, labels = chainSeam ? SEAM_CORNER_LABEL : CORNER_LABEL;
+    return (withDefault ? [['', 'Job default']] : []).concat(['mitre', 'lap', 'profile', 'butt'].map(v => [v, labels[v]]))
         .map(([v, t]) => {
-            const off = (v === 'lap' && !panel) || (v === 'profile' && !profileOk);
-            const seam = !panel && toggleValue('plank-profile') === 'seam';
-            const why = v === 'lap' ? 'panel cladding only' : (seam ? 'not with standing seam' : 'right-angled external corners only');
+            const off = chainSeam ? ((v === 'lap' || v === 'profile') && !profileOk)
+                                  : (v === 'lap' && !panel) || (v === 'profile' && !profileOk);
+            const why = chainSeam ? 'right-angled external corners only'
+                : v === 'lap' ? 'panel cladding only' : (seam ? 'not with standing seam' : 'right-angled external corners only');
             return `<option value="${v}" ${v === own ? 'selected' : ''} ${off ? 'disabled' : ''}>${t}${off ? ' (' + why + ')' : ''}</option>`;
         }).join('');
 }
@@ -288,11 +299,11 @@ function cornerRows(chain, members) {
         const pick = `<select class="corner-detail" title="Corner detail for this corner" onclick="event.stopPropagation()"
             onchange="setCornerDetail('${chain.name}', ${i}, this.value)">` + cornerOptions(own, profileOffered(c.k), true) + '</select>';
         const swap = detail === 'lap'
-            ? ` · <b>${master.replace('Elevation ', '')}</b> masters <button class="mini" onclick="event.stopPropagation(); swapCorner('${chain.name}', ${i})">Swap</button>`
+            ? ` · ${seamChain() ? 'on' : ''} <b>${master.replace('Elevation ', '')}</b>${seamChain() ? '' : ' masters'} <button class="mini" onclick="event.stopPropagation(); swapCorner('${chain.name}', ${i})">Swap</button>`
             : '';
         return `<div class="corner-row" data-detail="${detail}" onclick="selectCorner('${chain.name}', ${i})">`
             + `${c.lo.name.replace('Elevation ', '')}–${c.hi.name.replace('Elevation ', '')} corner`
-            + ` · ${angle}° ${kind} · <span class="corner-in-force">${CORNER_LABEL[detail]}${own ? '' : ' (job)'}</span>${swap} ${pick}</div>`;
+            + ` · ${angle}° ${kind} · <span class="corner-in-force">${cornerLabel(detail)}${own ? '' : ' (job)'}</span>${swap} ${pick}</div>`;
     }).join('');
 }
 
@@ -862,13 +873,18 @@ function syncTypeUI() {
     const panel = toggleValue('cladding-type') === 'panel';
     // The master-lap needs a board to run past the corner, so it is a panel detail.
     // Profile is offered either way: with planks it is the Marley-type corner profile.
+    // A standing seam chain has a corner seam in its place, and a flashing strip for Profile.
+    const seamNow = seamChain();
     for (const v of ['lap']) {
         const b = document.querySelector('#corner-type .turn-btn[data-value="' + v + '"]');
-        b.disabled = !panel;
-        b.title = panel ? '' : 'Panel cladding only';
-        b.style.opacity = panel ? '' : '0.45';
-        if (!panel && b.classList.contains('active')) selectToggle('corner-type', 'mitre');
+        const ok = panel || seamNow;
+        b.disabled = !ok;
+        b.title = ok ? '' : 'Panel cladding only';
+        b.style.opacity = ok ? '' : '0.45';
+        if (!ok && b.classList.contains('active')) selectToggle('corner-type', 'mitre');
     }
+    for (const v of ['lap', 'profile'])
+        document.querySelector('#corner-type .turn-btn[data-value="' + v + '"]').textContent = cornerLabel(v);
     document.getElementById('panel-section').style.display = panel ? '' : 'none';
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
     // Standing seam is a plank profile: its own fields for the board's, and its stock length is a tray's

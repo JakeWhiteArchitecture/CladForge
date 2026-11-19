@@ -388,9 +388,14 @@ def corner_detail(p, override=None, k=None):
     detail = override if override in CORNER_DETAILS else p.get("corner", "mitre")
     detail = detail if detail in CORNER_DETAILS else "mitre"
     panel = p["cladding_type"] == "panel"
+    square = k is None or (k > 0 and abs(k - 1.0) < 0.05)
+    if p.get("seam"):
+        # Standing seam: "lap" is a seam stood on the corner (the master face carries it),
+        # "profile" a corner flashing strip; both at right-angled external corners only.
+        return detail if detail in ("mitre", "butt") or square else "mitre"
     if detail == "lap" and not panel:
         return "mitre"
-    if detail == "profile" and k is not None and not (k > 0 and abs(k - 1.0) < 0.05):
+    if detail == "profile" and not square:
         return "mitre"
     return detail
 
@@ -430,11 +435,21 @@ def corner_ends(elev, p):
         if detail == "butt":
             return (0.0, 0.0), detail
         # A profiled corner cuts the layers behind as a mitre, so the battens run on under
-        # the profile's flanges; the boards stop short of it (cladding_geometry).
-        return ((k, 0.0) if detail in ("mitre", "profile") else lap(k, master)), detail
+        # the profile's flanges; the boards stop short of it (cladding_geometry). So does a
+        # standing seam's corner seam: the deck and battens mitre, the trays are set after.
+        if detail in ("mitre", "profile") or p.get("seam"):
+            return (k, 0.0), detail
+        return lap(k, master), detail
 
     (left, d_left), (right, d_right) = end(lo, master_lo, over_lo), end(hi, master_hi, over_hi)
     return left, right, (d_left, d_right)
+
+
+def end_master(elev, side):
+    """Does this elevation master the corner at its *side* ("l" or "r")? The flags are
+    held in run order, lo first, so a reversed face reads them the other way round."""
+    lo_side = "r" if elev.get("chain_reversed") else "l"
+    return bool(elev.get("master_lo") if side == lo_side else elev.get("master_hi"))
 
 
 def corner_shift(u, corner, s, tol=0.6):
