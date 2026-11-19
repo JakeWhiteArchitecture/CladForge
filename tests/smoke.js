@@ -4,6 +4,9 @@
 const path = require('path');
 const fs = require('fs');
 let page = null, logs = [];
+// every line says when it was logged, so a slow step shows itself
+const T0 = Date.now(), _log = console.log;
+console.log = (...a) => _log('[' + ((Date.now() - T0) / 1000).toFixed(1).padStart(6) + 's]', ...a);
 
 async function main() {
     const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
@@ -1270,7 +1273,9 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         selectToggle('plank-profile', 'custom'); onTypeChange();
         await updatePreview();
         await new Promise(r => setTimeout(r, 1500));
-        const geo = window._lastPreview.geometry.filter(m => m.ifc_type === 'plank');
+        // the active chain's planks: each chain keeps its own settings
+        const mine = new Set(activeChain().members.map(m => m.result && m.result.name));
+        const geo = window._lastPreview.geometry.filter(m => m.ifc_type === 'plank' && mine.has(m.elevation));
         const r = { planks: geo.length, withParts: geo.filter(m => m.parts && m.parts.length === 3).length,
                     cover: document.getElementById('d-cover').textContent, info: document.getElementById('custom-profile-info').textContent,
                     shown: document.getElementById('custom-fields').style.display, boardFields: document.getElementById('board-fields').style.display };
@@ -1283,7 +1288,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         await importProfile(new File([dxf.join('\n')], 'Shiplap.dxf'));
         await new Promise(r => setTimeout(r, 2500));
         r.imported = val('custom_profile'); r.importedInfo = document.getElementById('custom-profile-info').textContent;
-        r.importedParts = window._lastPreview.geometry.filter(m => m.ifc_type === 'plank' && m.parts && m.parts.length === 1).length;
+        r.importedParts = window._lastPreview.geometry.filter(m => m.ifc_type === 'plank' && mine.has(m.elevation) && m.parts && m.parts.length === 1).length;
         r.saved = snapshotState().settings.custom_section && snapshotState().settings.custom_section.cover;
         selectToggle('plank-profile', 'board'); onTypeChange();
         await updatePreview();

@@ -73,7 +73,20 @@ def section(spec):
             "width": width, "thickness": thickness}
 
 
+_SLABS = {}
+
+
 def slabs(sec):
+    """slabs_of, kept per section: every plank of a build asks for the same one."""
+    key = (tuple(map(tuple, sec["ring"])), sec["width"])
+    if key not in _SLABS:
+        if len(_SLABS) > 32:
+            _SLABS.clear()
+        _SLABS[key] = slabs_of(sec)
+    return _SLABS[key]
+
+
+def slabs_of(sec):
     """The section as slabs through its thickness: [(y0, y1, [(a0, b0, a1, b1)])], each
     strip of width the section fills between y0 and y1, its sides at a0, b0 at y0 and
     a1, b1 at y1 (straight between)."""
@@ -130,6 +143,45 @@ def _edge_shift(rings, shifts, pt, tol=0.01):
     return (0.0, 0.0, 0.0, 0.0)
 
 
+def _rect_parts(m, sec, ring, axis, at):
+    """plank_parts for the usual plank, a plain rectangle: each strip is the rectangle
+    cut to its width by arithmetic, no polygon overlay. None if *ring* is not one."""
+    if len(ring) != 4:
+        return None
+    us, vs = sorted({q[0] for q in ring}), sorted({q[1] for q in ring})
+    if len(us) != 2 or len(vs) != 2:
+        return None
+    lo, hi = (vs if axis == 1 else us)
+    r0, r1 = (us if axis == 1 else vs)                 # along the plank
+    parts = []
+    for y0, y1, strips in slabs(sec):
+        s0 = float(m["depth"]) + y0
+        for a0, b0, a1, b1 in strips:
+            wa, wb = max(lo, at + a0), min(hi, at + b0)
+            if wb - wa < 1e-6:
+                continue
+            ring2 = [[r0, wa], [r1, wa], [r1, wb], [r0, wb]] if axis == 1 else [[wa, r0], [wb, r0], [wb, r1], [wa, r1]]
+            part = {"profile": [[round(u, 4), round(v, 4)] for u, v in ring2], "holes": [],
+                    "depth": round(s0, 4), "thickness": round(y1 - y0, 4)}
+            # a side that slopes through the slab moves with depth (only where the strip was not cut)
+            slopes = [(at + a0, (a1 - a0) / (y1 - y0)), (at + b0, (b1 - b0) / (y1 - y0))]
+            if any(sl for _w, sl in slopes):
+                row = []
+                for q in ring2:
+                    sh = [0.0, 0.0, 0.0, 0.0]
+                    for w, sl in slopes:
+                        if sl and abs(q[axis] - w) < 1e-6:
+                            i = 2 if axis == 1 else 0
+                            sh[i], sh[i + 1] = round(-sl * s0, 6), round(sl, 6)
+                    row.append(sh)
+                if any(any(sh) for sh in row):
+                    part["vshift"] = [row]
+            if m.get("corner"):
+                part["corner"] = m["corner"]
+            parts.append(part)
+    return parts
+
+
 def plank_parts(m, sec):
     """The parts of plank mesh *m* (its outline, depth and corner, any vshift to a
     lining kept) with *sec*'s section: m["section_at"] is where the section's w = 0 lies
@@ -137,6 +189,10 @@ def plank_parts(m, sec):
     axis = 1 if m.get("section_axis", "v") == "v" else 0
     at = float(m.get("section_at", 0.0))
     rings = [list(map(tuple, m["profile"]))] + [list(map(tuple, h)) for h in (m.get("holes") or [])]
+    if len(rings) == 1 and not m.get("vshift"):
+        quick = _rect_parts(m, sec, rings[0], axis, at)
+        if quick is not None:
+            return quick
     try:
         outline = Polygon(rings[0], rings[1:])
         outline = outline if outline.is_valid else outline.buffer(0)
