@@ -1264,6 +1264,37 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || !/^Length 1 of \d+$/.test(plankRun.counter) || plankRun.onWall !== plankRun.steps || plankRun.figures !== plankRun.boards
         || !/lengths of 3600/.test(plankRun.summary))
         throw new Error('plank cutting list or trim wrong: ' + JSON.stringify({ planks, plankRun }));
+    // A custom profile: Cedral Click from the library, every plank drawn with its section
+    // (one body each); dragging the slider draws plain boards; a DXF of two copies imports.
+    const custom = await page.evaluate(async () => {
+        selectToggle('plank-profile', 'custom'); onTypeChange();
+        await updatePreview();
+        await new Promise(r => setTimeout(r, 1500));
+        const geo = window._lastPreview.geometry.filter(m => m.ifc_type === 'plank');
+        const r = { planks: geo.length, withParts: geo.filter(m => m.parts && m.parts.length === 3).length,
+                    cover: document.getElementById('d-cover').textContent, info: document.getElementById('custom-profile-info').textContent,
+                    shown: document.getElementById('custom-fields').style.display, boardFields: document.getElementById('board-fields').style.display };
+        state.sliderDragging = true; await updatePreview();
+        r.dragParts = window._lastPreview.geometry.filter(m => m.parts).length;
+        state.sliderDragging = false;
+        const sq = [[0, 0], [140, 0], [140, 18], [0, 18]], dxf = ['0', 'SECTION', '2', 'ENTITIES'];
+        for (const dx of [0, 130]) { dxf.push('0', 'LWPOLYLINE', '8', '0', '90', '4', '70', '1'); for (const [x, y] of sq) dxf.push('10', String(x + dx), '20', String(y)); }
+        dxf.push('0', 'ENDSEC', '0', 'EOF');
+        await importProfile(new File([dxf.join('\n')], 'Shiplap.dxf'));
+        await new Promise(r => setTimeout(r, 2500));
+        r.imported = val('custom_profile'); r.importedInfo = document.getElementById('custom-profile-info').textContent;
+        r.importedParts = window._lastPreview.geometry.filter(m => m.ifc_type === 'plank' && m.parts && m.parts.length === 1).length;
+        r.saved = snapshotState().settings.custom_section && snapshotState().settings.custom_section.cover;
+        selectToggle('plank-profile', 'board'); onTypeChange();
+        await updatePreview();
+        await new Promise(r => setTimeout(r, 1500));
+        return r;
+    });
+    console.log('custom profile:', JSON.stringify(custom));
+    if (!custom.planks || custom.withParts < custom.planks / 2 || custom.cover !== '174.0 mm' || !/Cedral Click: 188\.1 wide, 12\.0 thick/.test(custom.info)
+        || custom.shown !== '' || custom.boardFields !== 'none' || custom.dragParts || custom.imported !== 'dxf:Shiplap'
+        || !/130\.0 centres/.test(custom.importedInfo) || !custom.importedParts || custom.saved !== 130)
+        throw new Error('custom plank profile wrong: ' + JSON.stringify(custom));
     // Offcuts passed on: never more lengths than without, and what each elevation cuts
     // from them is played from the offcut, which glows on the rack carried round to it.
     const shared = await page.evaluate(async () => {

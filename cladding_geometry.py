@@ -645,8 +645,11 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
                 piece += 1
                 label = "%s %s C%d-%d" % (name, "Tray" if p["seam"] else "Plank", j + 1, piece)
                 ring = _rect(s, lo, e, v + face)
-                meshes.append(_tray(p, ring, depth, frame, label, name) if p["seam"]
-                              else _prism(ring, depth, p["plank_t"], frame, "plank", label, name))
+                plank = _tray(p, ring, depth, frame, label, name) if p["seam"] \
+                    else _prism(ring, depth, p["plank_t"], frame, "plank", label, name)
+                if p.get("section"):                 # its section's w = 0 at the course's foot
+                    plank.update(section_at=v, section_axis="v")
+                meshes.append(plank)
                 if p["seam"]:                        # the seam with the tray below, along its bottom edge
                     for a2, b2 in _shared(s, e, below):
                         _seam(p, meshes, frame, label, name, depth + p["plank_t"], False, lo, a2, b2)
@@ -694,8 +697,11 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
                 piece += 1
-                meshes.append(_prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
-                                     "%s Plank C%d-%d" % (name, j + 1, piece), name))
+                plank = _prism(_rect(u, s, u + face, e), depth, p["plank_t"], frame, "plank",
+                               "%s Plank C%d-%d" % (name, j + 1, piece), name)
+                if p.get("section"):                 # its section's w = 0 at its left edge
+                    plank.update(section_at=u, section_axis="u")
+                meshes.append(plank)
         beside = mine
     left_cut = (starts[0] + face) if starts and starts[0] < 0 else 0.0
     right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0

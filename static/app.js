@@ -708,6 +708,7 @@ function formSettings() {
     s.cladding_type = toggleValue('cladding-type') || 'plank';
     s.plank_orient = toggleValue('plank-orient') || 'horizontal';
     s.plank_profile = toggleValue('plank-profile') || 'board';
+    Object.assign(s, customProfileParams());
     s.seam_deck = val('seam_deck');
     s.counter_batten = val('counter_batten');
     return s;
@@ -720,9 +721,57 @@ function applySettings(s) {
     if (s.cladding_type) selectToggle('cladding-type', s.cladding_type);
     if (s.plank_orient) selectToggle('plank-orient', s.plank_orient);
     if (s.plank_profile) selectToggle('plank-profile', s.plank_profile);
+    if (s.custom_section) addCustomProfile(s.custom_section, false);
+    if (s.custom_profile && document.querySelector('#custom_profile option[value="' + CSS.escape(s.custom_profile) + '"]'))
+        document.getElementById('custom_profile').value = s.custom_profile;
     if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
     if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
 }
+// ── custom plank profiles (cladding_profiles.py) ──
+// The library's are named in the select; one read from a DXF is kept here by its key and
+// sent with the parameters, so it travels with its chain's settings and the saved state.
+const CUSTOM_LIBRARY = { cedral_click: { name: 'Cedral Click', width: 188.136, thickness: 12.034, cover: 174.034 } };
+const importedProfiles = {};
+function customProfileParams() {
+    const key = val('custom_profile') || 'cedral_click';
+    return importedProfiles[key] ? { custom_profile: key, custom_section: importedProfiles[key] } : { custom_profile: key };
+}
+function addCustomProfile(sec, select) {
+    const key = 'dxf:' + sec.name;
+    importedProfiles[key] = sec;
+    const sel = document.getElementById('custom_profile');
+    if (!sel.querySelector('option[value="' + CSS.escape(key) + '"]')) {
+        const o = document.createElement('option');
+        o.value = key; o.textContent = sec.name + ' (imported)';
+        sel.appendChild(o);
+    }
+    if (select) sel.value = key;
+    return key;
+}
+function showCustomProfile() {
+    const key = val('custom_profile'), sec = importedProfiles[key] || CUSTOM_LIBRARY[key];
+    document.getElementById('custom-profile-info').textContent = sec
+        ? `${sec.name}: ${(+sec.width).toFixed(1)} wide, ${(+sec.thickness).toFixed(1)} thick, laid at ${(+sec.cover).toFixed(1)} centres (laps ${(sec.width - sec.cover).toFixed(1)})`
+        : '';
+}
+function onCustomProfile() { showCustomProfile(); updateSliderRange(); updatePreview(); }
+async function importProfile(file) {
+    if (!file) return;
+    const text = await file.text();
+    pyodide.globals.set('_profile_dxf', text);
+    pyodide.globals.set('_profile_name', file.name.replace(/\.dxf$/i, ''));
+    const res = JSON.parse(await pyodide.runPythonAsync(`
+import json as _json
+from cladding_profiles import profile_from_dxf as _pfd
+_sec, _msg = _pfd(_profile_dxf, _profile_name)
+_json.dumps({"section": _sec, "message": _msg})`));
+    if (!res.section) { alert(res.message); return; }
+    addCustomProfile(res.section, true);
+    selectToggle('plank-profile', 'custom');
+    onTypeChange();
+    document.getElementById('custom-profile-info').textContent = res.message;
+}
+
 function activeChain() { const e = state.elevations[state.active]; return e ? e.chain : null; }
 // Keep the chain shown in the sidebar, then show the active face's chain if it is another.
 function showActiveChainSettings() {
@@ -795,6 +844,7 @@ function getParams() {
     p.share_offcuts = document.getElementById('share_offcuts').checked;
     p.plank_orient = toggleValue('plank-orient');
     p.plank_profile = toggleValue('plank-profile') || 'board';
+    Object.assign(p, customProfileParams());
     p.seam_deck = val('seam_deck');
     p.counter_batten = val('counter_batten');
     return p;
@@ -823,7 +873,10 @@ function syncTypeUI() {
     document.getElementById('plank-section').style.display = panel ? 'none' : '';
     // Standing seam is a plank profile: its own fields for the board's, and its stock length is a tray's
     const seam = !panel && toggleValue('plank-profile') === 'seam';
-    document.getElementById('board-fields').style.display = seam ? 'none' : '';
+    const custom = !panel && toggleValue('plank-profile') === 'custom';
+    document.getElementById('board-fields').style.display = seam || custom ? 'none' : '';
+    document.getElementById('custom-fields').style.display = custom ? '' : 'none';
+    if (custom) showCustomProfile();
     document.getElementById('seam-fields').style.display = seam ? '' : 'none';
     document.getElementById('seam-edge-fields').style.display = seam ? '' : 'none';
     document.getElementById('plank-len-label').innerHTML = seam ? 'Longest tray <span class="unit">mm, about 4000 on a facade</span>'
@@ -840,6 +893,8 @@ function updateSliderRange() {
     let half;
     if (p.cladding_type === 'panel') half = (p.panel_w + p.panel_gap) / 2;
     else if (p.plank_orient === 'vertical' && p.plank_profile === 'seam') half = p.seam_centres / 2;
+    else if (p.plank_orient === 'vertical' && p.plank_profile === 'custom')
+        half = ((importedProfiles[p.custom_profile] || CUSTOM_LIBRARY[p.custom_profile] || { cover: 174 }).cover) / 2;
     else if (p.plank_orient === 'vertical') half = (p.plank_lap > 0 ? p.plank_w - p.plank_lap : p.plank_w + p.plank_gap) / 2;
     else half = p.batten_centres / 2;
     const s = document.getElementById('offset');
@@ -942,7 +997,9 @@ function updateDerivedStatic(p) {
     const cb = p.counter_batten === 'auto' ? vertical : p.counter_batten === 'yes';
     document.getElementById('d-battens').textContent = battens + (cb ? ' on vertical counter-battens' : '');
     document.getElementById('d-cover').textContent = p.cladding_type === 'panel'
-        ? `${p.panel_w + p.panel_gap} mm bay` : `${p.plank_lap > 0 ? p.plank_w - p.plank_lap : p.plank_w + p.plank_gap} mm`;
+        ? `${p.panel_w + p.panel_gap} mm bay`
+        : p.plank_profile === 'custom' ? `${(+(importedProfiles[p.custom_profile] || CUSTOM_LIBRARY[p.custom_profile] || {}).cover).toFixed(1)} mm`
+        : `${p.plank_lap > 0 ? p.plank_w - p.plank_lap : p.plank_w + p.plank_gap} mm`;
     if (p.cladding_type === 'panel') {
         const bay = p.panel_w + p.panel_gap;
         document.getElementById('batten_centres').value = (bay / Math.ceil(bay / 600)).toFixed(0);
@@ -996,6 +1053,7 @@ function snapshotState() {
     for (const k of STATE_TOGGLES) settings[k] = toggleValue(k);
     settings.counter_batten = val('counter_batten');
     settings.seam_deck = val('seam_deck');
+    Object.assign(settings, customProfileParams());
     const elevation = e => ({
         name: e.name, storey: e.storey || null, start: e.start || 0, rev: !!e.rev, link: e.link || null, offset: e.offset || 0,
         cornerLo: e.cornerLo || 0, cornerHi: e.cornerHi || 0, masterLo: !!e.masterLo, masterHi: !!e.masterHi,
@@ -1090,6 +1148,8 @@ function restoreState(st) {
     for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
     if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
     if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
+    if (s.custom_section) addCustomProfile(s.custom_section, true);
+    else if (s.custom_profile && CUSTOM_LIBRARY[s.custom_profile]) document.getElementById('custom_profile').value = s.custom_profile;
     const byName = {};
     for (const c of st.chains || []) {
         const chain = { name: c.name, members: [], length: 0, built: !!c.built,
@@ -1239,7 +1299,7 @@ function scheduleNesting() {
 // The cutting job: the active chain and every other built chain cut from the same material
 // (cladding, profile and stock sizes alike), packed together so they share offcuts. A chain
 // in another material has its own job, shown when one of its faces is active.
-const MATERIAL_KEYS = ['cladding_type', 'plank_profile', 'board_w', 'board_h', 'panel_t', 'plank_w', 'plank_t',
+const MATERIAL_KEYS = ['cladding_type', 'plank_profile', 'custom_profile', 'board_w', 'board_h', 'panel_t', 'plank_w', 'plank_t',
                        'plank_len', 'seam_centres', 'seam_t'];
 function materialOf(c) {
     const s = c.settings || {};
@@ -1561,7 +1621,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

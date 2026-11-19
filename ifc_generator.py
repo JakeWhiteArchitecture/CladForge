@@ -139,6 +139,16 @@ def _prism_solid(ifc, mesh):
                                           float(mesh["thickness"])), "SweptSolid"
 
 
+def _body(ifc, mesh):
+    """A mesh's solid, or with "parts" (a custom profile's section, cladding_profiles) one
+    solid per part, all breps: ([solids], representation type)."""
+    parts = mesh.get("parts")
+    if not parts:
+        solid, kind = _prism_solid(ifc, mesh)
+        return [solid], kind
+    return [_corner_brep(ifc, dict(mesh, **part)) for part in parts], "Brep"
+
+
 def _point(ifc, cache, xyz):
     key = tuple(round(float(c), 4) for c in xyz)
     if key not in cache:
@@ -190,7 +200,7 @@ def _corner_brep(ifc, mesh):
 def _make_element(ifc, body, ifc_class, name, solid, predefined=None, object_type=None):
     element = ifcopenshell.api.run("root.create_entity", ifc, ifc_class=ifc_class, name=name)
     solid, kind = solid
-    rep = ifc.createIfcShapeRepresentation(body, "Body", kind, [solid])
+    rep = ifc.createIfcShapeRepresentation(body, "Body", kind, solid if isinstance(solid, list) else [solid])
     element.Representation = ifc.createIfcProductDefinitionShape(None, None, [rep])
     origin = ifc.createIfcCartesianPoint((0.0, 0.0, 0.0))
     element.ObjectPlacement = ifc.createIfcLocalPlacement(None, ifc.createIfcAxis2Placement3D(origin, None, None))
@@ -351,10 +361,12 @@ def meshes_to_ifc(meshes, params, infos=None):
             ifc_class, predefined, label = _IFC_TYPE_MAP.get(mesh.get("ifc_type"), ("IfcBuildingElementProxy", None, None))
             if mesh.get("ifc_type") == "plank" and pe["seam"]:
                 label = "Standing seam tray"
+            elif mesh.get("ifc_type") == "plank" and pe.get("section"):
+                label = "Cladding plank (%s)" % pe["section"]["name"]
             if mesh.get("ifc_type") == "panel" and pe["panels_as_walls"]:
                 ifc_class, predefined = "IfcWall", "USERDEFINED"
             try:
-                elem = _make_element(ifc, body, ifc_class, mesh.get("name") or label, _prism_solid(ifc, mesh),
+                elem = _make_element(ifc, body, ifc_class, mesh.get("name") or label, _body(ifc, mesh),
                                      predefined, label)
             except Exception:
                 continue

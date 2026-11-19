@@ -565,6 +565,29 @@ function prismGeometry(m) {
     return geo;
 }
 
+// One prism's body, its corner ends applied: local z from 0 at its own depth.
+function prismBody(m) {
+    const geo = m.vshift ? prismGeometry(m) : new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false });
+    applyCorner(geo, m);
+    return geo;
+}
+
+// A plank of a custom profile (cladding_profiles): its section's slabs, each a prism at
+// its own depth, as one body placed at the plank's depth.
+function partsGeometry(m) {
+    const pos = [];
+    for (const part of m.parts) {
+        let g = prismBody(part);
+        if (g.index) g = g.toNonIndexed();
+        const p = g.attributes.position, dz = part.depth - m.depth;
+        for (let i = 0; i < p.count; i++) pos.push(p.getX(i), p.getY(i), p.getZ(i) + dz);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
+    return geo;
+}
+
 function highlightCorner(frame, u, height) {
     // Flash the corner edge so a row in the panel points at something in the model.
     clearGroup(cornerGroup);
@@ -588,9 +611,8 @@ function renderGeometry(meshes) {
         const layer = _layerOf[m.ifc_type] || 'cladding';
         if (!byLayer[layer]) { byLayer[layer] = new THREE.Group(); byLayer[layer].name = layer; cladGroup.add(byLayer[layer]); }
         let geo;
-        try { geo = m.vshift ? prismGeometry(m) : new THREE.ExtrudeGeometry(shapeFromRings(m.profile, m.holes), { depth: m.thickness, bevelEnabled: false }); }
+        try { geo = m.parts && m.parts.length ? partsGeometry(m) : prismBody(m); }
         catch (e) { continue; }
-        applyCorner(geo, m);
         // A standing seam's deck lies right behind trays under a millimetre thick: pushed back in
         // depth, so from across the street it does not show through them.
         const behind = m.ifc_type === 'deck';
