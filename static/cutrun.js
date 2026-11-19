@@ -244,6 +244,7 @@ function runGo(i) {
 const runLit = (t, s) => t.key === s.key && t.j <= s.j;
 
 function paintWall(s) {
+    requestRedraw();
     clearGlow();
     run.glow = new THREE.Group();
     scene.add(run.glow);
