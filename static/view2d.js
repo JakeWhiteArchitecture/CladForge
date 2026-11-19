@@ -32,7 +32,13 @@ function currentPose() {
 // kept clear, so no dimension lands under it.
 function elevationPose(frame, box) {
     const M = frameMatrix(frame, 0);
-    const dir = new THREE.Vector3(frame.n[0], 0, -frame.n[1]).normalize();
+    // Along the face's own normal, so a pitched face is seen flat too. With the camera's up
+    // at world up, a face's v (up the wall, or up the slope) then runs up the screen. A
+    // level face gives world up nothing to work on, so the view leans a hair off its
+    // normal, against v, which is enough to put v up the screen there as well.
+    const dir = v3(frame.n).normalize();
+    const up = frame.v || [0, 0, 1];
+    if (Math.abs(up[2]) < 0.02) dir.addScaledVector(v3(up), frame.n[2] > 0 ? -0.002 : 0.002).normalize();
     const clear = readoutReserve();
     const w = (box.u1 - box.u0 + 2 * VIEW2D_DIMS) / (1 - clear), h = box.v1 - box.v0 + 2 * VIEW2D_DIMS;
     const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));

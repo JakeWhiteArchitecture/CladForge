@@ -33,7 +33,7 @@ from shapely.geometry import Polygon, box
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
-from cladding_constants import _prism, frame_to_world
+from cladding_constants import _prism, frame_to_world, frame_v
 
 PROFILE_NAME = "Outer corner profile (Rockpanel Profile D type)"
 WALL = 1.1                  # mm, aluminium
@@ -127,9 +127,9 @@ def vertical_profile(frame, u_corner, toward, v_from, v_to, face, D, name, eleva
     corner running towards it in the direction *toward* (+1 along u, -1 against)."""
     if v_to - v_from < 1.0:
         return None
-    U, N = frame["u"], frame["n"]
-    return profile_mesh(frame_to_world(frame, u_corner, v_from, face), [toward * U[0], toward * U[1], 0.0],
-                        [0.0, 0.0, 1.0], v_to - v_from, D, [-N[0], -N[1], 0.0], name, elevation, trim)
+    U, N, V = frame["u"], frame["n"], frame_v(frame)
+    return profile_mesh(frame_to_world(frame, u_corner, v_from, face), [toward * c for c in U],
+                        [float(c) for c in V], v_to - v_from, D, [-c for c in N], name, elevation, trim)
 
 
 def head_profile(frame, u_from, u_to, v_corner, face, D, name, elevation, trim=False):
@@ -138,9 +138,9 @@ def head_profile(frame, u_from, u_to, v_corner, face, D, name, elevation, trim=F
     Marley-type plank profile."""
     if u_to - u_from < 1.0:
         return None
-    U, N = frame["u"], frame["n"]
-    return profile_mesh(frame_to_world(frame, u_from, v_corner, face), [0.0, 0.0, -1.0],
-                        [U[0], U[1], 0.0], u_to - u_from, D, [-N[0], -N[1], 0.0], name, elevation, trim)
+    U, N, V = frame["u"], frame["n"], frame_v(frame)
+    return profile_mesh(frame_to_world(frame, u_from, v_corner, face), [-float(c) for c in V],
+                        [float(c) for c in U], u_to - u_from, D, [-c for c in N], name, elevation, trim)
 
 
 def strip(u0, u1, v0, v1):

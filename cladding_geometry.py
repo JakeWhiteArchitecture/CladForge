@@ -10,7 +10,7 @@ import math
 
 from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_AIR, SEAM_HEAD_D, SEAM_STANDOFF
 from cladding_booleans import clip_region, strip_intervals, iter_polygons, polygon_to_rings
-from cladding_constants import frame_to_world
+from cladding_constants import frame_to_world, frame_v, z_to_v
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
                             opening_key, opening_frames, settings as edge_settings)
 import cladding_corners as profiles
@@ -472,7 +472,7 @@ def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None, **extra):
 def _datum(elev):
     """The chain's course datum in this elevation's v, or None outside a chain."""
     datum = elev.get("course_datum_z")
-    return None if datum is None else float(datum) - float(elev["frame"]["origin"][2])
+    return None if datum is None else z_to_v(elev["frame"], datum)
 
 
 def _courses(elev, v0, H, pitch):
@@ -1266,19 +1266,23 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
 
 
 def _head_frame(frame, u_start, v_head, face_depth):
-    """Frame of a head lining, in the general frame: it lies flat under the head facing
-    down (n = -Z), u runs inward from the cladding face like a jamb lining's, and
-    v = n × u runs along the wall. The mitre at its front end is then the same end
+    """Frame of a head lining, in the general frame: it lies under the head facing down
+    the face (n = -v: world -Z on a wall, down the slope on a pitched face, so the lining
+    is square to the face), u runs inward from the cladding face like a jamb lining's,
+    and v = n × u runs along the wall. The mitre at its front end is then the same end
     shear as a jamb lining's."""
-    n, uw = frame["n"], frame["u"]
+    n, uw, up = frame["n"], frame["u"], frame_v(frame)
     return {"origin": frame_to_world(frame, u_start, v_head, face_depth),
-            "u": [-n[0], -n[1], 0.0], "v": [uw[0], uw[1], 0.0], "n": [0.0, 0.0, -1.0]}
+            "u": [-n[0], -n[1], -n[2]], "v": [uw[0], uw[1], uw[2]], "n": [-up[0], -up[1], -up[2]]}
 
 
 def _reveal_frame(frame, u_jamb, face_depth, sign):
     """Frame of a reveal lining: u runs inward from the cladding face, and the outward
     normal faces into the opening (sign = +1 where the opening is at greater u)."""
     n = frame["n"]
-    return {"origin": frame_to_world(frame, u_jamb, 0.0, face_depth),
-            "u": [-n[0], -n[1], 0.0],
-            "n": [sign * frame["u"][0], sign * frame["u"][1], 0.0]}
+    out = {"origin": frame_to_world(frame, u_jamb, 0.0, face_depth),
+           "u": [-n[0], -n[1], -n[2]],
+           "n": [sign * frame["u"][0], sign * frame["u"][1], sign * frame["u"][2]]}
+    if frame_v(frame)[2] != 1.0:
+        out["v"] = list(frame_v(frame))         # up the slope: a wall's is world Z, the default
+    return out

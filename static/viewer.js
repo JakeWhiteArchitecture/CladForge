@@ -16,7 +16,7 @@ const layerVisible = { model: true, sheathing: true, insulation: true, counter_b
 // One colour for every picked face and one for every wall outline: which elevation a
 // face belongs to is the list's job, not the viewport's.
 const PICK_COLOR = 0x2a9d8f, OUTLINE_COLOR = 0x8ea3b8;
-const VERT_TOL = Math.sin(Math.PI / 180);   // 1 degree: what counts as a vertical face
+const FLAT_TOL = Math.sin(Math.PI / 180);   // 1 degree: how far apart two normals may be on one flat face
 
 // ─── SCENE ───
 function initThree() {
@@ -439,10 +439,12 @@ function faceNormals(geo) {
 function coplanarFaces(mesh, hitFaceIndex) {
     // Flood fill from the hit face over faces that share a vertex *position* (web-ifc
     // duplicates vertices per triangle, so index adjacency would stop at every fan),
-    // within 1 degree of the hit normal and on the same plane. Vertical faces only.
+    // within 1 degree of the hit normal and on the same plane. Any flat face: a wall, a
+    // leaning wall, a roof slope, a flat roof (the engine stands a wall up and keeps the
+    // rest on their own plane, fabric_extract.face_axis). Null for a sliver with no normal.
     const geo = mesh.geometry, pos = geo.attributes.position.array, idx = geo.index ? geo.index.array : null;
     const normals = faceNormals(geo), hitN = normals[hitFaceIndex];
-    if (Math.abs(hitN.y) >= VERT_TOL) return null;
+    if (!hitN || !(hitN.lengthSq() > 0.5)) return null;
     const count = normals.length, vertToFaces = new Map();
     const keyOf = vi => { const p = vi * 3; return Math.round(pos[p] * 10) + ',' + Math.round(pos[p + 1] * 10) + ',' + Math.round(pos[p + 2] * 10); };
     for (let f = 0; f < count; f++) for (let v = 0; v < 3; v++) {
@@ -462,7 +464,7 @@ function coplanarFaces(mesh, hitFaceIndex) {
                 const n = normals[nb];
                 const p = (idx ? idx[nb * 3] : nb * 3) * 3;
                 const d = hitN.x * pos[p] + hitN.y * pos[p + 1] + hitN.z * pos[p + 2];
-                if (Math.abs(n.dot(hitN)) >= 1 - VERT_TOL && Math.abs(n.y) < VERT_TOL && Math.abs(d - d0) < 5) {
+                if (Math.abs(n.dot(hitN)) >= 1 - FLAT_TOL && Math.abs(d - d0) < 5) {
                     collected.add(nb); queue.push(nb);
                 }
             }

@@ -152,6 +152,25 @@ def frame_to_world(frame, u, v, d=0.0):
             o[2] + U[2] * u + V[2] * v + N[2] * d]
 
 
+def frame_v(frame):
+    """The frame's v as a vector: world Z for a wall, up the slope for a pitched face."""
+    return frame.get("v") or WORLD_UP
+
+
+def v_to_z(frame, v):
+    """The world height of the frame's local v (along u = 0, on the face). Up a slope a
+    millimetre of v is less than a millimetre of height; a level face has no height to
+    read, so its v stands in for one and comes back unchanged through z_to_v."""
+    rise = frame_v(frame)[2]
+    return float(frame["origin"][2]) + float(v) * (rise if abs(rise) > 1e-6 else 1.0)
+
+
+def z_to_v(frame, z):
+    """The frame's local v at a world height: the inverse of v_to_z."""
+    rise = frame_v(frame)[2]
+    return (float(z) - float(frame["origin"][2])) / (rise if abs(rise) > 1e-6 else 1.0)
+
+
 def world_to_frame(frame, p):
     """IFC world [x, y, z] → frame-local (u, v, depth). The inverse of frame_to_world for
     an orthonormal frame."""
