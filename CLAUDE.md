@@ -25,12 +25,22 @@ first, and re-check after it does.
 
 ## Testing
 
-Both suites run before any push:
+Two suites:
 
 ```bash
 python -m pytest -q                                    # engine + export
 VENDOR_DIR=... PLAYWRIGHT_MODULE=... node tests/smoke.js  # browser, needs app.py running
 ```
+
+GitHub runs both on every pull request and on `main` (`.github/workflows/tests.yml`, the
+*Tests* checks on the PR). So: run pytest before any push; the browser suite need not be
+run by hand first, but **a PR is not ready to merge until both checks are green**, and a
+red one is fixed before anything else. Run the browser suite by hand when working on
+browser behaviour or chasing a CI failure.
+
+`README.md` merges by union (`.gitattributes`): two branches adding or changing neighbouring
+rows of the feature table merge without conflict. If both rewrote the same row, both
+versions are kept: after a merge, look for a doubled row and delete the stale one.
 
 Several branches can be tested side by side: give each `app.py` its own `PORT` and its
 smoke test the matching `SMOKE_URL` (`PORT=8081 python3 app.py`, `SMOKE_URL=http://127.0.0.1:8081/`).
