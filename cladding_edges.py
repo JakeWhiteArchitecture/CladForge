@@ -22,6 +22,7 @@ from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
 from cladding_primitives import clip_bounds, openings
+from cladding_corners import TRIM_BACK
 
 EDGE_DEFAULTS = {"top": 10.0, "side": 0.0, "bottom": 10.0}
 MITRE_GAP = 10.0        # between two mitred boards, measured straight across the joint
@@ -156,14 +157,16 @@ def opening_details(elev, p):
     "head_master"} as chosen on the elevation (elev["opening_details"], by opening_key)
     or mitred by default. Both jambs of an opening share one detail and one arrangement,
     mirrored; the head has its own. Master and Profile are panel details: with planks
-    the corner stays mitred."""
+    the corner stays mitred; Profile is offered with plank boards too (the Marley-type
+    profile), not with standing seam."""
     chosen = elev.get("opening_details") or {}
     panel = p.get("cladding_type") == "panel"
+    seam = bool(p.get("seam"))
     out = []
     for rect in openings(elev):
         d = dict(OPENING_DEFAULT, **(chosen.get(opening_key(rect)) or {}))
         for part in ("jamb", "head"):
-            if d[part] not in DETAILS or (d[part] in ("lap", "profile") and not panel):
+            if d[part] not in DETAILS or (d[part] == "lap" and not panel) or (d[part] == "profile" and seam):
                 d[part] = "mitre"
             if d[part + "_master"] not in ("face", "reveal"):
                 d[part + "_master"] = "face"
@@ -215,7 +218,7 @@ def opening_frames(elev, holes, face):
     return out
 
 
-def reveal_treatment(detail, master, face, pull, board, gap, pgap=0.0):
+def reveal_treatment(detail, master, face, pull, board, gap, pgap=0.0, back=0.0):
     """How the face board and the lining meet at a jamb or head: (w, lining).
 
     *w* = (e, k) is how far the face board's edge moves into the opening at depth s,
@@ -228,7 +231,9 @@ def reveal_treatment(detail, master, face, pull, board, gap, pgap=0.0):
                "reveal": the lining runs out flush to the face board's outside face,
                and the face board stops a panel joint gap short of the lining
       profile  both stop the profile's nose (D = board thickness) and *pgap* short of
-               the arris
+               the arris; with planks the Marley-type nose stands proud and runs *back*
+               (cladding_corners.TRIM_BACK) behind the boards' backs, and both stop that
+               much further back
       square   both stop square at the opening line (a placeholder)"""
     if detail == "mitre":
         # One cut on the bisector through the outer arris (the lining's opening face at the
@@ -240,7 +245,7 @@ def reveal_treatment(detail, master, face, pull, board, gap, pgap=0.0):
     if detail == "lap":
         return ((board, 0.0), (0.0, -(board + gap))) if master == "face" else ((-gap, 0.0), None)
     if detail == "profile":
-        return (-pgap, 0.0), (0.0, -(board + pgap))
+        return (-(back + pgap), 0.0), (0.0, -(board + back + pgap))
     return (0.0, 0.0), None
 
 
@@ -334,14 +339,15 @@ def mitre_to_linings(meshes, p, infos):
         return meshes
     face_by = {i["elevation"]: i.get("total_depth", 0.0) for i in infos}
     board = p["panel_t"] if p.get("cladding_type") == "panel" else p["plank_t"]
+    back = 0.0 if p.get("cladding_type") == "panel" else TRIM_BACK
     per = {}
     for elev in p.get("elevations", []):
         details = opening_details(elev, p)
         if details:
             s = settings(elev)
             face, pull = face_by.get(elev.get("name", ""), 0.0), mitre_pullback(s["gap"], 1.0)
-            treat = [(rect, reveal_treatment(d["jamb"], d["jamb_master"], face, pull, board, p["panel_gap"], s["pgap"])[0],
-                      reveal_treatment(d["head"], d["head_master"], face, pull, board, p["panel_gap"], s["pgap"])[0])
+            treat = [(rect, reveal_treatment(d["jamb"], d["jamb_master"], face, pull, board, p["panel_gap"], s["pgap"], back)[0],
+                      reveal_treatment(d["head"], d["head_master"], face, pull, board, p["panel_gap"], s["pgap"], back)[0])
                      for rect, d in details]
             per[elev.get("name", "")] = ([r for r, _d in details], treat, s["air"] if s["vent"] == "back" else 0.0)
     for m in meshes:
