@@ -151,7 +151,9 @@ function wizNext() {
 function wizBuild() {
     const d = WIZ.draft, built = pendingChains(), steps = wizStepIds();
     selectToggle('cladding-type', d.type === 'seam' ? 'plank' : d.type);
-    if (d.type !== 'panel') selectToggle('plank-profile', d.type === 'seam' ? 'seam' : 'board');
+    // planks keep a custom profile chosen in the sidebar; the wizard's plank sizes are a board's
+    if (d.type !== 'panel') selectToggle('plank-profile', d.type === 'seam' ? 'seam'
+                                         : toggleValue('plank-profile') === 'custom' ? 'custom' : 'board');
     if (d.type === 'seam')          // the standard centres only
         d.dims.seam_centres = String([430, 530].reduce((a, b) => Math.abs(b - d.dims.seam_centres) < Math.abs(a - d.dims.seam_centres) ? b : a));
     selectToggle('plank-orient', d.orient);

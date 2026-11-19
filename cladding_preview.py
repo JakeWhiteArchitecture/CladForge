@@ -9,6 +9,7 @@ sharing settings is built on its own, so one chain's choices never change anothe
 import json
 
 from cladding_constants import _parse, chain_params
+from cladding_profiles import profile_planks
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
 from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
@@ -109,6 +110,8 @@ def _preview_one(params):
     # holes left by trimming are mitred as well as the ends that land on a jamb.
     meshes = mitre_to_linings(meshes, p, infos)
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
+    if p["trim"]:                        # a custom profile's real section; a plain board while dragging
+        meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too
         for m in meshes:
             if m.get("ifc_type") == "reveal":
