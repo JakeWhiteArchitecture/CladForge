@@ -56,15 +56,64 @@ function initThree() {
         }
         renderer.setSize(container.clientWidth, container.clientHeight);
     });
+    watchForRedraws();
     (function animate() {
         requestAnimationFrame(animate);
-        controls.update();
+        const moved = controls.update();                        // true while orbiting, zooming or easing to rest
+        const now = performance.now();
+        if (!(moved || _redraw.dirty || now < _redraw.until || cameraMoved() || now - _redraw.last > REDRAW_IDLE_MS)) return;
+        _redraw.dirty = false; _redraw.last = now; _redraw.frames++;
         if (view2d.on && view2d.onFrame) view2d.onFrame();     // the 2D labels follow the view
         renderer.render(scene, activeCamera());
     })();
 }
 
+// ─── REDRAW ON DEMAND ───
+// The scene is drawn when something has changed, not sixty times a second: a frame the
+// engine does not have to queue behind, on a machine without a fast graphics card above
+// all. Something has changed when the camera moves (the controls say so, and its matrices
+// are compared in case anything else moved it), when an object is added to or taken out
+// of the scene, when the user touches anything (the handler's own changes, and the
+// rebuild that follows, land within REDRAW_AFTER_INPUT_MS), when the engine answers
+// (app.pyRun), or when code asks: requestRedraw(ms) draws the next frame, and keeps
+// drawing for ms. As a net under anything that slips through, an idle scene is still
+// drawn once every REDRAW_IDLE_MS.
+const REDRAW_AFTER_INPUT_MS = 700, REDRAW_IDLE_MS = 1000;
+const _redraw = { dirty: true, until: 0, last: 0, frames: 0, cam: null, sig: new Float64Array(32) };
+
+function requestRedraw(ms = 0) {
+    _redraw.dirty = true;
+    if (ms) _redraw.until = Math.max(_redraw.until, performance.now() + ms);
+}
+
+function cameraMoved() {
+    const cam = activeCamera(), sig = _redraw.sig;
+    cam.updateMatrixWorld();
+    const a = cam.matrixWorld.elements, b = cam.projectionMatrix.elements;
+    let moved = cam !== _redraw.cam;
+    for (let i = 0; i < 16; i++) {
+        if (sig[i] !== a[i] || sig[16 + i] !== b[i]) moved = true;
+        sig[i] = a[i]; sig[16 + i] = b[i];
+    }
+    _redraw.cam = cam;
+    return moved;
+}
+
+function watchForRedraws() {
+    for (const method of ['add', 'remove']) {              // anything put in or taken out of the scene
+        const original = THREE.Object3D.prototype[method];
+        THREE.Object3D.prototype[method] = function () { _redraw.dirty = true; return original.apply(this, arguments); };
+    }
+    const touched = () => requestRedraw(REDRAW_AFTER_INPUT_MS);
+    for (const type of ['pointerdown', 'pointerup', 'pointermove', 'wheel', 'keydown', 'keyup', 'click', 'dblclick',
+                        'input', 'change', 'touchstart', 'touchmove', 'touchend', 'dragover', 'drop'])
+        document.addEventListener(type, touched, { capture: true, passive: true });
+    window.addEventListener('resize', touched);
+    document.addEventListener('visibilitychange', touched);
+}
+
 function clearGroup(group) {
+    requestRedraw();
     while (group.children.length) {
         const c = group.children.pop();
         c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); });
@@ -291,15 +340,15 @@ function fitCameraTo(obj) {
     controls.update();
 }
 
-function setModelVisible(on) { layerVisible.model = on; modelGroup.visible = on; }
+function setModelVisible(on) { layerVisible.model = on; modelGroup.visible = on; requestRedraw(); }
 
 // ─── HIDING ELEMENTS ───
 // For getting round the model: a hidden element is not drawn and clicks pass through it,
 // so the face behind can be picked. It still counts for extraction (abutments, openings
 // and penetrations come from the whole model), and a new model starts with none hidden.
-function hideElement(mesh) { mesh.visible = false; }
-function hideElementType(type) { for (const m of meshMeta) if (m.type === type) m.mesh.visible = false; }
-function showAllElements() { for (const m of meshMeta) m.mesh.visible = true; }
+function hideElement(mesh) { mesh.visible = false; requestRedraw(); }
+function hideElementType(type) { for (const m of meshMeta) if (m.type === type) m.mesh.visible = false; requestRedraw(); }
+function showAllElements() { for (const m of meshMeta) m.mesh.visible = true; requestRedraw(); }
 function hiddenElements() { return meshMeta.filter(m => !m.mesh.visible); }
 function elementTypes() {             // [[type, count]], most common first
     const n = {};
@@ -691,6 +740,7 @@ function renderDimensions(dims, elevByName, only) {
 
 function setLayerVisible(key, on) {
     layerVisible[key] = on;
+    requestRedraw();
     if (key === 'model') { modelGroup.visible = on; return; }
     if (key === 'grid') { if (gridHelper) gridHelper.visible = on; return; }
     if (key === 'dims') { dimGroup.visible = on || view2d.on; return; }

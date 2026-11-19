@@ -140,6 +140,7 @@ function apply2DLook(on) {
 
 // Called after every render of the cladding too, since a preview rebuilds it.
 function filter2D() {
+    requestRedraw();
     for (const layer of cladGroup.children)
         for (const o of layer.children) o.visible = !view2d.on || o.userData.elevation === view2d.name;
 }
