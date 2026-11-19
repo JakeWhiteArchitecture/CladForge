@@ -1,6 +1,7 @@
 // Browser smoke test: load the app in Chromium, import the sample IFC, pick the
 // south wall, and check that an elevation is extracted and the exports work.
 // Run: node tests/smoke.js  (needs the Flask server on :8080 and the proxy env)
+// Several at once: start each app.py with its own PORT and give its test SMOKE_URL.
 const path = require('path');
 const fs = require('fs');
 let page = null, logs = [];
@@ -82,7 +83,7 @@ async function main() {
     page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') logs.push(m.type() + ': ' + m.text().slice(0, 300)); });
     page.on('pageerror', e => logs.push('pageerror: ' + e.message));
     page.on('requestfailed', r => logs.push('requestfailed: ' + r.url() + ' ' + (r.failure() && r.failure().errorText)));
-    await page.goto('http://127.0.0.1:8080/', { waitUntil: 'load' });
+    await page.goto(process.env.SMOKE_URL || 'http://127.0.0.1:8080/', { waitUntil: 'load' });
 
     await page.setInputFiles('#ifc-file', path.join(__dirname, 'sample_house.ifc'));
     await page.waitForFunction(() => typeof allMeshes !== "undefined" && allMeshes.length > 0, null, { timeout: 120000 });
