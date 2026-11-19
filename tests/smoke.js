@@ -1291,7 +1291,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         return r;
     });
     console.log('custom profile:', JSON.stringify(custom));
-    if (!custom.planks || custom.withParts < custom.planks / 2 || custom.cover !== '174.0 mm' || !/Cedral Click: 188\.1 wide, 12\.0 thick/.test(custom.info)
+    if (!custom.planks || custom.withParts < custom.planks / 2 || custom.cover !== '172.1 mm' || !/Cedral Click: 186\.0 wide, 12\.0 thick/.test(custom.info)
         || custom.shown !== '' || custom.boardFields !== 'none' || custom.dragParts || custom.imported !== 'dxf:Shiplap'
         || !/130\.0 centres/.test(custom.importedInfo) || !custom.importedParts || custom.saved !== 130)
         throw new Error('custom plank profile wrong: ' + JSON.stringify(custom));

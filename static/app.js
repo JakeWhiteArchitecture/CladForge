@@ -730,7 +730,7 @@ function applySettings(s) {
 // ── custom plank profiles (cladding_profiles.py) ──
 // The library's are named in the select; one read from a DXF is kept here by its key and
 // sent with the parameters, so it travels with its chain's settings and the saved state.
-const CUSTOM_LIBRARY = { cedral_click: { name: 'Cedral Click', width: 188.136, thickness: 12.034, cover: 174.034 } };
+const CUSTOM_LIBRARY = { cedral_click: { name: 'Cedral Click', width: 186, thickness: 12, cover: 172.058 } };
 const importedProfiles = {};
 function customProfileParams() {
     const key = val('custom_profile') || 'cedral_click';

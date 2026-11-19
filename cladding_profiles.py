@@ -16,8 +16,8 @@ the depth carries the slope as a vertex shift ("vshift": v += c + d·s), like a 
 mitred to a lining. While a slider is dragged the preview skips this and shows the plain
 board.
 
-Profiles come from the library here (Cedral Click, measured from the drawing of three
-planks at their standard spacing), or from a DXF drawn the same way: two or more copies
+Profiles come from the library here (Cedral Click, from the drawing of three planks at
+their standard spacing, scaled to Marley's 186 x 12), or from a DXF drawn the same way: two or more copies
 of the section as closed polylines, at the spacing they are laid at (profile_from_dxf).
 """
 
@@ -28,15 +28,18 @@ from shapely.geometry.polygon import orient
 
 from cladding_booleans import iter_polygons
 
-# Cedral Click: three planks drawn at their standard spacing, 174.03 apart. Each is 188.14
-# overall and 12.03 thick (Cedral list it as 3600 x 186 x 12, 1.60 planks per m², which is
-# about 174 of cover). The face is the 12.03 side; the next plank's face covers the lip.
+# Cedral Click (Marley): three planks drawn at their standard spacing, scaled to Marley's
+# published size, 186 wide and 12 thick (3600 x 186 x 12; the drawing measured 188.14 x
+# 12.03, its spacing 174.03). Scaled with it the spacing is 172.06: 1.61 planks per m²
+# against Marley's 1.60. The face is the 12 side; the next plank's face covers the lip.
+_SX, _SY = 186.0 / 188.136, 12.0 / 12.034
 LIBRARY = {
     "cedral_click": {
         "name": "Cedral Click",
-        "ring": [(188.136, 0.0), (24.068, 0.0), (20.0, 7.034), (0.0, 7.034), (0.0, 12.034),
-                 (173.136, 12.034), (173.136, 7.034), (170.169, 7.034), (170.169, 5.085), (188.136, 5.085)],
-        "cover": 174.034,
+        "ring": [(round(w * _SX, 3), round(y * _SY, 3)) for w, y in
+                 [(188.136, 0.0), (24.068, 0.0), (20.0, 7.034), (0.0, 7.034), (0.0, 12.034),
+                  (173.136, 12.034), (173.136, 7.034), (170.169, 7.034), (170.169, 5.085), (188.136, 5.085)]],
+        "cover": round(174.034 * _SX, 3),
     },
 }
 DEFAULT = "cedral_click"
