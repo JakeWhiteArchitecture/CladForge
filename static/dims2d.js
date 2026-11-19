@@ -51,6 +51,7 @@ function renderDims2D() {
     jointLines(e, layer);
     supportLines(e, layer);
     postLines(e, layer);
+    staggerLines(e, layer);
     cornerBadges(e, layer);
     if (D2.editing) {            // the preview was rebuilt under an open editor: re-anchor it
         const again = D2.items.concat(D2.edges).find(i => i.el.dataset.key === D2.editing.key);
@@ -276,6 +277,54 @@ function postLines(e, layer) {
                         b: new THREE.Vector3(q.u, v1, 0).applyMatrix4(M) });
     });
     layer.appendChild(svg);
+}
+
+// ─── STAGGERS ───
+// Where the clad outline steps (its base or its top) and a client batten in use stands
+// within 100 mm, the joints either side land on the battens and miss the step, so a panel
+// is notched round it. Each such stagger is a dashed line up the step: clicking it puts a
+// panel joint on the stagger, on a batten of ours, and clicking again takes it off
+// (cladding_geometry._staggers).
+function staggerLines(e, layer) {
+    const info = (window._lastPreview.info || []).find(i => i.elevation === e.result.name);
+    const offered = ((info && info.staggers) || []).filter(q => q.offered);
+    if (!offered.length) return;
+    const M = frameMatrix(e.result.frame, 62), ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'edge2d-svg');
+    const H = e.result.height || 0;
+    for (const q of offered) {
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('stroke', q.on ? '#e879f9' : '#a78bfa');
+        line.setAttribute('class', 'stagger2d' + (q.on ? ' on' : ''));
+        if (!q.on) line.setAttribute('stroke-dasharray', '14 8');
+        line.dataset.kind = 'stagger';
+        line.dataset.key = 'stagger:' + postKey(q.u);
+        const title = document.createElementNS(ns, 'title');
+        const away = Math.round(Math.abs(q.near - q.u));
+        title.textContent = q.on
+            ? `Panel joint on the stagger at ${Math.round(q.u)}. Click to take it off (the joints go back on the client battens).`
+            : `Stagger at ${Math.round(q.u)}, ${away} mm from a client batten. Click to put a panel joint on it.`;
+        line.appendChild(title);
+        line.addEventListener('click', ev => { ev.stopPropagation(); toggleStagger(e, q); });
+        svg.appendChild(line);
+        // the whole height when it carries a joint, else just the step
+        const v0 = q.on ? 0 : q.v0, v1 = q.on ? H : q.v1;
+        D2.edges.push({ stagger: q, el: line, a: new THREE.Vector3(q.u, v0, 0).applyMatrix4(M),
+                        b: new THREE.Vector3(q.u, v1, 0).applyMatrix4(M) });
+    }
+    layer.appendChild(svg);
+}
+
+function toggleStagger(e, q) {
+    const on = !q.on, joints = Object.assign({}, e.staggerJoints || {});
+    if (on) joints[postKey(q.u)] = true; else delete joints[postKey(q.u)];
+    e.staggerJoints = Object.keys(joints).length ? joints : null;
+    setStatus(on ? `Panel joint put on the stagger at ${Math.round(q.u)} on ${e.name}`
+                 : `Joint taken off the stagger at ${Math.round(q.u)} on ${e.name}`, 'ready');
+    renderElevationList();
+    onNumeric();
+    return on;
 }
 
 // Our own vertical supports under the client's: the battens we add (at the ends, where a
