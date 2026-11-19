@@ -920,7 +920,7 @@ function onSlider(value) {
 function onNumeric() {   // 300 ms debounce on typed numbers
     document.getElementById('plank_splice_val').textContent = splicePiece();
     if (_numTimer) clearTimeout(_numTimer);
-    _numTimer = setTimeout(() => { updateSliderRange(); updatePreview(); }, 300);
+    _numTimer = setTimeout(() => { _numTimer = null; updateSliderRange(); updatePreview(); }, 300);
 }
 
 // ─── PREVIEW ───
@@ -1293,7 +1293,7 @@ import ifc_generator`);
 let _nestTimer = null, _nestSeq = 0;
 function scheduleNesting() {
     if (_nestTimer) clearTimeout(_nestTimer);
-    _nestTimer = setTimeout(() => runNesting(false), 300);
+    _nestTimer = setTimeout(() => { _nestTimer = null; runNesting(false); }, 300);
 }
 
 // The cutting job: the active chain and every other built chain cut from the same material
@@ -1583,19 +1583,31 @@ window.cladforge = cladforge;
 // Python computes, so the check only gets a turn once Python has stopped: if the engine
 // then answers a trivial call with "fatally failed", the stuck call is rejected with that
 // error and the caller's restart path takes over.
+// Is anything still on its way? A typed number waiting out its debounce, a face being
+// extracted, a rebuild or a cutting plan with the engine (or waiting to start), the engine
+// itself restarting, or the view easing between 3D and 2D. The browser test waits on this
+// rather than guessing how long a rebuild takes.
+let _engineCalls = 0;
+function appIdle() {
+    return pyReady && !_restarting && !_numTimer && !_nestTimer && _engineCalls === 0 && !view2d.anim
+        && !state.elevations.some(e => e._running || e.pending);
+}
+
 function pyRun(code) {
     const py = pyodide;
+    _engineCalls++;
     return new Promise((resolve, reject) => {
         let done = false;
         const timer = setInterval(() => {
             if (done) return;
             try { py.runPython('0'); }
             catch (err) {
-                if (/fatally failed|Aborted/i.test(err.message || '')) { done = true; clearInterval(timer); reject(err); }
+                if (/fatally failed|Aborted/i.test(err.message || '')) { done = true; _engineCalls--; clearInterval(timer); reject(err); }
             }
         }, 1500);
-        py.runPythonAsync(code).then(v => { done = true; clearInterval(timer); resolve(v); },
-                                     e => { done = true; clearInterval(timer); reject(e); });
+        // whatever the answer changes on screen is drawn (viewer.requestRedraw)
+        const over = () => { if (!done) { done = true; _engineCalls--; clearInterval(timer); requestRedraw(300); } };
+        py.runPythonAsync(code).then(v => { over(); resolve(v); }, e => { over(); reject(e); });
     });
 }
 

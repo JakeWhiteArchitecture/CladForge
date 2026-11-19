@@ -175,6 +175,7 @@ function tintPanels() {
     if (key) key.style.display = on ? '' : 'none';
     if (typeof cladGroup === 'undefined' || !cladGroup) return;
     if (typeof inCuttingRun === 'function' && inCuttingRun()) return;    // the run colours by board
+    requestRedraw();
     for (const layer of cladGroup.children) for (const o of layer.children) {
         if (!o.isMesh || !/ (Panel R|Plank C)\d/.test(o.userData.name || '')) continue;
         if (o.userData.baseColor === undefined) o.userData.baseColor = o.material.color.getHex();
