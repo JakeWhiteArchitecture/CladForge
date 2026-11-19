@@ -32,6 +32,9 @@ python -m pytest -q                                    # engine + export
 VENDOR_DIR=... PLAYWRIGHT_MODULE=... node tests/smoke.js  # browser, needs app.py running
 ```
 
+Several branches can be tested side by side: give each `app.py` its own `PORT` and its
+smoke test the matching `SMOKE_URL` (`PORT=8081 python3 app.py`, `SMOKE_URL=http://127.0.0.1:8081/`).
+
 Restart `app.py` after editing `templates/index.html` — Jinja caches the template and a
 stale one produces confusing browser failures.
 
