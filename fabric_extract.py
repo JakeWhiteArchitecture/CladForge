@@ -1,12 +1,17 @@
 """
 CladForge — fabric extraction.
 
-Turns picked wall-face triangles into a named elevation: a coplanar region in
-its own (u, v) frame, with openings as interior holes (or notches where they
+Turns picked face triangles into a named elevation: a coplanar region in its own
+(u, v) frame, with openings as interior holes (or notches where they
 break the outline), penetrations subtracted, slab/roof abutments detected as
 lines (level or pitched) for the splash zone, and the region cut back to the
 patches the clicks landed on. Also decides whether two elevations meet at a
 corner so the UI can chain them. Runs once per selection (Pyodide or Flask).
+
+A face within a degree of vertical is a wall and is stood up: u runs along it and v is
+world Z. Any other face keeps its own plane (a leaning wall, a roof slope, a flat roof,
+a soffit): u is still level and v runs up the slope, so everything measured "up the
+wall" is measured up the slope instead (face_axis, _to_local).
 
 Payload (all coordinates IFC mm, Z-up):
   {"name": "Elevation A",
@@ -17,12 +22,13 @@ Payload (all coordinates IFC mm, Z-up):
    "options": {"penetrations": true, "clad_depth": 150.0}}   # depth of the cladding zone
 
 Result: {"ok", "name", "warnings", "frame", "polygons", "notches", "width",
-         "height", "area", "n_holes", "n_faces",
+         "height", "area", "n_holes", "n_faces", "pitch", "faces_down",
          "abutments": [{"u0","u1","v","line":[[u,v],...],"source",...}]}
 """
 
 import math
 import time
+from functools import lru_cache
 
 from shapely.geometry import Polygon, MultiPoint, LineString, Point
 from shapely import union_all
@@ -32,7 +38,8 @@ from shapely.affinity import translate
 from cladding_booleans import iter_polygons, polygon_to_rings, _difference, near_misses, ROBUST_GRID
 
 PLANE_TOL = 25.0          # mm – off-plane distance still treated as on the face
-VERTICAL_TOL = 0.087      # sin(5 deg) – flatten faces this close to vertical
+VERTICAL_TOL = math.sin(math.radians(1.0))   # a face this close to vertical is a wall, and is stood up
+LEVEL_TOL = 0.005         # sin(0.3 deg) – flatter than this a face has no slope to set u out from
 MIN_HOLE_AREA = 2500.0    # mm² – ignore holes smaller than 50 x 50
 EDGE_MARGIN = 50.0        # mm – abutments this close to the top/bottom are not abutments
 CORNER_TOL = 400.0        # mm – a corner may sit this far past an elevation's end (wall thickness)
@@ -101,7 +108,8 @@ def fit_plane(faces, outward=None, mode="wall"):
     """Area-weighted plane through the picked triangles. Returns (n, d, warnings) with
     n·p = d on the plane.
 
-    "wall" flattens n to horizontal, pointing outward, and rejects a horizontal pick.
+    "wall" points n outward. Within VERTICAL_TOL of vertical the face is a wall and n is
+    flattened to horizontal; any other face (leaning, pitched, level) keeps its own n.
     "roof" needs n within 5 deg of vertical and facing up, and snaps it to world Z, so
     the roof datum is a level plane at the picked face's mean height."""
     if mode == "roof":
@@ -119,11 +127,10 @@ def fit_plane(faces, outward=None, mode="wall"):
     n = _norm(acc)
     if outward and _dot(n, outward) < 0:
         n = (-n[0], -n[1], -n[2])
-    if abs(n[2]) > VERTICAL_TOL:
-        warnings.append("Face is %.1f deg off vertical; treated as vertical" % math.degrees(math.asin(min(1, abs(n[2])))))
-    n = _norm((n[0], n[1], 0.0))
     if n == (0.0, 0.0, 0.0):
-        return None, 0.0, ["Selection is horizontal — pick a wall face"]
+        return None, 0.0, ["Picked faces have no area"]
+    if abs(n[2]) <= VERTICAL_TOL:
+        n = _norm((n[0], n[1], 0.0))
     tot, dsum = 0.0, 0.0
     for a, b, c in faces:
         area = math.sqrt(_dot(_cross(_sub(b, a), _sub(c, a)), _cross(_sub(b, a), _sub(c, a)))) / 2
@@ -158,9 +165,44 @@ def _fit_roof_plane(faces, outward=None):
     return (0.0, 0.0, 1.0), (zsum / tot if tot else 0.0), warnings
 
 
+def face_axis(n, faces=None):
+    """The face's u: level, along the face, to the viewer's right (z × n). A level face has
+    no such direction, so its u is the long side of the picked faces' outline in plan."""
+    if n[2] == 0.0:
+        return (-n[1], n[0], 0.0)
+    h = math.hypot(n[0], n[1])
+    if h >= LEVEL_TOL:
+        return (-n[1] / h, n[0] / h, 0.0)
+    try:
+        box_ = unary_union([Polygon([(q[0], q[1]) for q in tri]).buffer(0) for tri in faces or []]).minimum_rotated_rectangle
+        c = list(box_.exterior.coords)
+        a, b = (c[1][0] - c[0][0], c[1][1] - c[0][1]), (c[2][0] - c[1][0], c[2][1] - c[1][1])
+        ax = a if math.hypot(*a) >= math.hypot(*b) else b
+        ax = (ax[0] / math.hypot(*ax), ax[1] / math.hypot(*ax))
+    except Exception:   # noqa: BLE001 — no outline to read: world X is as good as any
+        ax = (1.0, 0.0)
+    if abs(ax[1]) < 1e-9:
+        ax = (math.copysign(1.0, ax[0]), 0.0)
+    if ax[0] < -1e-9 or (abs(ax[0]) <= 1e-9 and ax[1] < 0):
+        ax = (-ax[0], -ax[1])                    # one answer for a rectangle, whichever way it was drawn
+    return (ax[0], ax[1], 0.0)
+
+
+@lru_cache(maxsize=64)
+def _up(n, u):
+    """The face's v: up the wall (world Z) or up the slope, n × u."""
+    return (0.0, 0.0, 1.0) if n[2] == 0.0 else _cross(n, u)
+
+
+def face_pitch(n):
+    """The face's angle from level, in degrees: 90 a wall, 0 a flat roof or a soffit."""
+    return math.degrees(math.acos(max(-1.0, min(1.0, abs(n[2])))))
+
+
 def make_frame(n, d, umin, vmin, mode="wall", u=None):
     """Frame dict {"origin", "u", "v", "n"} with origin at local (0, 0) and v = n × u.
-    "wall": u along the wall (viewer's right), n outward, v is world Z.
+    "wall": u level along the face (viewer's right), n outward, v world Z for a wall and
+            up the slope for a face that leans or is pitched (*u* given for a level one).
     "roof": n is world Z, u the given horizontal axis (FallWright's roof_axis), v = n × u."""
     if mode == "roof":
         u = u or (1.0, 0.0, 0.0)
@@ -168,6 +210,12 @@ def make_frame(n, d, umin, vmin, mode="wall", u=None):
         origin = (u[0] * umin + v[0] * vmin, u[1] * umin + v[1] * vmin, d)
         return {"origin": [round(c, 3) for c in origin], "u": [round(c, 9) for c in u],
                 "v": [round(c, 9) for c in v], "n": [0.0, 0.0, 1.0]}
+    if n[2] != 0.0:
+        u = tuple(u) if u else face_axis(n)
+        v = _up(tuple(n), u)
+        origin = tuple(n[i] * d + u[i] * umin + v[i] * vmin for i in range(3))
+        return {"origin": [round(c, 3) for c in origin], "u": [round(c, 9) for c in u],
+                "v": [round(c, 9) for c in v], "n": [round(c, 9) for c in n]}
     u = (-n[1], n[0], 0.0)                       # z × n
     origin = (n[0] * d + u[0] * umin, n[1] * d + u[1] * umin, vmin)
     return {"origin": [round(c, 3) for c in origin], "u": [round(c, 6) for c in u],
@@ -175,11 +223,13 @@ def make_frame(n, d, umin, vmin, mode="wall", u=None):
 
 
 def _to_local(p, n, u, mode="wall"):
-    """World point → (u, v) in the frame's plane: up the wall is world Z, across a roof it
-    is n × u."""
+    """World point → (u, v) in the frame's plane: up a wall is world Z, up a slope and
+    across a roof it is n × u."""
     if mode == "roof":
         return (_dot(p, u), -p[0] * u[1] + p[1] * u[0])
-    return (_dot(p, u), p[2])
+    if n[2] == 0.0:
+        return (_dot(p, u), p[2])
+    return (_dot(p, u), _dot(p, _up(tuple(n), tuple(u))))
 
 
 # ── region ────────────────────────────────────────────────────────────────
@@ -307,6 +357,7 @@ def _zone_section(tris, n, d, u, depth):
 
 
 MAX_TOP_SAMPLES = 240   # probes across one abutment: each is a ray cast, so this is the cost
+END_INSET = 0.05        # mm – the first and last probe are taken this far inside the section
 
 
 def _top_line(poly, u0, u1):
@@ -328,8 +379,12 @@ def _top_line(poly, u0, u1):
     us = sorted({lo, hi} | set(xs))
     line = []
     for x in us:
+        # The end probes run along the section's own side. On a wall off the axes, or a
+        # pitched one, that side is not at the exact figure, and a probe laid along it reads
+        # scraps of the outline: so the ends are read a hair inside.
+        at = lo + END_INSET if x == lo else hi - END_INSET if x == hi else x
         try:
-            hit = LineString([(x, bv0 - 1), (x, bv1 + 1)]).intersection(poly)
+            hit = LineString([(at, bv0 - 1), (at, bv1 + 1)]).intersection(poly)
         except Exception:
             continue
         if hit.is_empty:
@@ -369,7 +424,8 @@ def _extract(payload):
     result["warnings"] += warnings
     if n is None:
         return result
-    u = (-n[1], n[0], 0.0)
+    u = face_axis(n, faces)
+    result["pitch"], result["faces_down"] = round(face_pitch(n), 1), n[2] < 0
     region = _union_faces(faces, n, u)
     if region is None or region.is_empty:
         result["warnings"].append("Picked faces have no area")
@@ -471,7 +527,7 @@ def _extract(payload):
         except Exception:
             continue
 
-    region, dropped = _seeded(region, payload.get("seeds"), u)
+    region, dropped = _seeded(region, payload.get("seeds"), u, n=n)
     if dropped:
         result["warnings"].append("%d patch(es) beyond the junction you clicked were left out" % dropped)
 
@@ -491,7 +547,7 @@ def _extract(payload):
 
     _say(dbg, "  seeding and notches")
     notches = _notches(polygons)
-    result.update({"ok": True, "frame": make_frame(n, d, umin, vmin), "polygons": polygons,
+    result.update({"ok": True, "frame": make_frame(n, d, umin, vmin, u=u), "polygons": polygons,
                    "width": round(width, 2), "height": round(height, 2),
                    "area": round(region.area, 1), "notches": notches,
                    "abutments": _merge_abutments(abutments, umin, vmin, width),
@@ -517,7 +573,7 @@ def _post_of(tris, n, d, u):
     given only for something batten-shaped that stands in the wrong place; a structural
     column, a beam laid across the wall or a short block is simply not one (None, None).
     The post is its centreline and extent before the local shift."""
-    pts = [(_dot(p, u), p[2], _dot(p, n) - d) for tri in tris for p in tri]
+    pts = [_to_local(p, n, u) + (_dot(p, n) - d,) for tri in tris for p in tri]
     if not pts:
         return None, None
     us, vs, ss = [q[0] for q in pts], [q[1] for q in pts], [q[2] for q in pts]
@@ -572,7 +628,7 @@ def _frame_of(tris, n, d, u):
     before the local shift, and the depth of its outer face from the wall face (out is
     positive). The bottom tenth is left out of the depth, so a projecting sill or
     threshold is not taken for the frame."""
-    pts = [(_dot(p, u), p[2], _dot(p, n) - d) for tri in tris for p in tri]
+    pts = [_to_local(p, n, u) + (_dot(p, n) - d,) for tri in tris for p in tri]
     if not pts:
         return None
     us, vs = [q[0] for q in pts], [q[1] for q in pts]
@@ -581,12 +637,14 @@ def _frame_of(tris, n, d, u):
     return {"rect": [min(us), max(us), v0, v1], "face": round(max(above), 1)}
 
 
-def _seeded(region, seeds, u, tol=100.0):
+def _seeded(region, seeds, u, tol=100.0, n=None):
     """(region, dropped), keeping only the patches the clicks landed on. A slab cut
     through a face leaves it in pieces and the piece beyond that junction is another
     wall, so each pick's own point picks its patch: a magic wand, not everything
     coplanar. A point just off a patch takes the nearest; with none, nothing drops."""
-    pts = [Point(_dot(s, u), float(s[2])) for s in (seeds or []) if s and len(s) >= 3]
+    flat = n is None or n[2] == 0.0             # a wall: up it is world Z
+    pts = [Point(_dot(s, u), float(s[2])) if flat else Point(*_to_local([float(c) for c in s[:3]], n, u))
+           for s in (seeds or []) if s and len(s) >= 3]
     parts = list(iter_polygons(region))
     if not pts or len(parts) < 2:
         return region, 0
@@ -667,6 +725,8 @@ def chain_link(a, b):
     negative cuts it back into a re-entrant one."""
     fa, fb = a["frame"], b["frame"]
     na, nb = fa["n"], fb["n"]
+    if abs(na[2]) > 1e-6 or abs(nb[2]) > 1e-6:
+        return None                                   # a leaning or pitched face: it stands on its own
     cross = na[0] * nb[1] - na[1] * nb[0]
     if abs(cross) < 0.05:
         return None                                   # parallel or coplanar

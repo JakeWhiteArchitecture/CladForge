@@ -339,6 +339,7 @@ function buildRack(rack, elevation, key) {
     const u = new THREE.Vector3().setFromMatrixColumn(wall[0].matrix, 0).setY(0).normalize();
     const n = new THREE.Vector3().setFromMatrixColumn(wall[0].matrix, 2).setY(0).normalize();
     const up = new THREE.Vector3(0, 1, 0);
+    if (n.lengthSq() < 0.5) n.crossVectors(u, up).normalize();     // a level face: the rack stands beside it
     let uMin = Infinity, face = -Infinity, base = Infinity;
     for (const m of wall) {
         const bb = (m.geometry.boundingBox || (m.geometry.computeBoundingBox(), m.geometry.boundingBox)).clone().applyMatrix4(m.matrix);

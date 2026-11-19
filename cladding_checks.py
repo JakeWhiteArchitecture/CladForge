@@ -1,11 +1,51 @@
 """CladForge — the validation table from the requirements. Not a compliance check."""
 
+import math
+
 from cladding_constants import (_parse, PLANK_SPAN_TABLE, DECK_SPAN, MIN_CAVITY, FIXING_EMBEDMENT,
                                 MAX_BATTEN_SPAN)
 from cladding_primitives import ROW_MIN
 from cladding_corners import PANEL_SIZES as PROFILE_SIZES, TRIM_SIZE, TRIM_LEG, FLANGE_P
 
 MIN_CLOSING_CUT = 100.0   # mm – narrower closing pieces are hard to fix and look wrong
+SEAM_MIN_PITCH = 3.0      # deg – below this a double-lock standing seam is generally not used at all
+SEAM_LOW_PITCH = 7.0      # deg – and below this its seams are generally sealed
+WALL_PITCH = 89.0         # deg – a face steeper than this is a wall (fabric_extract stands it up)
+ROOF_PITCH = 75.0         # deg – a face shallower than this, facing the sky, takes the weather as a roof does
+
+
+def _pitched(elevations):
+    """(name, pitch in degrees from level, faces down) for every face that is not a wall."""
+    return [(e.get("name") or "Elevation", float(e["pitch"]), bool(e.get("faces_down")))
+            for e in elevations if e.get("pitch") is not None and float(e["pitch"]) <= WALL_PITCH]
+
+
+def _pitch_checks(p, add):
+    """What a pitched face asks of the build-up. The build-up is a wall's, laid on the
+    slope, so these say where a roof wants more than it gives."""
+    for name, pitch, down in _pitched(p["elevations"]):
+        lie = "level" if pitch < 0.3 else "pitched %.1f°" % pitch
+        if down:
+            add("Pitch", "pass", "%s is %s and faces down: it sheds no water, so it is set out as a wall is" % (name, lie), pitch)
+            continue
+        if p["seam"]:
+            if p["plank_orient"] != "vertical":
+                add("Pitch", "fail", "%s is %s and its trays run across the slope: standing seams run with the fall, "
+                    "or they dam the water. Turn the trays to run up the slope" % (name, lie), pitch)
+            elif pitch < SEAM_MIN_PITCH:
+                add("Pitch", "fail", "%s is %s: below the %.0f° generally given as the least for a double-lock standing "
+                    "seam" % (name, lie, SEAM_MIN_PITCH), pitch)
+            elif pitch < SEAM_LOW_PITCH:
+                add("Pitch", "warn", "%s is %s: between %.0f° and %.0f° standing seams are generally sealed. Confirm the "
+                    "seam and the least pitch with the manufacturer" % (name, lie, SEAM_MIN_PITCH, SEAM_LOW_PITCH), pitch)
+            else:
+                add("Pitch", "pass", "%s is %s: the trays and their seams run up the slope" % (name, lie), pitch)
+        elif pitch < ROOF_PITCH:
+            add("Pitch", "warn", "%s is %s and faces the sky: open-jointed %s let the rain through, so the layer behind "
+                "them has to be the roof's waterproofing, and the battens and fixings chosen for a roof"
+                % (name, lie, "panels" if p["cladding_type"] == "panel" else "boards"), pitch)
+        else:
+            add("Pitch", "pass", "%s leans back, %s: set out up the slope as a wall is" % (name, lie), pitch)
 
 
 def check_rules(params, infos=None):
@@ -48,7 +88,13 @@ def check_rules(params, infos=None):
 
     s = p["splash"]
     status = "pass" if s >= 150 else ("warn" if s >= 100 else "fail")
-    add("Splash zone", status, "Splash zone %.0fmm%s" % (s, "" if status == "pass" else " — below the 150mm recommended minimum"), s)
+    # On a pitched face the splash zone, like every height, is measured up the slope.
+    slope = ["%.0fmm of height on %s" % (s * math.sin(math.radians(pitch)), name)
+             for name, pitch, _down in _pitched(p["elevations"]) if pitch >= 0.3]
+    add("Splash zone", status, "Splash zone %.0fmm%s%s" % (
+        s, "" if status == "pass" else " — below the 150mm recommended minimum",
+        (" (measured up the slope: " + ", ".join(slope) + ")") if slope and s else ""), s)
+    _pitch_checks(p, add)
 
     if p["insulation"]:
         first = p["cb_d"] if p["has_cb"] else p["batten_d"]

@@ -1396,6 +1396,31 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('grid:', JSON.stringify({ gridOff, gridOn }));
     if (gridOff.join() !== 'false,false' || gridOn.join() !== 'true,true') throw new Error('grid toggle wrong: ' + JSON.stringify({ gridOff, gridOn }));
 
+    // A roof slope is picked like a wall face: it keeps its own plane, stands in a chain of
+    // its own, and trays built on it run up the slope with the pitch checked.
+    await page.evaluate(() => { if (in2D()) exit2D(); setPickMode('pick'); });
+    const before = await page.evaluate(() => state.elevations.length);
+    await lookAt('Wing roof south', [0.2, 0.85, 0.6]);
+    await page.waitForFunction(n => state.elevations.length > n && state.elevations.every(e => !e._running && (e.result || e.error)),
+                               before, { timeout: 120000 });
+    await page.evaluate(() => { openWizard(); WIZ.draft.type = 'seam'; WIZ.draft.orient = 'vertical'; wizBuild(); dismissLevels(); });
+    await settle();
+    const slope = await page.evaluate(() => {
+        const e = state.elevations[state.elevations.length - 1], r = e.result || {};
+        const own = cladGroup.children.filter(m => m.isMesh && m.userData.elevation === e.name);
+        const up = new THREE.Vector3().setFromMatrixColumn((own[0] || { matrix: new THREE.Matrix4() }).matrix, 2);
+        return { error: e.error, pitch: r.pitch, size: [Math.round(r.width), Math.round(r.height)], rise: r.frame && r.frame.v[2],
+                 alone: e.chain.members.length, card: document.querySelectorAll('.elev-meta')[state.elevations.length - 1].textContent,
+                 parts: own.length, tilt: Math.round(up.y * 1000) / 1000,
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /pitched/.test(t)) };
+    });
+    console.log('roof slope:', JSON.stringify(slope));
+    if (slope.error || Math.abs(slope.pitch - 31.4) > 0.3 || slope.size.join() !== '3400,2110' || Math.abs(slope.rise - 0.521) > 0.005
+        || slope.alone !== 1 || !/pitched 31\.4°/.test(slope.card) || !slope.parts || Math.abs(slope.tilt - 0.853) > 0.005
+        || !slope.check.some(t => /run up the slope/.test(t)))
+        throw new Error('roof slope not picked and built on its own plane: ' + JSON.stringify(slope));
+    await page.evaluate(async () => { setActive(state.elevations.length - 1); deleteElevation(); await settled(); });
+
     await page.evaluate(() => hideElement(allMeshes[0]));           // a new model starts with none hidden
 
     // The server importer, the fallback for models web-ifc cannot build.

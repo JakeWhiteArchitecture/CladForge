@@ -159,7 +159,7 @@ function abutmentsFor(e) {
 
 function elevationCard(e, i) {
     const r = e.result, ok = r && r.ok;
-    const meta = ok ? `${Math.round(r.width)} × ${Math.round(r.height)} mm · ${r.n_holes} opening${r.n_holes === 1 ? '' : 's'}` : `${e.picks.length} pick${e.picks.length === 1 ? '' : 's'}`;
+    const meta = ok ? `${Math.round(r.width)} × ${Math.round(r.height)} mm${lieOf(r)} · ${r.n_holes} opening${r.n_holes === 1 ? '' : 's'}` : `${e.picks.length} pick${e.picks.length === 1 ? '' : 's'}`;
     const abuts = abutmentsFor(e).map(ab => ab.source === 'manual'
         ? `<label><input type="checkbox" checked disabled> Manual level @ ${Math.round(ab.v)} <button class="mini" onclick="event.stopPropagation(); removeManualLevel(${i}, ${ab.k})">×</button></label>`
         : `<label onclick="event.stopPropagation()"><input type="checkbox" ${ab.enabled ? 'checked' : ''} onchange="toggleAbutment(${i}, '${abutKey(ab)}', this.checked)"> ${ab.name || ab.source} (${ab.source}) ${ab.pitched ? `pitched ${Math.round(ab.v_min)}–${Math.round(ab.v)}, splash follows the roof` : '@ ' + Math.round(ab.v)}</label>`).join('');
@@ -337,8 +337,8 @@ function selectCorner(chainName, index) {
 function samePlane(hit, e) {
     if (!e.result || !e.result.ok) return e.picks.length === 0;
     const f = e.result.frame, n = toIfc(hit.normal), p = toIfc(hit.point);
-    if (n[0] * f.n[0] + n[1] * f.n[1] < 0.9998) return false;
-    const d = f.n[0] * (p[0] - f.origin[0]) + f.n[1] * (p[1] - f.origin[1]);
+    if (n[0] * f.n[0] + n[1] * f.n[1] + n[2] * f.n[2] < 0.9998) return false;
+    const d = f.n[0] * (p[0] - f.origin[0]) + f.n[1] * (p[1] - f.origin[1]) + f.n[2] * (p[2] - f.origin[2]);
     return Math.abs(d) < 25;
 }
 
@@ -551,7 +551,7 @@ function onViewportClick(event) {
     const hit = pickAt(event);
     if (!hit) return;
     const faces = coplanarFaces(hit.mesh, hit.faceIndex);
-    if (!faces) { setStatus('That face is not vertical — pick a wall face', 'busy'); return; }
+    if (!faces) { setStatus('That face is too small to read — pick another part of it', 'busy'); return; }
     // A face already clad is not a selection any more. Clicking it edits its chain's
     // setting-out instead of piling another elevation onto the same plane.
     const owner = state.elevations.find(m => m.result && m.result.ok && samePlane(hit, m));
@@ -833,9 +833,24 @@ function elevationRecords() {
     return out;
 }
 
-// A picked level is a world height; each elevation reads it in its own v.
+// A picked level is a world height; each elevation reads it in its own v: straight up a
+// wall, and up the slope of a pitched face, where a millimetre of v is less than one of
+// height. A level face has no height to read, so there its v stands in for one
+// (cladding_constants.v_to_z does the same).
+function riseOf(e) {
+    const v = e.result.frame.v, rise = v ? v[2] : 1;
+    return Math.abs(rise) > 1e-6 ? rise : 1;
+}
 function vLocal(e, z) {
-    return (z === null || z === undefined) ? null : z - e.result.frame.origin[2];
+    return (z === null || z === undefined) ? null : (z - e.result.frame.origin[2]) / riseOf(e);
+}
+function zOfLocal(e, v) { return e.result.frame.origin[2] + v * riseOf(e); }
+
+// How a face lies, for its card: nothing for a wall.
+function lieOf(r) {
+    if (r.pitch === undefined || r.pitch > 89) return '';
+    if (r.pitch < 0.3) return r.faces_down ? ' · level, facing down' : ' · level';
+    return ` · pitched ${Math.round(r.pitch * 10) / 10}°${r.faces_down ? ', leaning out' : ''}`;
 }
 
 function getParams() {

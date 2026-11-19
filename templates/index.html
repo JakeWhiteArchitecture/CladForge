@@ -44,7 +44,7 @@
                     <button class="btn btn-secondary btn-sm" id="show-all" onclick="onShowAll()" disabled>Show all</button>
                 </div>
                 <div id="hidden-list" class="hidden-list"></div>
-                <p class="hint">Click a wall face to add its coplanar patch to the active elevation; click again to remove it. Click a face round a corner and it becomes the next elevation in the chain, with the coursing carried round. Faces that don't meet the chain start a new one. Openings punched by the importer become holes.</p>
+                <p class="hint">Click a wall face to add its coplanar patch to the active elevation; click again to remove it. A leaning wall, a roof slope or a flat roof is picked the same way and is set out on its own plane, in a chain of its own. Click a face round a corner and it becomes the next elevation in the chain, with the coursing carried round. Faces that don't meet the chain start a new one. Openings punched by the importer become holes.</p>
                 <p class="hint">Stuck or misbehaving? Run <b>cladforge()</b> in the browser console for the engine state and a log of every extraction.</p>
                 <p class="hint">Picking generates nothing on its own. When the chain is complete, press <b>Enter</b> or use <b>Make chain</b> at the top right of the view to choose the cladding and build it. After that the whole panel edits live.</p>
                 <label class="chk"><input type="checkbox" id="penetrations" checked onchange="state.elevations.forEach(runExtraction)"> Subtract penetrations crossing the face</label>
@@ -270,7 +270,7 @@
     </div>
 
     <div class="viewport" id="viewport">
-        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall face to pick · H: hide elements · G: grid · E: 2D elevation</div>
+        <div class="viewport-info">Orbit: drag · Zoom: scroll · Pan: right-drag · Click a wall or roof face to pick · H: hide elements · G: grid · E: 2D elevation</div>
         <div class="legend">
             <label><input type="checkbox" checked onchange="setLayerVisible('sheathing', this.checked)"><i style="background:#d9c9a3"></i> Sheathing</label>
             <label><input type="checkbox" checked onchange="setLayerVisible('insulation', this.checked)"><i style="background:#e8d86a"></i> Insulation</label>

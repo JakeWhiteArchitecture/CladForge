@@ -554,7 +554,6 @@ function applyDim(d, v, scope) {
     const e = d2Elev(d.elevation);
     if (!e) return;
     const members = scope === 'chain' ? e.chain.members.filter(m => m.result && m.result.ok) : [e];
-    const z0 = e.result.frame.origin[2];
     switch (d.kind) {      // a row or course height is a vertical input: it locks the datum
         case 'row': {
             const r = lockForRow(e, d.row), rows = withRow(e, r.j, v, r.drawn);
@@ -575,8 +574,8 @@ function applyDim(d, v, scope) {
         case 'panel_w': setField('panel_w', v); break;
         case 'centres': setField('batten_centres', v); break;
         case 'splash': setField('splash', v); break;
-        case 'level_top': e.chain.topZ = z0 + v; break;
-        case 'level_base': e.chain.bottomZ = z0 + v; break;
+        case 'level_top': e.chain.topZ = zOfLocal(e, v); break;
+        case 'level_base': e.chain.bottomZ = zOfLocal(e, v); break;
         default: return;
     }
     setStatus(`${DIM_NAMES[d.kind]} ${Math.round(v)} mm on ${scope === 'chain' && members.length > 1 ? e.chain.name : e.name}`, 'ready');
