@@ -169,6 +169,7 @@ function elevationCard(e, i) {
     const clipped = ok && (e.clipLo > 0.5 || (e.clipHi !== null && e.clipHi < r.width - 0.5));
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
+        + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
         + (e.cover ? ` · course ${Math.round(e.cover)}` : '')
@@ -352,7 +353,30 @@ _json.dumps(_cl(_json.loads(_link_a), _json.loads(_link_b)))`);
     return JSON.parse(out);
 }
 
+// Two roof slopes at a ridge lie along one another, not end to end. The new face takes the
+// other's place in the run, turned round (its u runs against the other's: u_b = u_b0 - u_a),
+// so both are set out from one line and their seams and joints carry over the ridge. The
+// face that was there first masters the ridge: it carries the cap.
+function placeAtRidge(e, other, link) {
+    const W = e.result.width, Wo = other.result.width;
+    e.rev = !other.rev;
+    e.start = other.rev ? other.start + Wo - link.u_b0 : other.start - W + link.u_b0;
+    e.clipLo = 0; e.clipHi = null; e.cornerLo = 0; e.cornerHi = 0; e.masterLo = e.masterHi = false; e.detailLo = e.detailHi = null;
+    const part = (partner, v, u, master) => ({ partner, v, u0: u[0], u1: u[1], k: link.k, angle: link.angle, master });
+    other.ridge = part(e, link.v_a, link.u_a, true);
+    e.ridge = part(other, link.v_b, link.u_b, false);
+    e.link = link;
+}
+
+// A face's ridge as the engine and a saved state take it: the partner by name.
+function ridgeRecord(e) {
+    const r = e.ridge;
+    if (!r || !r.partner || r.partner.chain !== e.chain || !(r.partner.result && r.partner.result.ok)) return null;
+    return { with: r.partner.name, v: r.v, u0: r.u0, u1: r.u1, k: r.k, angle: r.angle, master: !!r.master };
+}
+
 function placeInChain(e, other, link) {
+    if (link.kind === 'ridge') return placeAtRidge(e, other, link);
     // Chain coordinate c runs along the whole run. *other* occupies [start, start + W];
     // the corner sits at one of its ends, and e extends away from that corner.
     const W = e.result.width, Wo = other.result.width;
@@ -395,6 +419,7 @@ async function linkIntoChain(e) {
     for (const other of others) {
         let link = null;
         try { link = await pyLink(other.result, e.result); } catch (err) { console.warn('link failed', err); }
+        if (link && link.kind === 'ridge' && other.ridge && other.ridge.partner !== e) link = null;   // a slope has one ridge
         if (link) { placeInChain(e, other, link); relayoutChain(chain); return true; }
     }
     if (others.length) {   // not adjacent to anything in this chain: give it a chain of its own
@@ -402,7 +427,7 @@ async function linkIntoChain(e) {
         e.chain = newChain(); e.chain.members.push(e);
     }
     e.start = 0; e.rev = false; e.link = null; e.cornerLo = 0; e.cornerHi = 0; e.detailLo = e.detailHi = null;
-    e.clipLo = 0; e.clipHi = null;
+    e.clipLo = 0; e.clipHi = null; e.ridge = null;
     relayoutChain(e.chain);
     return false;
 }
@@ -411,7 +436,7 @@ async function relinkChain(chain) {
     const members = chain.members.slice().sort((a, b) => a.start - b.start);
     chain.members = [];
     members.forEach(m => { m.cornerLo = 0; m.cornerHi = 0; m.masterLo = false; m.masterHi = false; m.detailLo = m.detailHi = null;
-                           m.link = null; m.clipLo = 0; m.clipHi = null; });
+                           m.link = null; m.clipLo = 0; m.clipHi = null; m.ridge = null; });
     for (const m of members) { m.chain = chain; chain.members.push(m); if (m.result && m.result.ok) await linkIntoChain(m); }
     renderElevationList();
     updatePreview();
@@ -662,7 +687,9 @@ _json.dumps(_ex(_pl))`);
         if (e.result.ok) {
             if (dropped) e.result.warnings.push(`${dropped} nearby element(s) left out to keep the engine within memory`);
             const linked = await linkIntoChain(e);
-            const corner = linked ? `${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)` : e.name + ' extracted';
+            const corner = !linked ? e.name + ' extracted'
+                : e.link.kind === 'ridge' ? `${e.name} joined ${e.chain.name} at a ridge with ${e.ridge.partner.name}: one setting-out over both slopes, and a ridge cap`
+                : `${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)`;
             setStatus(e.chain.built ? corner : corner + ' — press Enter to build', 'ready');
             // The view stays where it was put: picking a face must not move the camera.
         } else {
@@ -817,6 +844,7 @@ function elevationRecords() {
                                                    cover: e.cover || null, panel_rows: e.panelRows || null,
                                                    panel_joints: e.panelJoints || null,
                                                    post_states: e.postStates || null, stagger_joints: e.staggerJoints || null,
+                                                   ridge: ridgeRecord(e),
                                                    settings: chain.settings || null,
                                                    course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
@@ -1097,7 +1125,7 @@ function snapshotState() {
         detailLo: e.detailLo || null, detailHi: e.detailHi || null, clipLo: e.clipLo || 0,
         clipHi: e.clipHi === undefined ? null : e.clipHi, cover: e.cover || null,
         panelRows: e.panelRows || null, panelJoints: e.panelJoints || null, postStates: e.postStates || null, staggerJoints: e.staggerJoints || null,
-        openingDetails: e.openingDetails || {},
+        openingDetails: e.openingDetails || {}, ridge: ridgeRecord(e),
         manual: e.manual || [], disabled: e.disabled || {},
         // the faces it was picked from, for reference: the surface below is what loads
         picks: e.picks.length ? e.picks.map(q => ({ element: (q.mesh && q.mesh.userData.name) || null, faces: q.faces.length,
@@ -1284,6 +1312,12 @@ function restoreState(st, add) {
             state.elevations.push(e);
             byName[m.name] = e;                   // by its name in the file: what datumFrom says
         }
+        // A ridge names its partner; both slopes have to have come in for it to stand.
+        for (const m of c.members || []) {
+            const e = byName[m.name], other = m.ridge && byName[m.ridge.with];
+            if (e && e.chain === chain && other && other.chain === chain) e.ridge = Object.assign({}, m.ridge, { partner: other });
+        }
+        for (const e of chain.members) if (e.ridge && !(e.ridge.partner.ridge && e.ridge.partner.ridge.partner === e)) e.ridge = null;
         chain.datumFrom = byName[c.datumFrom] && byName[c.datumFrom].chain === chain ? byName[c.datumFrom] : null;
         if (!chain.members.length) continue;      // every face of it left out: no chain, and no name used up
         if (add && state.chains.some(x => x.name === chain.name)) {
@@ -1765,7 +1799,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

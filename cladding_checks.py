@@ -136,6 +136,17 @@ def check_rules(params, infos=None):
         if cuts:
             add("Closing cut", "warn", "%s: a panel only %.0fmm wide is narrower than %.0fmm — shift the "
                 "setting-out or move a joint" % (i["elevation"], min(cuts), MIN_CLOSING_CUT), min(cuts))
+    # A ridge is reported once, by the slope that carries its cap.
+    for i in infos:
+        r = i.get("ridge")
+        if r and r.get("master"):
+            what = "%s and %s meet at a ridge: a vented cap %.2f m long, %.0f mm down each slope, the decks %.0f mm apart " \
+                   "under it" % (r["between"][0], r["between"][1], r["length"] / 1000.0, r["leg"], r["gap"])
+            if p["seam"]:
+                add("Ridge", "pass", what + ". Clips, the cleat and laps between lengths of cap are not drawn", r["length"])
+            else:
+                add("Ridge", "warn", what + ". The cap is a standing seam detail: agree the ridge for %s with the supplier"
+                    % ("panels" if p["cladding_type"] == "panel" else "boards"), r["length"])
     # Each corner end carries its own detail, so count the ends per detail.
     per = {}
     for c in (i.get("corner") or {} for i in infos):

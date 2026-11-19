@@ -511,10 +511,18 @@ def chain_layout(elevations, face_depth, detail):
     out = {}
     for members in groups.values():
         members.sort(key=lambda e: float(e.get("chain_start") or 0.0))
-        run, spans = 0.0, []
+        run, spans, placed = 0.0, [], {}
         for e in members:
             lo, hi = clip_bounds(e)
             width = hi - lo
+            # The second slope of a ridge lies along the first, not after it: it takes the
+            # first's place in the run (moved by however the app set one against the other,
+            # so their seams line through over the ridge) and adds nothing to its length.
+            first = placed.get((e.get("ridge") or {}).get("with"))
+            if first is not None:
+                spans.append((e.get("name"), first[1] + float(e.get("chain_start") or 0.0) - first[0]))
+                continue
+            placed[e.get("name")] = (float(e.get("chain_start") or 0.0), run)
             spans.append((e.get("name"), run))
             here = e.get("detail_hi") if e.get("detail_hi") in CORNER_DETAILS else detail
             k = float(e.get("corner_hi") or 0.0) if here != "butt" else 0.0

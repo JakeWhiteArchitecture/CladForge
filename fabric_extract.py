@@ -716,6 +716,54 @@ def _merge_abutments(found, umin, vmin, width):
 
 # ── corners ──────────────────────────────────────────────────────────────
 
+RIDGE_MIN = 300.0         # mm – two slopes share at least this much ridge, or they are not a pair
+
+
+def _top_run(elev):
+    """(u0, u1) of the face's top edge: the stretch of its outline within 5 mm of its top.
+    A hipped slope is a trapezium, so its ridge is shorter than the face is wide."""
+    top = float(elev["height"])
+    us = [q[0] for pg in elev.get("polygons") or [] for q in pg["exterior"] if q[1] >= top - 5.0]
+    return (min(us), max(us)) if len(us) >= 2 else (0.0, float(elev["width"]))
+
+
+def ridge_link(a, b):
+    """Do pitched elevations a and b meet at a ridge? None if not, else {"kind": "ridge",
+    "v_a", "v_b": the ridge line in each face's own v, "u_a": (u0, u1) and "u_b": the
+    stretch of it they share, in each face's u, "u_b0": b's u where a's is 0 (b's u runs
+    against a's, so u_b = u_b0 - u_a), "k": tan of half the angle between the normals,
+    the slope dv/ddepth of the plane that bisects the ridge, "angle"}.
+
+    A ridge is level, lies along the top of both faces, and the roof falls away from it on
+    both sides. Planes that meet on a sloping line (a hip, a valley), a change of pitch
+    (the top of one slope meeting the foot of the next) and a roof meeting a wall are not
+    ridges and are not joined."""
+    fa, fb = a["frame"], b["frame"]
+    na, nb = fa["n"], fb["n"]
+    va, vb = fa.get("v") or (0.0, 0.0, 1.0), fb.get("v") or (0.0, 0.0, 1.0)
+    if abs(na[2]) < 1e-6 or abs(nb[2]) < 1e-6 or na[2] < 0 or nb[2] < 0:
+        return None                                   # a wall, or a face that looks down
+    if _dot(fa["u"], fb["u"]) > -0.9998:
+        return None                                   # not back to back along one level line
+    rise_a, rise_b = _dot(nb, va), _dot(na, vb)
+    if rise_a < 1e-3 or rise_b < 1e-3:
+        return None                                   # parallel, or the two fall towards each other (a valley)
+    v_a = _dot(nb, _sub(fb["origin"], fa["origin"])) / rise_a
+    v_b = _dot(na, _sub(fa["origin"], fb["origin"])) / rise_b
+    if abs(v_a - float(a["height"])) > CORNER_TOL or abs(v_b - float(b["height"])) > CORNER_TOL:
+        return None                                   # the line is not along the top of both
+    at = [fa["origin"][i] + va[i] * v_a for i in range(3)]          # on the ridge, at a's u = 0
+    u_b0 = _dot(fb["u"], _sub(at, fb["origin"]))
+    (a0, a1), (b0, b1) = _top_run(a), _top_run(b)
+    lo, hi = max(a0, u_b0 - b1), min(a1, u_b0 - b0)
+    if hi - lo < RIDGE_MIN:
+        return None
+    beta = math.acos(max(-1.0, min(1.0, _dot(na, nb))))
+    return {"kind": "ridge", "v_a": round(v_a, 1), "v_b": round(v_b, 1), "u_b0": round(u_b0, 1),
+            "u_a": [round(lo, 1), round(hi, 1)], "u_b": [round(u_b0 - hi, 1), round(u_b0 - lo, 1)],
+            "k": round(math.tan(beta / 2.0), 4), "angle": round(math.degrees(beta), 1), "external": True}
+
+
 def chain_link(a, b):
     """Do elevations a and b meet at a vertical corner? None if not, else
     {"end_a": "left"|"right", "end_b", "corner_u_a", "corner_u_b", "angle",
@@ -726,7 +774,7 @@ def chain_link(a, b):
     fa, fb = a["frame"], b["frame"]
     na, nb = fa["n"], fb["n"]
     if abs(na[2]) > 1e-6 or abs(nb[2]) > 1e-6:
-        return None                                   # a leaning or pitched face: it stands on its own
+        return ridge_link(a, b)                       # pitched faces meet at a ridge, or not at all
     cross = na[0] * nb[1] - na[1] * nb[0]
     if abs(cross) < 0.05:
         return None                                   # parallel or coplanar

@@ -15,6 +15,7 @@ from cladding_booleans import apply_boolean_ops, clip_elevation
 from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
 from cladding_edges import mitre_to_linings, finish_seams
 from cladding_checks import check_rules as _check_rules
+from cladding_ridge import ridge_ends, ridge_parts
 
 
 def _build_all(p):
@@ -110,6 +111,8 @@ def _preview_one(params):
     # holes left by trimming are mitred as well as the ends that land on a jamb.
     meshes = mitre_to_linings(meshes, p, infos)
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
+    meshes = ridge_ends(meshes, p)       # two slopes meeting at a ridge: cut on its bisecting plane
+    meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too
