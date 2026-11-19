@@ -41,7 +41,7 @@ _IFC_TYPE_MAP = {
     "closer":         ("IfcMember",   "USERDEFINED", "Cavity closer"),
     "reveal":         ("IfcCovering", "CLADDING",    "Reveal lining"),
     "corner_profile": ("IfcMember",   "USERDEFINED", "Corner profile"),
-    "corner_trim":    ("IfcMember",   "USERDEFINED", "Corner trim"),
+    "corner_trim":    ("IfcMember",   "USERDEFINED", "Plank corner profile"),
     "gasket":         ("IfcCovering", "MEMBRANE",    "EPDM gasket"),
     "deck":           ("IfcPlate",    "SHEET",       "Deck boarding"),
     "seam":           ("IfcCovering", "CLADDING",    "Standing seam"),
@@ -52,7 +52,7 @@ _MATERIALS = {
     "insulation": ("External insulation", "insulation"), "panel": ("Cladding panel", "cladding"),
     "plank": ("Cladding plank", "cladding"), "closer": ("Timber (solid) cavity closer", "wood"),
     "reveal": ("Reveal lining", "cladding"), "corner_profile": ("Aluminium corner profile", "aluminium"),
-    "corner_trim": ("Timber (solid) corner trim", "wood"),
+    "corner_trim": ("Aluminium plank corner profile", "aluminium"),
     "gasket": ("EPDM foam gasket", "rubber"),
     "deck": ("Timber deck (softwood boarding or WBP plywood)", "wood"),
     "seam": ("Standing seam sheet", "metal"),
@@ -377,11 +377,13 @@ def meshes_to_ifc(meshes, params, infos=None):
                     "FlangeB": ("IfcPositiveLengthMeasure", info["flange_b"]),
                     "Thickness": ("IfcPositiveLengthMeasure", info["thickness"]),
                     "Length": ("IfcPositiveLengthMeasure", info["length"])})
-            elif mesh.get("trim_info"):         # the timber corner trim's
+            elif mesh.get("trim_info"):         # the plank corner profile's (Marley type)
                 t = mesh["trim_info"]
-                _pset(ifc, [elem], "%s_CornerTrim" % TOOL_NAME, {
-                    "TrimName": ("IfcLabel", t["name"]), "Size": ("IfcPositiveLengthMeasure", t["size"]),
-                    "LegThickness": ("IfcPositiveLengthMeasure", t["leg"]),
+                _pset(ifc, [elem], "%s_PlankCornerProfile" % TOOL_NAME, {
+                    "ProfileName": ("IfcLabel", t["name"]), "NoseSize": ("IfcPositiveLengthMeasure", t["size"]),
+                    "FlangeSetBack": ("IfcPositiveLengthMeasure", t["set_back"]),
+                    "Flange": ("IfcPositiveLengthMeasure", t["flange"]),
+                    "Thickness": ("IfcPositiveLengthMeasure", t["thickness"]),
                     "Length": ("IfcPositiveLengthMeasure", t["length"])})
             elif ifc_class == "IfcPlate":
                 _pset(ifc, [elem], "Pset_PlateCommon", common)

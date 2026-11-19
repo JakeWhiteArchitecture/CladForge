@@ -15,14 +15,16 @@ corner — or, under a head, along the wall. Placed at right-angled external cor
 only: chain corners, and the arris of a window or door jamb or head, with flange A on
 the elevation face.
 
-With planks the Profile corner is a square timber corner trim instead (an external
-corner detail like Fig. 8 of the timber cladding guides): in plan an L, TRIM_SIZE ×
-TRIM_SIZE overall with legs TRIM_LEG thick. Its back lies on the batten face, where the
-backs of the planks lie, so it stands TRIM_LEG − plank thickness proud of them; the
-TRIM_SIZE − TRIM_LEG square notch inside the L wraps the corner of the battens, and each
-face's planks butt its end, that far short of where the two batten faces meet (plus
-the chain's profile gap). It is fixed through to the same solid L of timber behind.
-Chain corners only: plank reveals stay mitred.
+With planks the Profile corner is an external corner profile of the Marley type
+instead: in plan a hollow square nose TRIM_SIZE (31) each way with 1 mm walls at the
+outer corner, and two flanges FLANGE_P (34) long and 1 mm thick, one each side, set
+TRIM_LEG (26) back from the nose's outer faces so they lie flush with the backs of the
+planks, on the batten face; the nose's back is the flanges' line, so nothing of it lies
+behind the batten faces. Each face's planks butt the side of the nose, TRIM_BACK (5)
+plus the chain's profile gap short of where the two batten faces meet, and the nose
+stands TRIM_LEG - plank thickness proud of them. Placed at chain corners, and at the
+jambs and heads of windows and doors (the nose's outer corner then TRIM_LEG out from the
+face board's back and from the reveal lining's back).
 """
 
 import math
@@ -40,16 +42,18 @@ OUTER_RADIUS = 1.0          # mm, the nose's outer arris
 PANEL_SIZES = (6.0, 8.0, 10.0)
 RIGHT_ANGLE_K = 0.05        # |k - 1| within this is a right-angled external corner
 
-TRIM_NAME = "Square corner trim (timber)"
-TRIM_SIZE = 50.0            # mm, each leg overall, from the outer face
-TRIM_LEG = 30.0             # mm, each leg's thickness
-TRIM_BACK = TRIM_SIZE - TRIM_LEG    # how far the trim runs back past the batten faces' corner
+TRIM_NAME = "External corner profile (Marley type)"
+TRIM_SIZE = 31.0            # mm, the nose each way
+TRIM_LEG = 26.0             # mm, from the nose's outer face to the front of its flange
+TRIM_WALL = 1.0             # mm, nose walls and flanges
+FLANGE_P = 34.0             # mm, each flange, from the side of the nose
+TRIM_BACK = TRIM_SIZE - TRIM_LEG    # how far the side of the nose stands past the batten faces' corner
 
 
 def offered(k, panel):
-    """Is the profile offered at a corner of slope k = tan(turn / 2)? Panels only, and
-    external right-angled corners only: never at a re-entrant one."""
-    return bool(panel) and k is not None and k > 0 and abs(k - 1.0) < RIGHT_ANGLE_K
+    """Is the profile offered at a corner of slope k = tan(turn / 2)? External right-angled
+    corners only: never at a re-entrant one."""
+    return k is not None and k > 0 and abs(k - 1.0) < RIGHT_ANGLE_K
 
 
 def section(D):
@@ -69,13 +73,20 @@ def section(D):
 
 
 def trim_section():
-    """The timber trim in plan, in the profile's (a, b): a runs along the face before the
-    corner towards it (the trim's outer corner at a = 0), b inward from the trim's outer
-    face on that side. One leg lies along each face, TRIM_LEG thick and TRIM_SIZE long,
-    so the square notch inside the L is TRIM_BACK each way."""
-    S, T = TRIM_SIZE, TRIM_LEG
-    ring = [(-S, 0.0), (0.0, 0.0), (0.0, S), (-T, S), (-T, T), (-S, T)]
-    return ring, []
+    """The Marley-type profile in plan, in the panel profile's (a, b): a runs along the
+    face before the corner towards it (the nose's outer corner at a = 0), b inward from
+    the nose's outer face on that side. The nose is TRIM_SIZE across each face, hollow,
+    but its back is the flanges' line: flange A runs along the face before at
+    b = TRIM_LEG, flange B along the face after at a = -TRIM_LEG, each on from the side
+    of the nose by FLANGE_P and in to meet the other, so nothing of it lies behind the
+    batten faces and the battens run right up to it."""
+    S, L, w, F = TRIM_SIZE, TRIM_LEG, TRIM_WALL, FLANGE_P
+    nose = box(-S, 0.0, 0.0, S).difference(box(-S - 1.0, L + w, -(L + w), S + 1.0))     # no corner behind the flanges
+    hollow = box(-S + w, w, -w, S - w).difference(box(-S - 1.0, L, -L, S + 1.0))
+    flange_a = box(-(S + F), L, -L, L + w)                  # behind the planks before the corner
+    flange_b = box(-(L + w), L, -L, S + F)                  # behind the ones after it
+    shape = orient(unary_union([nose, flange_a, flange_b]).difference(hollow), 1.0)
+    return list(shape.exterior.coords)[:-1], [list(h.coords)[:-1] for h in shape.interiors]
 
 
 def _mapped(D, inward, trim=False):
@@ -102,7 +113,8 @@ def profile_mesh(origin, u_sec, n, length, D, inward_hint, name, elevation, trim
     m = _prism(profile, 0.0, length, {"origin": origin, "u": list(u_sec), "v": v, "n": list(n)},
                "corner_trim" if trim else "corner_profile", name, elevation, holes=holes)
     if trim:
-        m["trim_info"] = {"name": TRIM_NAME, "size": TRIM_SIZE, "leg": TRIM_LEG, "length": round(length, 1)}
+        m["trim_info"] = {"name": TRIM_NAME, "size": TRIM_SIZE, "set_back": TRIM_LEG, "flange": FLANGE_P,
+                          "thickness": TRIM_WALL, "length": round(length, 1)}
     else:
         m["profile_info"] = {"name": PROFILE_NAME, "D": D, "flange_a": FLANGE_A, "flange_b": FLANGE_B,
                              "thickness": WALL, "length": round(length, 1)}
@@ -120,14 +132,15 @@ def vertical_profile(frame, u_corner, toward, v_from, v_to, face, D, name, eleva
                         [0.0, 0.0, 1.0], v_to - v_from, D, [-N[0], -N[1], 0.0], name, elevation, trim)
 
 
-def head_profile(frame, u_from, u_to, v_corner, face, D, name, elevation):
-    """A profile lying along a head: the outer corner line at v_corner on the cladding face,
-    the face board above running down to it, extruded along the wall."""
+def head_profile(frame, u_from, u_to, v_corner, face, D, name, elevation, trim=False):
+    """A profile lying along a head: the outer corner line at v_corner and depth *face*,
+    the face board above running down to it, extruded along the wall. *trim*: the
+    Marley-type plank profile."""
     if u_to - u_from < 1.0:
         return None
     U, N = frame["u"], frame["n"]
     return profile_mesh(frame_to_world(frame, u_from, v_corner, face), [0.0, 0.0, -1.0],
-                        [U[0], U[1], 0.0], u_to - u_from, D, [-N[0], -N[1], 0.0], name, elevation)
+                        [U[0], U[1], 0.0], u_to - u_from, D, [-N[0], -N[1], 0.0], name, elevation, trim)
 
 
 def strip(u0, u1, v0, v1):

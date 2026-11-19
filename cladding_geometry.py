@@ -140,11 +140,11 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
     corner less the top and bottom offsets; both faces show its strip, and where there is
     no L to carry them, check their flange lies over a batten.
 
-    With planks it is the square timber corner trim (cladding_corners.trim_section): the
-    planks stop TRIM_BACK and the profile gap short of where the two batten faces meet,
-    square, and the trim's back lies on the batten face, its legs TRIM_LEG thick. The same
-    L of timber goes behind it where the battens are vertical; horizontal battens run on
-    to the corner mitred, under the trim's legs."""
+    With planks it is the Marley-type profile (cladding_corners.trim_section): its flanges
+    lie on the batten face, flush with the planks' backs, the nose's outer faces TRIM_LEG
+    out from there; the planks stop TRIM_BACK and the profile gap short of where the two
+    batten faces meet, square, against the side of the nose. The same L of timber goes
+    behind it, right up to the flanges."""
     name, frame = elev["name"], elev["frame"]
     plank = p["cladding_type"] != "panel"
     D = p["plank_t"] if plank else p["panel_t"]
@@ -187,11 +187,11 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
         else:
             timbers = _vertical_corner_timbers(p, elev, meshes, u_end, k, side, before, toward, min(at), max(at))
         if plank:
-            out = face - D + profiles.TRIM_LEG                    # the trim's outer face, as depth
+            out = face - D + profiles.TRIM_LEG                    # the nose's outer face, as depth
             u_c = u_end + toward * k * out                         # its outer corner line
-            u_back = u_end + toward * k * (face - D)               # where the batten faces meet
-            label, width = "Corner Trim", profiles.TRIM_SIZE
-            span, plane = sorted((u_back, u_back - toward * profiles.TRIM_BACK)), face - D
+            label, width = "Corner Profile", profiles.TRIM_SIZE
+            span = sorted((u_c - toward * width, u_c - toward * (width + profiles.FLANGE_P)))
+            plane = face - D
         else:
             out, u_c = face, u_end + toward * k * face             # the outer corner line
             label, width = "Corner Profile", D
@@ -205,7 +205,7 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
         prof["strips"].append(profiles.strip(*sorted((u_c, u_c - toward * width)), v_from, v_to))
         if not timbers and not profiles.flange_supported(meshes, name, span, (v_from, v_to), plane):
             prof["warnings"].append("%s: the corner %s at the %s end is not over a batten"
-                                    % (name, "trim's leg" if plank else "profile's %.0f mm flange" % fl,
+                                    % (name, "profile's %.0f mm flange" % (profiles.FLANGE_P if plank else fl),
                                        "right" if side == "r" else "left"))
 
 
@@ -1050,8 +1050,9 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
         # to its outer face (cladding_edges.opening_frames): past the wall face where the
         # frame is set back, short of it where the frame stands forward.
         reach = max(board, face - frames[(u0, u1, v0, v1)]["depth"])
-        jamb = reveal_treatment(d.get("jamb", "mitre"), d.get("jamb_master", "face"), face, pull, board, p["panel_gap"], s["pgap"])[1]
-        head_t = reveal_treatment(d.get("head", "mitre"), d.get("head_master", "face"), face, pull, board, p["panel_gap"], s["pgap"])[1]
+        back = 0.0 if p["cladding_type"] == "panel" else profiles.TRIM_BACK
+        jamb = reveal_treatment(d.get("jamb", "mitre"), d.get("jamb_master", "face"), face, pull, board, p["panel_gap"], s["pgap"], back)[1]
+        head_t = reveal_treatment(d.get("head", "mitre"), d.get("head_master", "face"), face, pull, board, p["panel_gap"], s["pgap"], back)[1]
         # Standing seam: the linings are the trays' metal, square-ended, SEAM_STANDOFF off the
         # reveal behind them; a jamb's runs on out as the upstand of the seam on its corner.
         so = SEAM_STANDOFF if p.get("seam") else 0.0
@@ -1080,28 +1081,39 @@ def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board
                 head["corner"] = {"k_l": head_t[0], "ext_l": head_t[1], "u_l": 0.0}
             meshes.append(head)
         # Corner profiles at the arris, flange A on the elevation face. A jamb's runs up
-        # to the underside of the head lining; the head's runs between the jamb linings.
-        z_c = v1 - air - board if head_in else jv1            # the head's arris, or the clad top
+        # to the underside of the head's; with panels the head's runs between the jamb
+        # linings. With planks the Marley-type nose stands TRIM_LEG out from the boards'
+        # backs (the face board's and the lining's) and its head runs on over the jambs'.
+        plank = p["cladding_type"] != "panel"
+        nose, setb = (profiles.TRIM_SIZE, profiles.TRIM_LEG) if plank else (board, board)
+        flange = profiles.FLANGE_P if plank else profiles.FLANGE_A
+        out_d = face - board + setb                           # the nose's outer face, as depth
+        z_c = v1 - air - board if head_in else jv1            # the head lining's underside, or the clad top
+        if head_in:
+            z_c = v1 - air - setb                             # the head nose's outer face
         if d.get("jamb") == "profile":
-            for side, u_c in ((1.0, u0 + board), (-1.0, u1 - board)):
+            for side, u_c in ((1.0, u0 + setb), (-1.0, u1 - setb)):
                 lo_v = max(v0, base + s["bottom"]) if v0 <= base else v0
-                m = profiles.vertical_profile(frame, u_c, side, lo_v, z_c, face, board,
-                                              "%s Jamb Profile %d%s" % (name, i + 1, "L" if side > 0 else "R"), name)
+                m = profiles.vertical_profile(frame, u_c, side, lo_v, z_c, out_d, board,
+                                              "%s Jamb Profile %d%s" % (name, i + 1, "L" if side > 0 else "R"), name,
+                                              trim=plank)
                 if m:
                     meshes.append(m)
                     prof["count"] += 1
-                    prof["strips"].append(profiles.strip(*sorted((u_c, u_c - side * board)), lo_v, z_c))
-                    span = sorted((u_c - side * board, u_c - side * (board + profiles.FLANGE_A)))
+                    prof["strips"].append(profiles.strip(*sorted((u_c, u_c - side * nose)), lo_v, z_c))
+                    span = sorted((u_c - side * nose, u_c - side * (nose + flange)))
                     if not profiles.flange_supported(meshes, name, span, (lo_v, z_c), face - board):
                         prof["warnings"].append("%s: a jamb profile's flange at opening %d is not over a batten or closer"
                                                 % (name, i + 1))
         if d.get("head") == "profile" and head_in:
-            m = profiles.head_profile(frame, ua, ub, z_c, face, board, "%s Head Profile %d" % (name, i + 1), name)
+            ha, hb = (u0 + setb - nose, u1 - setb + nose) if plank else (ua, ub)
+            m = profiles.head_profile(frame, ha, hb, z_c, out_d, board, "%s Head Profile %d" % (name, i + 1), name,
+                                      trim=plank)
             if m:
                 meshes.append(m)
                 prof["count"] += 1
-                prof["strips"].append(profiles.strip(ua, ub, z_c, z_c + board))
-                if not profiles.flange_supported(meshes, name, (ua, ub), (z_c + board, z_c + board + profiles.FLANGE_A),
+                prof["strips"].append(profiles.strip(ha, hb, z_c, z_c + nose))
+                if not profiles.flange_supported(meshes, name, (ha, hb), (z_c + nose, z_c + nose + flange),
                                                  face - board):
                     prof["warnings"].append("%s: the head profile's flange at opening %d is not over a batten"
                                             % (name, i + 1))
