@@ -692,6 +692,15 @@ def _seam(p, meshes, frame, name, elevation, face, along_v, line, a, b, mirror=F
         meshes.append(m)
 
 
+def _lengths(p, a, b, stops, odd, gap, beside):
+    """The pieces a run a..b is laid in, and its joints that miss a support: split to the
+    stock length (split_run), or with full-length standing seam trays the whole run in
+    one piece, so there is no cross joint."""
+    if p.get("seam_full"):
+        return ([(a, b)] if b - a > 1.0 else []), []
+    return split_run(a, b, p["plank_len"], stops, odd, gap, p["plank_min"], p["plank_target"], beside, p["batten_centres"])
+
+
 def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Horizontal boards on vertical battens (optionally on horizontal counter-battens)."""
     name, frame = elev["name"], elev["frame"]
@@ -723,8 +732,7 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
         runs = strip_intervals(region, lo, v + face) if region is not None else [(0.0, W)]
         piece, mine = 0, []
         for a, b in runs:
-            segs, bad = split_run(a, b, p["plank_len"], stops, j % 2 == 1, gap, p["plank_min"], p["plank_target"],
-                                  beside, p["batten_centres"])
+            segs, bad = _lengths(p, a, b, stops, j % 2 == 1, gap, beside)
             mine += _joints(segs)
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
@@ -777,8 +785,7 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
         runs = strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)]
         piece, mine = 0, []
         for a, b in runs:
-            segs, bad = split_run(max(a, v0), b, p["plank_len"], battens, j % 2 == 1, gap, p["plank_min"], p["plank_target"],
-                                  beside, p["batten_centres"])
+            segs, bad = _lengths(p, max(a, v0), b, battens, j % 2 == 1, gap, beside)
             mine += _joints(segs)
             info["unsupported_joints"] += len(bad)
             for s, e in segs:
@@ -876,8 +883,7 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
         runs = [(max(a, v0), b) for a, b in runs if b - max(a, v0) > 1.0]
         piece, mine, trays = 0, [], []
         for a, b in runs:
-            segs, bad = split_run(a, b, p["plank_len"], stops, j % 2 == 1, 0.0, p["plank_min"], p["plank_target"],
-                                  beside, p["batten_centres"])
+            segs, bad = _lengths(p, a, b, stops, j % 2 == 1, 0.0, beside)
             mine += _joints(segs)
             info["unsupported_joints"] += len(bad)
             for s, e in segs:

@@ -316,6 +316,53 @@ def test_seam_ends_are_set_per_chain_top_and_bottom_apart(wall):
     assert folded(seam_fold=True, seam_top="flat", seam_bottom="flat") == (0, 0)
 
 
+# ── full-length trays: no cross joints ─────────────────────────────────────
+
+@pytest.mark.parametrize("orient", ["vertical", "horizontal"])
+def test_full_length_trays_have_no_cross_joints(wall, orient):
+    """With the toggle on every tray runs its whole run in one piece, however short the
+    longest tray is set: no tray is laid above (or beside) another in its run."""
+    tall = dict(wall, height=9000.0, polygons=[dict(wall["polygons"][0], exterior=[[0, 0], [8000, 0], [8000, 9000], [0, 9000]])])
+    kw = dict(plank_orient=orient, plank_len=1800, set_out_from_openings=False, elevations=[tall])
+    _p, split = _build(wall, **kw)
+    _p, full = _build(wall, seam_full_length=True, **kw)
+    along = 1 if orient == "vertical" else 0
+
+    def pieces_per_run(out):
+        runs = {}
+        for m in _of(out, "plank"):
+            runs.setdefault(m["name"].rsplit("-", 1)[0], []).append(_span(m, along))
+        return runs
+    assert max(len(v) for v in pieces_per_run(split).values()) > 1          # split at the 1800 stock
+    runs = pieces_per_run(full)
+    longest = 0.0
+    for name, spans in runs.items():
+        spans.sort()
+        # more than one piece in a run only where an opening breaks it: never end to end
+        assert all(b[0] - a[1] > 100 for a, b in zip(spans, spans[1:])), name
+        longest = max(longest, max(e - s for s, e in spans))
+    assert longest > 1800
+    assert len(_of(full, "plank")) < len(_of(split, "plank"))
+    assert full["info"][0]["unsupported_joints"] == 0
+
+
+def test_full_length_trays_cut_from_the_coil_and_checked(wall):
+    from cladding_preview import check_rules
+    tall = dict(wall, height=12000.0, polygons=[dict(wall["polygons"][0], exterior=[[0, 0], [8000, 0], [8000, 12000], [0, 12000]])])
+    params, out = _build(wall, plank_orient="vertical", seam_full_length=True, plank_len=3000, elevations=[tall], trim=True)
+    p = _parse(params)
+    assert p["seam_full"] is True
+    plan = chain_plan(out["geometry"], p, [tall["name"]], 1.0)
+    longest = max(max(q[1] for q in m["profile"]) - min(q[1] for q in m["profile"]) for m in _of(out, "plank"))
+    assert plan["board"][0] >= longest > 3000 and not plan.get("oversize")
+    msgs = {c["name"]: c for c in check_rules(params, out["info"])}
+    assert msgs["Tray length"]["status"] == "warn" and "12.0 m" in msgs["Tray length"]["message"]
+    # a board chain ignores the toggle, and a short facade passes
+    assert _parse({"cladding_type": "plank", "plank_profile": "board", "seam_full_length": True})["seam_full"] is False
+    params, out = _build(wall, seam_full_length=True)
+    assert {c["name"]: c for c in check_rules(params, out["info"])}["Tray length"]["status"] == "pass"
+
+
 # ── external corners: a seam on the corner, or a flashing strip ────────────
 
 def _corner_pair(wall, detail, master_first=True, **kw):

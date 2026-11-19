@@ -22,6 +22,14 @@ def check_rules(params, infos=None):
         add("Deck span", status, "Batten centres %.0fmm vs %.0fmm max span for the %.0fmm %s deck%s"
             % (c, max_span, p["deck_t"], "WBP plywood" if p["seam_deck"] == "ply" else "softwood boarding",
                " — exceeds max span" if status == "fail" else ""), c)
+        if p["seam_full"]:
+            # one piece a run: how long that can be is the metal's and the manufacturer's call
+            run = max([float(e.get("height" if p["plank_orient"] == "vertical" else "width") or 0.0)
+                       for e in p["elevations"]] or [0.0])
+            add("Tray length", "warn" if run > 10000 else "pass",
+                "Full-length trays, no cross joints: up to %.1f m in one piece, cut from the coil%s"
+                % (run / 1000.0, " — confirm the longest tray for the metal with the manufacturer (thermal movement, handling)"
+                   if run > 10000 else ""), run)
     elif p["cladding_type"] == "plank":
         max_span = max([400.0] + [span for min_t, span in PLANK_SPAN_TABLE if p["plank_t"] >= min_t])
         c = p["batten_centres"]

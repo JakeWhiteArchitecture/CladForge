@@ -345,7 +345,7 @@ function samePlane(hit, e) {
 async function pyLink(a, b) {
     const slim = r => JSON.stringify({ frame: r.frame, width: r.width, height: r.height });
     pyodide.globals.set('_link_a', slim(a)); pyodide.globals.set('_link_b', slim(b));
-    const out = await pyodide.runPythonAsync(`
+    const out = await enginePy(`
 import json as _json
 from fabric_extract import chain_link as _cl
 _json.dumps(_cl(_json.loads(_link_a), _json.loads(_link_b)))`);
@@ -711,7 +711,7 @@ function val(id) { return document.getElementById(id).value; }
 // face of another chain loads that chain's settings into it, and any edit is kept by the
 // chain shown (state.formChain), so one chain's choices never change another's. Live trim,
 // panels as walls and shared offcuts stay job-wide.
-const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model'];
+const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model', 'seam_full_length'];
 function formSettings() {
     const s = { corner: toggleValue('corner-type') || 'mitre' };
     for (const k of NUM) { const v = parseFloat(val(k)); if (isFinite(v)) s[k] = v; }
@@ -771,7 +771,7 @@ async function importProfile(file) {
     const text = await file.text();
     pyodide.globals.set('_profile_dxf', text);
     pyodide.globals.set('_profile_name', file.name.replace(/\.dxf$/i, ''));
-    const res = JSON.parse(await pyodide.runPythonAsync(`
+    const res = JSON.parse(await enginePy(`
 import json as _json
 from cladding_profiles import profile_from_dxf as _pfd
 _sec, _msg = _pfd(_profile_dxf, _profile_name)
@@ -851,6 +851,7 @@ function getParams() {
     p.cladding_type = toggleValue('cladding-type');
     p.rotate = document.getElementById('rotate').checked;
     p.battens_from_model = document.getElementById('battens_from_model').checked;
+    p.seam_full_length = document.getElementById('seam_full_length').checked;
     p.panels_as_walls = document.getElementById('panels_as_walls').checked;
     p.share_offcuts = document.getElementById('share_offcuts').checked;
     p.plank_orient = toggleValue('plank-orient');
@@ -895,6 +896,11 @@ function syncTypeUI() {
     if (custom) showCustomProfile();
     document.getElementById('seam-fields').style.display = seam ? '' : 'none';
     document.getElementById('seam-edge-fields').style.display = seam ? '' : 'none';
+    // full-length trays: one piece a run, so the stock length and the splices do not apply
+    const full = seam && document.getElementById('seam_full_length').checked;
+    const lf = document.getElementById('plank-length-fields');
+    lf.style.opacity = full ? '0.4' : '';
+    lf.querySelectorAll('input').forEach(i => { i.disabled = full; });
     document.getElementById('plank-len-label').innerHTML = seam ? 'Longest tray <span class="unit">mm, about 4000 on a facade</span>'
                                                                : 'Stock length <span class="unit">1800–6000, as supplied</span>';
     // kerf and trim serve both: a panel board is squared on all four edges, a plank length at its ends
@@ -1059,7 +1065,7 @@ function setStatus(text, cls) {
 // (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
-const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls'];
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls', 'seam_full_length'];
 const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient', 'plank-profile'];
 
 function snapshotState() {
@@ -1102,7 +1108,7 @@ async function saveState() {
     const skipped = state.elevations.filter(e => !(e.result && e.result.ok)).length;
     try {
         pyodide.globals.set('_state_json', JSON.stringify(snap));
-        const xml = await pyodide.runPythonAsync(`
+        const xml = await enginePy(`
 import json as _json
 from cladding_state import to_xml as _to_xml
 _to_xml(_json.loads(_state_json))`);
@@ -1130,7 +1136,7 @@ async function loadState(xml, fileName) {
     let res;
     try {
         pyodide.globals.set('_state_xml', xml);
-        res = JSON.parse(await pyodide.runPythonAsync(`
+        res = JSON.parse(await enginePy(`
 import json as _json
 from cladding_state import load as _load
 _json.dumps(_load(_state_xml))`));
@@ -1269,7 +1275,7 @@ async function downloadIFC() {
     try {
         await ensureIfcOpenShell(btn);
         pyodide.globals.set('_params_json', JSON.stringify(params));
-        const proxy = await pyodide.runPythonAsync(`
+        const proxy = await enginePy(`
 import json as _json, os as _os
 from cladding_preview import generate_preview as _gp
 from ifc_generator import meshes_to_ifc as _to_ifc
@@ -1291,7 +1297,7 @@ async function ensureIfcOpenShell(btn) {
     if (ifcReady) return;
     busy(btn, true, 'Installing IfcOpenShell (one-off, ~40 MB)…');
     await pyodide.loadPackage(['numpy']);
-    await pyodide.runPythonAsync(`
+    await enginePy(`
 import micropip
 await micropip.install(["lark", "isodate", "python-dateutil", "typing_extensions"])
 await micropip.install("https://ifcopenshell.github.io/wasm-wheels/ifcopenshell-0.8.5-cp313-cp313-pyodide_2025_0_wasm32.whl")
@@ -1345,7 +1351,7 @@ async function runNesting(deep) {
     const seq = ++_nestSeq, job = jobRecords();
     try {
         pyodide.globals.set('_nest_json', JSON.stringify({ names: job.names, area: job.area, deep: !!deep }));
-        const out = await pyodide.runPythonAsync(`
+        const out = await enginePy(`
 import json as _json, time as _time
 from cladding_nesting import chain_plan as _cp
 from cladding_preview import parse_for as _pf
@@ -1435,7 +1441,7 @@ async function cuttingPlan(asDxf) {
     pyodide.globals.set('_params_json', JSON.stringify(params));
     pyodide.globals.set('_job_json', JSON.stringify(job));
     pyodide.globals.set('_as_dxf', !!asDxf);
-    const out = await pyodide.runPythonAsync(`
+    const out = await enginePy(`
 import json as _json
 from cladding_preview import generate_preview as _gp, parse_for as _pf
 from cladding_nesting import chain_plan as _cp, plan_dxf as _pd
@@ -1474,14 +1480,14 @@ async function optimiseSplices() {
                 ? Object.assign({}, r, { settings: Object.assign({}, r.settings, { plank_splice: settings[i] }) }) : r);
             pyodide.globals.set('_st_json', JSON.stringify({ params: tp,
                                                              names: job.names, area: job.area }));
-            trials.push(JSON.parse(await pyodide.runPythonAsync(`
+            trials.push(JSON.parse(await enginePy(`
 import json as _json
 from cladding_preview import splice_trial as _st
 _stj = _json.loads(_st_json)
 _json.dumps(_st(_stj["params"], _stj["names"], _stj["area"]))`)));
         }
         pyodide.globals.set('_st_all', JSON.stringify({ trials, current }));
-        const ranked = JSON.parse(await pyodide.runPythonAsync(`
+        const ranked = JSON.parse(await enginePy(`
 import json as _json
 from cladding_preview import rank_splices as _rs
 _sta = _json.loads(_st_all)
@@ -1551,7 +1557,7 @@ async function downloadDXF() {
     busy(btn, true, 'Generating DXF…');
     try {
         pyodide.globals.set('_params_json', JSON.stringify(params));
-        const dxf = await pyodide.runPythonAsync(`
+        const dxf = await enginePy(`
 import json as _json
 from cladding_preview import generate_preview as _gp
 from dxf_generator import meshes_to_dxf_string as _to_dxf
@@ -1609,6 +1615,14 @@ function appIdle() {
         && !state.elevations.some(e => e._running || e.pending);
 }
 
+// A call straight to the engine (no watchdog: pyRun has that), counted like pyRun's, so
+// appIdle sees the cutting plan, an export or an import while it is being worked out.
+function enginePy(code) {
+    _engineCalls++;
+    const over = () => { _engineCalls--; requestRedraw(300); };
+    return pyodide.runPythonAsync(code).then(v => { over(); return v; }, e => { over(); throw e; });
+}
+
 function pyRun(code) {
     const py = pyodide;
     _engineCalls++;
@@ -1657,7 +1671,7 @@ async function initPyodide() {
             const src = await (await fetch(mod + '.py?v=' + v)).text();
             pyodide.FS.writeFile('/home/pyodide/' + mod + '.py', src);
         }
-        await pyodide.runPythonAsync(`
+        await enginePy(`
 import sys
 sys.path.insert(0, '/home/pyodide')
 import cladding_preview, fabric_extract, dxf_generator`);
