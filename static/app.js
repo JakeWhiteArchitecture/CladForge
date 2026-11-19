@@ -1806,7 +1806,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

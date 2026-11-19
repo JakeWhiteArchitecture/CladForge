@@ -7,6 +7,7 @@ from cladding_constants import (_parse, PLANK_SPAN_TABLE, DECK_SPAN, MIN_CAVITY,
 from cladding_primitives import ROW_MIN
 from cladding_corners import PANEL_SIZES as PROFILE_SIZES, TRIM_SIZE, TRIM_LEG, FLANGE_P
 from cladding_verge import VERGE_SEAM
+from cladding_valley import VALLEY_MIN_PITCH
 
 MIN_CLOSING_CUT = 100.0   # mm – narrower closing pieces are hard to fix and look wrong
 SEAM_MIN_PITCH = 3.0      # deg – below this a double-lock standing seam is generally not used at all
@@ -154,6 +155,24 @@ def check_rules(params, infos=None):
             else:
                 add("Ridge", "pass", what + ", the trays turned up 15 mm. The ridge clips, the insect mesh and laps between "
                     "lengths of cap are not drawn", r["length"])
+    # A valley is reported once, by the slope that carries its gutter.
+    for i in infos:
+        for v in i.get("valleys") or []:
+            if not v.get("master"):
+                continue
+            what = "%s and %s meet at a valley %.2f m long: the cladding stands %.0f mm back from the valley line on each " \
+                   "slope, %.0f mm clear across it, over a valley gutter that runs %.0f mm on under it" % (
+                       i["elevation"], v["with"], v["length"] / 1000.0, v["back"], v["clear"], v["lap"])
+            low = [a for a in v["pitches"] if a <= VALLEY_MIN_PITCH]
+            if not p["seam"]:
+                add("Valley", "warn", what + ". The gutter is a standing seam detail: agree the valley for %s with the supplier"
+                    % ("panels" if p["cladding_type"] == "panel" else "boards"), v["length"])
+            elif low:
+                add("Valley", "warn", what + ". A slope here is pitched %.1f°: the detail is for slopes over %.0f°"
+                    % (min(low), VALLEY_MIN_PITCH), min(low))
+            else:
+                add("Valley", "pass", what + ". That overlap is the detail's R: confirm it against the installation guide. "
+                    "The welt strip, the sheet clips and a water flow controller are not drawn", v["length"])
     # A verge's last seam stands 150 to 370 mm in from the tray's edge.
     for i in infos:
         verges = i.get("verges") or []

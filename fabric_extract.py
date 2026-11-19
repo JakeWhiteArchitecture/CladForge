@@ -764,6 +764,91 @@ def ridge_link(a, b):
             "k": round(math.tan(beta / 2.0), 4), "angle": round(math.degrees(beta), 1), "external": True}
 
 
+VALLEY_ON = 25.0          # mm – an outline edge this close to the other slope's plane lies along the valley
+VALLEY_MIN = 300.0        # mm – two slopes share at least this much valley, or it is not one
+
+
+def _centre(elev):
+    """A point well inside the face, in its own (u, v): the centroid of its largest patch."""
+    best = max((Polygon(pg["exterior"]) for pg in elev.get("polygons") or []), key=lambda g: g.area, default=None)
+    return (best.centroid.x, best.centroid.y) if best is not None else (float(elev["width"]) / 2, float(elev["height"]) / 2)
+
+
+def _at(frame, u, v):
+    U, V, o = frame["u"], frame.get("v") or (0.0, 0.0, 1.0), frame["origin"]
+    return tuple(o[i] + U[i] * u + V[i] * v for i in range(3))
+
+
+def _along_plane(elev, other, line, base):
+    """The stretch of *elev*'s outline that lies in *other*'s plane, as (t0, t1) along
+    *line* from *base*; None where no edge of it does."""
+    fo = other["frame"]
+    ts = []
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        for q, r in zip(ring, ring[1:] + ring[:1]):
+            P, Q = _at(elev["frame"], q[0], q[1]), _at(elev["frame"], r[0], r[1])
+            if abs(_dot(fo["n"], _sub(P, fo["origin"]))) <= VALLEY_ON and abs(_dot(fo["n"], _sub(Q, fo["origin"]))) <= VALLEY_ON:
+                ts += [_dot(_sub(P, base), line), _dot(_sub(Q, base), line)]
+    return (min(ts), max(ts)) if ts else None
+
+
+def valley_link(a, b):
+    """Do pitched elevations a and b meet at a valley? None if not, else {"kind": "valley",
+    "a": {"p1", "p2": the valley line in a's own (u, v), "inside": a point inside a,
+    "other_up": the direction up b's slope square to the line, "other_n": b's normal},
+    "b": the same for b, "k": tan of half the angle between the normals, "angle",
+    "length"}.
+
+    A valley is where two slopes fall towards each other: each face lies in front of the
+    other's plane, and each has an edge of its outline along the line the planes meet on,
+    level or sloping. The faces have to be modelled meeting on that line: one roof run
+    through another has no such edge and is not joined."""
+    fa, fb = a["frame"], b["frame"]
+    na, nb = tuple(fa["n"]), tuple(fb["n"])
+    if na[2] < 1e-6 or nb[2] < 1e-6:
+        return None                                   # a wall, or a face that looks down
+    line = _cross(na, nb)
+    size = math.sqrt(_dot(line, line))
+    if size < 0.05:
+        return None                                   # parallel
+    line = tuple(c / size for c in line)
+    ca, cb = _at(fa, *_centre(a)), _at(fb, *_centre(b))
+    if _dot(nb, _sub(ca, fb["origin"])) <= 0 or _dot(na, _sub(cb, fa["origin"])) <= 0:
+        return None                                   # one lies behind the other: a ridge or a hip
+    # A point on both planes: from a's centre, straight down a's own slope to b's plane.
+    down = _cross(na, line)
+    step = _dot(nb, down)
+    if abs(step) < 1e-9:
+        return None
+    base = tuple(ca[i] - down[i] * _dot(nb, _sub(ca, fb["origin"])) / step for i in range(3))
+    ra, rb = _along_plane(a, b, line, base), _along_plane(b, a, line, base)
+    if not ra or not rb:
+        return None
+    t0, t1 = max(ra[0], rb[0]), min(ra[1], rb[1])
+    if t1 - t0 < VALLEY_MIN:
+        return None
+    ends = [tuple(base[i] + line[i] * t for i in range(3)) for t in (t0, t1)]
+    beta = math.acos(max(-1.0, min(1.0, _dot(na, nb))))
+
+    def side(e, centre, other, n_other):
+        f = e["frame"]
+        local = lambda P: [round(_dot(_sub(P, f["origin"]), f["u"]), 2),                       # noqa: E731
+                           round(_dot(_sub(P, f["origin"]), f.get("v") or (0.0, 0.0, 1.0)), 2)]
+        up = _cross(tuple(other["frame"]["n"]), line)                 # in the other face, square to the line
+        if _dot(up, _sub(centre, base)) < 0:
+            up = tuple(-c for c in up)
+        return {"p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e)],
+                "other_up": [round(c, 9) for c in up], "other_n": [round(c, 9) for c in n_other]}
+    return {"kind": "valley", "a": side(a, cb, b, nb), "b": side(b, ca, a, na),
+            "k": round(math.tan(beta / 2.0), 4), "angle": round(math.degrees(beta), 1), "length": round(t1 - t0, 1)}
+
+
+def valley_links(a, others):
+    """valley_link(a, each of *others*), in order: None where the two do not meet at one."""
+    return [valley_link(a, b) for b in others]
+
+
 def chain_link(a, b):
     """Do elevations a and b meet at a vertical corner? None if not, else
     {"end_a": "left"|"right", "end_b", "corner_u_a", "corner_u_b", "angle",
