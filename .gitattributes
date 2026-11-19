@@ -1,0 +1,4 @@
+# The README's feature table grows a row a feature. Two branches adding or changing
+# neighbouring rows are not in conflict: keep both sides' lines. (If two branches rewrite
+# the same row, both versions are kept and one has to be deleted by hand.)
+README.md merge=union
