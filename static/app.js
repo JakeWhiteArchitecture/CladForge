@@ -428,7 +428,7 @@ function toggle2D() {
     enter2D(e.result.name, e.result.frame, cladBox(e));
     update2DButton();
     renderDims2D();
-    setStatus('2D elevation: click a dimension to type over it, a panel joint to dissolve it, a client batten to set it on, fixing only or off · E or Esc for 3D', 'ready');
+    setStatus('2D elevation: click a dimension to type over it, a panel joint to dissolve it, a client batten to set it on, fixing only or off, a dashed stagger to put a joint on it · E or Esc for 3D', 'ready');
 }
 
 function update2DButton() {
@@ -756,7 +756,7 @@ function elevationRecords() {
                                                    clip_v_hi: vLocal(e, chain.topZ),
                                                    cover: e.cover || null, panel_rows: e.panelRows || null,
                                                    panel_joints: e.panelJoints || null,
-                                                   post_states: e.postStates || null,
+                                                   post_states: e.postStates || null, stagger_joints: e.staggerJoints || null,
                                                    settings: chain.settings || null,
                                                    course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
@@ -1001,7 +1001,7 @@ function snapshotState() {
         cornerLo: e.cornerLo || 0, cornerHi: e.cornerHi || 0, masterLo: !!e.masterLo, masterHi: !!e.masterHi,
         detailLo: e.detailLo || null, detailHi: e.detailHi || null, clipLo: e.clipLo || 0,
         clipHi: e.clipHi === undefined ? null : e.clipHi, cover: e.cover || null,
-        panelRows: e.panelRows || null, panelJoints: e.panelJoints || null, postStates: e.postStates || null,
+        panelRows: e.panelRows || null, panelJoints: e.panelJoints || null, postStates: e.postStates || null, staggerJoints: e.staggerJoints || null,
         openingDetails: e.openingDetails || {},
         manual: e.manual || [], disabled: e.disabled || {},
         // the faces it was picked from, for reference: the surface below is what loads
@@ -1108,7 +1108,7 @@ function restoreState(st) {
                         detailLo: m.detailLo || null, detailHi: m.detailHi || null, clipLo: m.clipLo || 0,
                         clipHi: m.clipHi === undefined ? null : m.clipHi, cover: m.cover || null,
                         panelRows: m.panelRows || null, panelJoints: m.panelJoints || null,
-                        postStates: m.postStates || null, openingDetails: m.openingDetails || {} };
+                        postStates: m.postStates || null, staggerJoints: m.staggerJoints || null, openingDetails: m.openingDetails || {} };
             chain.members.push(e);
             state.elevations.push(e);
             byName[e.name] = e;
