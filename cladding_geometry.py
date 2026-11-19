@@ -820,6 +820,44 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
     return depth + p["plank_t"]
 
 
+STAGGER_MIN = 50.0       # mm – a step in the clad outline at least this high is a stagger
+STAGGER_REACH = 100.0    # mm – a joint on it is offered when a client batten is this close
+
+
+def _staggers(elev, region, W, margin, holes, posts):
+    """The staggers of a face: where the clad outline steps, at its base or its top (the
+    upright edges of the outline that are not an end of the face, a chain corner or an
+    opening's jamb). A panel joint can be put on one (elev["stagger_joints"], by post_key,
+    toggled in the 2D view) rather than a panel being notched round it; that is offered
+    where a client batten in use stands within STAGGER_REACH, since the joints either
+    side would otherwise land on the battens and miss it. [{"u", "v0", "v1", "near",
+    "offered", "on"}], *near* the closest such batten or None."""
+    if region is None:
+        return []
+    lo, hi = clip_bounds(elev)
+    found = {}
+    for pg in iter_polygons(region):
+        ring = list(pg.exterior.coords)
+        for a, b in zip(ring, ring[1:]):
+            if abs(a[0] - b[0]) > 0.5 or abs(a[1] - b[1]) < STAGGER_MIN:
+                continue
+            u = (a[0] + b[0]) / 2.0
+            if not (margin < u < W - margin) or min(abs(u - lo), abs(u - hi)) < 1.0:
+                continue
+            if any(min(abs(o[0] - u), abs(o[1] - u)) < 1.0 for o in holes):
+                continue
+            q = found.setdefault(post_key(u), {"u": round(u, 1), "v0": min(a[1], b[1]), "v1": max(a[1], b[1])})
+            q.update(v0=min(q["v0"], a[1], b[1]), v1=max(q["v1"], a[1], b[1]))
+    chosen = elev.get("stagger_joints") or {}
+    out = []
+    for key, q in sorted(found.items(), key=lambda kv: kv[1]["u"]):
+        near = min(posts or [], key=lambda x: abs(x - q["u"]), default=None)
+        offered = near is not None and abs(near - q["u"]) <= STAGGER_REACH
+        out.append(dict(q, v0=round(q["v0"], 1), v1=round(q["v1"], 1), near=near if offered else None,
+                        offered=offered, on=bool(offered and chosen.get(key))))
+    return out
+
+
 def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Panels on vertical battens, joints on battens, noggins at horizontal joints only
     where a counter-batten layer is there to keep the drainage plane clear.
@@ -835,7 +873,8 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     holes = openings(elev)
     jambs = sorted({u for o in holes for u in (o[0], o[1]) if bw < u < W - bw}) if p["set_out_from_openings"] else []
     posts = _posts(p, elev, info)
-    reveal = []
+    reveal, steps = [], []
+    info["staggers"] = []
     if posts:
         # The client's columns fix the battens: every joint goes on one, and each reveal
         # line is a joint carried straight up past the opening and on down below it, on a
@@ -844,8 +883,17 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         # column in reach gets a batten too.
         fixings = _post_fixings(info)
         on = [u for u in posts if all(abs(u - f) > 0.5 for f in fixings)]   # the columns a joint may use
-        panels, joints, extra = bays_on_posts([0.0] + jambs + [W], on, p["panel_w"], gap)
-        reveal = list(jambs)
+        # A stagger given a joint is a fixed line like a jamb, but a joint for its whole
+        # height: the panels either side stand the joint gap apart, on a batten of ours.
+        info["staggers"] = _staggers(elev, region, W, bw, holes, on)
+        steps = [q["u"] for q in info["staggers"] if q["on"] and all(abs(q["u"] - j) > bw for j in jambs)]
+        panels, joints, extra = bays_on_posts(sorted([0.0] + jambs + steps + [W]), on, p["panel_w"], gap)
+        if steps:
+            at = lambda x: any(abs(x - u) < 1e-6 for u in steps)   # noqa: E731
+            panels = [(s0 + (gap / 2.0 if at(s0) else 0.0), e0 - (gap / 2.0 if at(e0) else 0.0), full)
+                      for s0, e0, full in panels]
+            joints = sorted(joints + steps)
+        reveal = sorted(jambs + steps)
         info["post_extra"] = len(extra)
         info["reveal_battens"] = len([u for u in jambs if all(abs(u - q) > bw / 2 for q in posts)])
     elif jambs:
@@ -874,7 +922,7 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         grid = [anchor + k * pitch for k in range(k0, k0 + int(W / pitch) + 3)]
         grid = [u for u in grid if bw / 2 < u < W - bw / 2]
         supports = dedupe_priority([joints, grid, edges], bw)
-    battens = [u for u in supports if all(abs(u - j) > bw / 2 for j in jambs)]
+    battens = [u for u in supports if all(abs(u - j) > bw / 2 for j in jambs + steps)]
     batten_back = depth
     depth = _vertical_battens(p, battens, meshes, name, frame, depth, H)
     for i, u in enumerate(reveal):
