@@ -1124,14 +1124,28 @@ _to_xml(_json.loads(_state_json))`);
     }
 }
 
-async function onStateChosen(input) {
+// One state file or several. Load state replaces the job with the first and adds the rest
+// to it; Add states adds every one to the job that is open (restoreState, add).
+async function onStateChosen(input, add) {
     if (!input.files.length) return;
-    const file = input.files[0];
+    const files = Array.from(input.files);
     input.value = '';                        // choosing the same file again still loads it
-    await loadState(await file.text(), file.name);
+    const notes = [];
+    let ok = 0;
+    for (const [i, file] of files.entries()) {
+        const merging = add || i > 0;
+        const done = await loadState(await file.text(), file.name, merging);
+        if (!done) { if (files.length === 1) return; notes.push(`${file.name}: not loaded`); continue; }
+        ok++;
+        if (merging && done.note) notes.push(`${file.name}: ${done.note}`);
+    }
+    if (files.length > 1 || add)
+        setStatus(`${add ? 'Added' : 'Loaded'} ${ok} of ${files.length} state file${files.length > 1 ? 's' : ''}: `
+                  + `${state.chains.length} chain(s), ${state.elevations.length} elevation(s) in the job`
+                  + (notes.length ? ' · ' + notes.join(' · ') : ''), notes.some(n => /not loaded/.test(n)) ? 'busy' : 'ready');
 }
 
-async function loadState(xml, fileName) {
+async function loadState(xml, fileName, add) {
     if (!pyReady) { setStatus('The engine is still loading — try again in a moment', 'busy'); return false; }
     let res;
     try {
@@ -1142,48 +1156,112 @@ from cladding_state import load as _load
 _json.dumps(_load(_state_xml))`));
     } catch (err) { res = { ok: false, error: err.message }; }
     if (!res.ok) { setStatus('Not loaded: ' + res.error, 'busy'); return false; }
-    restoreState(res.state);
+    const merged = restoreState(res.state, !!add && state.elevations.length > 0);
     await updatePreview();
     if (!allMeshes.length) fitCameraTo(cladGroup.children.length ? cladGroup : outlineGroup);
     const n = state.elevations.length;
+    if (merged) {
+        const parts = [`${merged.elevations} elevation(s) in ${merged.chains} chain(s) added`];
+        if (merged.renamed.length) parts.push(`renamed ${merged.renamed.join(', ')}`);
+        if (merged.skipped.length) parts.push(`${merged.skipped.length} already in the job, left out (${merged.skipped.join(', ')})`);
+        if (merged.otherModel) parts.push(`saved from ${merged.otherModel}: placed by its coordinates`);
+        merged.note = parts.join(' · ');
+        setStatus(`Added ${fileName || 'state'}: ${merged.note}`, 'ready');
+        return merged;
+    }
     setStatus(`Loaded ${fileName || 'state'}: ${state.chains.length} chain(s), ${n} elevation(s)`
               + (allMeshes.length ? '' : ' · no host model open'), 'ready');
-    return true;
+    return {};
 }
 
-function restoreState(st) {
+// A saved state's job-wide settings (keyed by form field) as a chain's own settings: what a
+// chain from a state saved before chains had their own takes with it when it is added.
+function chainSettingsOf(s) {
+    if (!s) return null;
+    const out = {};
+    for (const k of NUM) if (typeof s[k] === 'number' && isFinite(s[k])) out[k] = s[k];
+    for (const k of CHAIN_CHECKS) if (typeof s[k] === 'boolean') out[k] = s[k];
+    const toggles = { 'corner-type': 'corner', 'cladding-type': 'cladding_type', 'plank-orient': 'plank_orient', 'plank-profile': 'plank_profile' };
+    for (const [from, to] of Object.entries(toggles)) if (s[from]) out[to] = s[from];
+    for (const k of ['seam_deck', 'counter_batten', 'custom_profile', 'custom_section']) if (s[k]) out[k] = s[k];
+    return Object.keys(out).length ? out : null;
+}
+
+// Two surfaces are the same wall face: the same place, direction and size.
+function sameSurface(a, b) {
+    if (!a || !b || !a.frame || !b.frame) return false;
+    const d = Math.hypot(...a.frame.origin.map((x, k) => x - b.frame.origin[k]));
+    const dot = a.frame.u.reduce((t, x, k) => t + x * b.frame.u[k], 0);
+    return d < 2 && dot > 0.999 && Math.abs(a.width - b.width) < 2 && Math.abs(a.height - b.height) < 2;
+}
+
+// *add*: the state's chains join the job that is open instead of replacing it. Each keeps
+// its own settings (its own, or the settings its state was saved with); the job's settings
+// and the model stay as they are. A chain or elevation whose name is taken gets the next
+// free one, and a wall face the job already has is left out, so the same state added twice
+// adds nothing. Returns what was added ({chains, elevations, renamed, skipped}), or null
+// for a plain load.
+function restoreState(st, add) {
     closeEditWidget();
     if (in2D()) { exit2D(); update2DButton(); }
-    state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
-    state.elevations = []; state.chains = []; state.active = -1;
+    const merged = add ? { chains: 0, elevations: 0, renamed: [], skipped: [], otherModel: null } : null;
+    if (!add) {
+        state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
+        state.elevations = []; state.chains = []; state.active = -1;
+    }
     // Surfaces are stored in scene coordinates, which sit on the model offset they were
     // saved with. With no model open that offset comes back too, so exports land on the
-    // host model's coordinates; with one open, the surfaces move onto its offset.
+    // host model's coordinates; with one open (or a job already loaded, when adding), the
+    // surfaces move onto its offset.
     const saved = (st.model && st.model.offset) || [0, 0, 0];
     let d = [0, 0, 0];
-    if (allMeshes.length) d = saved.map((x, k) => x - modelOffset[k]);
+    if (allMeshes.length || add) d = saved.map((x, k) => x - modelOffset[k]);
     else { modelOffset = saved.slice(); modelContext = (st.model && st.model.context) || {}; }
-    state.savedModelFile = st.model && st.model.file;
     const s = st.settings || {};
-    for (const k of NUM) if (s[k] !== undefined && s[k] !== null) document.getElementById(k).value = s[k];
-    for (const k of STATE_CHECKS) if (typeof s[k] === 'boolean') document.getElementById(k).checked = s[k];
-    for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
-    if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
-    if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
-    if (s.custom_section) addCustomProfile(s.custom_section, true);
-    else if (s.custom_profile && CUSTOM_LIBRARY[s.custom_profile]) document.getElementById('custom_profile').value = s.custom_profile;
+    if (add) {
+        const here = (state.file && state.file.name) || state.savedModelFile, there = st.model && st.model.file;
+        if (here && there && here !== there) merged.otherModel = there;
+        if (s.custom_section) addCustomProfile(s.custom_section, false);
+    } else {
+        state.savedModelFile = st.model && st.model.file;
+        for (const k of NUM) if (s[k] !== undefined && s[k] !== null) document.getElementById(k).value = s[k];
+        for (const k of STATE_CHECKS) if (typeof s[k] === 'boolean') document.getElementById(k).checked = s[k];
+        for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
+        if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
+        if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
+        if (s.custom_section) addCustomProfile(s.custom_section, true);
+        else if (s.custom_profile && CUSTOM_LIBRARY[s.custom_profile]) document.getElementById('custom_profile').value = s.custom_profile;
+    }
+    const label = k => 'Elevation ' + String.fromCharCode(65 + (k % 26)) + (k >= 26 ? Math.floor(k / 26) : '');
+    const freeElevation = () => { let k = 0; while (state.elevations.some(m => m.name === label(k))) k++; return label(k); };
     const byName = {};
     for (const c of st.chains || []) {
-        const chain = { name: c.name, members: [], length: 0, built: !!c.built,
+        let chainName = c.name;
+        if (add && state.chains.some(x => x.name === chainName)) {
+            do { chainName = 'Chain ' + (++state.seq); } while (state.chains.some(x => x.name === chainName));
+            merged.renamed.push(`${c.name} → ${chainName}`);
+        }
+        const chain = { name: chainName, members: [], length: 0, built: !!c.built,
                         topZ: c.topZ === null || c.topZ === undefined ? null : c.topZ + d[2],
                         bottomZ: c.bottomZ === null || c.bottomZ === undefined ? null : c.bottomZ + d[2],
                         edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}),
-                        settings: c.settings ? Object.assign({}, c.settings) : null };
+                        settings: c.settings ? Object.assign({}, c.settings) : (add ? chainSettingsOf(s) : null) };
         for (const m of c.members || []) {
             const surface = m.surface;
             if (!surface || !surface.ok) continue;
             surface.frame.origin = surface.frame.origin.map((x, k) => x + d[k]);
-            const e = { name: m.name, picks: [], savedPicks: m.picks || [], restored: true, result: surface,
+            let name = m.name;
+            if (add) {
+                const twin = state.elevations.find(x => sameSurface(x.result, surface));
+                if (twin) { merged.skipped.push(`${m.name.replace('Elevation ', '')} = ${twin.name.replace('Elevation ', '')}`); continue; }
+                if (state.elevations.some(x => x.name === name)) {
+                    name = freeElevation();
+                    merged.renamed.push(`${m.name.replace('Elevation ', '')} → ${name.replace('Elevation ', '')}`);
+                }
+                surface.name = name;              // the engine and the views know a face by this
+                merged.elevations++;
+            }
+            const e = { name, picks: [], savedPicks: m.picks || [], restored: true, result: surface,
                         manual: m.manual || [], disabled: m.disabled || {}, storey: m.storey || null, highlights: [], chain,
                         start: m.start || 0, rev: !!m.rev, link: m.link || null, offset: m.offset || 0,
                         cornerLo: m.cornerLo || 0, cornerHi: m.cornerHi || 0, masterLo: !!m.masterLo, masterHi: !!m.masterHi,
@@ -1193,19 +1271,25 @@ function restoreState(st) {
                         postStates: m.postStates || null, staggerJoints: m.staggerJoints || null, openingDetails: m.openingDetails || {} };
             chain.members.push(e);
             state.elevations.push(e);
-            byName[e.name] = e;
+            byName[m.name] = e;                   // by its name in the file: what datumFrom says
         }
         chain.datumFrom = byName[c.datumFrom] && byName[c.datumFrom].chain === chain ? byName[c.datumFrom] : null;
-        if (chain.members.length) { relayoutChain(chain); state.chains.push(chain); }
+        if (chain.members.length) { relayoutChain(chain); state.chains.push(chain); if (add) merged.chains++; }
     }
-    state.seq = Math.max(st.seq || 0, state.chains.length);
+    state.seq = Math.max(add ? state.seq : 0, st.seq || 0, state.chains.length);
     // A state saved before chains had their own settings: each chain takes the job's.
     const job = formSettings();
     for (const ch of state.chains) if (!ch.settings) ch.settings = Object.assign({}, job);
+    if (add) {                         // the job stays on the face it was on
+        renderElevationList();
+        if (state.active < 0 && state.elevations.length) setActive(0);
+        return merged;
+    }
     state.formChain = null;            // setActive shows the active face's chain
     onTypeChange();
     const active = state.elevations.findIndex(e => e.name === st.active);
     setActive(active >= 0 ? active : state.elevations.length ? 0 : -1);
+    return null;
 }
 
 // ─── MODEL LOADING ───
