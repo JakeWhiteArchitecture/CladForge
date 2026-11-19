@@ -1207,7 +1207,8 @@ function sameSurface(a, b) {
     if (!a || !b || !a.frame || !b.frame) return false;
     const d = Math.hypot(...a.frame.origin.map((x, k) => x - b.frame.origin[k]));
     const dot = a.frame.u.reduce((t, x, k) => t + x * b.frame.u[k], 0);
-    return d < 2 && dot > 0.999 && Math.abs(a.width - b.width) < 2 && Math.abs(a.height - b.height) < 2;
+    const facing = a.frame.n.reduce((t, x, k) => t + x * b.frame.n[k], 0);     // two slopes can share a foot
+    return d < 2 && dot > 0.999 && facing > 0.999 && Math.abs(a.width - b.width) < 2 && Math.abs(a.height - b.height) < 2;
 }
 
 // *add*: the state's chains join the job that is open instead of replacing it. Each keeps
