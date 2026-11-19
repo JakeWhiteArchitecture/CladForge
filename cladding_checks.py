@@ -140,13 +140,19 @@ def check_rules(params, infos=None):
     for i in infos:
         r = i.get("ridge")
         if r and r.get("master"):
-            what = "%s and %s meet at a ridge: a vented cap %.2f m long, %.0f mm down each slope, the decks %.0f mm apart " \
-                   "under it" % (r["between"][0], r["between"][1], r["length"] / 1000.0, r["leg"], r["gap"])
-            if p["seam"]:
-                add("Ridge", "pass", what + ". Clips, the cleat and laps between lengths of cap are not drawn", r["length"])
-            else:
+            what = "%s and %s meet at a ridge: a vented cap %.2f m long, %.0f mm down each slope, %.0f mm clear between " \
+                   "the two slopes' cladding under it" % (r["between"][0], r["between"][1], r["length"] / 1000.0, r["leg"], r["gap"])
+            room = r.get("clip_room")
+            if not p["seam"]:
                 add("Ridge", "warn", what + ". The cap is a standing seam detail: agree the ridge for %s with the supplier"
                     % ("panels" if p["cladding_type"] == "panel" else "boards"), r["length"])
+            elif room is not None and room < 79.5:
+                add("Ridge", "warn", what + ". At this pitch the decompression strip has to sit lower to stay 10 mm off the "
+                    "trays' turned-up ends, leaving %.0f mm for the ridge clip where the detail shows 80: confirm with the "
+                    "manufacturer" % room, room)
+            else:
+                add("Ridge", "pass", what + ", the trays turned up 15 mm. The ridge clips, the insect mesh and laps between "
+                    "lengths of cap are not drawn", r["length"])
     # Each corner end carries its own detail, so count the ends per detail.
     per = {}
     for c in (i.get("corner") or {} for i in infos):

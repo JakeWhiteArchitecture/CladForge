@@ -126,7 +126,7 @@ def test_seams_carry_over_the_ridge(offset):
 
     def along(name):
         e = next(e for e in params["elevations"] if e["name"] == name)
-        lines = {round(m["seam_line"], 1) for m in out["geometry"] if m["elevation"] == name and m["ifc_type"] == "seam"}
+        lines = {round(m["seam_line"], 1) for m in out["geometry"] if m["elevation"] == name and m.get("seam_part")}
         return sorted(round(sum((frame_to_world(e["frame"], u, 0)[i] - ORIGIN[i]) * U[i] for i in range(3)), 1) for u in lines)
     assert along("Roof A") == along("Roof B") and len(along("Roof A")) > 10
 
@@ -138,7 +138,7 @@ def test_a_shorter_second_slope_is_set_out_from_the_first_slopes_line():
     out = generate_preview(params)
 
     def along(e):
-        lines = {round(m["seam_line"], 1) for m in out["geometry"] if m["elevation"] == e["name"] and m["ifc_type"] == "seam"}
+        lines = {round(m["seam_line"], 1) for m in out["geometry"] if m["elevation"] == e["name"] and m.get("seam_part")}
         return {round(sum((frame_to_world(e["frame"], u, 0)[i] - ORIGIN[i]) * U[i] for i in range(3)), 1) for u in lines}
     assert along(b) and along(b) <= along(a)
 
@@ -147,7 +147,7 @@ def test_a_shorter_second_slope_is_set_out_from_the_first_slopes_line():
 
 @pytest.mark.parametrize("kw", [SEAM, dict(cladding_type="panel", sheathing=True, insulation=True),
                                 dict(cladding_type="plank", plank_orient="horizontal")])
-def test_every_layer_is_cut_on_the_bisecting_plane_and_leaves_the_vent(kw):
+def test_the_cladding_stops_the_vent_slot_short_and_the_structure_meets(kw):
     _link, _params, out = _roof(**kw)
     kinds = set()
     for m in out["geometry"]:
@@ -160,18 +160,45 @@ def test_every_layer_is_cut_on_the_bisecting_plane_and_leaves_the_vent(kw):
         else:
             assert near >= RIDGE_GAP / 2.0 - 0.05, (m["name"], near)      # nothing in the vent slot
     assert {"batten"} <= kinds and (kinds & {"deck", "panel", "plank"})
-    # what reaches the top is cut plumb: its near and far faces end the same distance off the plane
-    for kind in ("deck", "batten") if kw is SEAM else ("batten",):
-        for m in [m for m in out["geometry"] if m["ifc_type"] == kind and max(q[1] for q in m["profile"]) > 2950.0]:
-            ends = [_off_ridge(m, (d,))[0] for d in (m["depth"], m["depth"] + m["thickness"])]
-            assert abs(ends[0] - ends[1]) < 0.05 and abs(ends[0] - RIDGE_GAP / 2.0) < 0.05, m["name"]
+    # the cladding that reaches the top is cut on the plane: both its faces end 15 mm off it
+    clad = [m for m in out["geometry"] if m["ifc_type"] in ("plank", "panel") and max(q[1] for q in m["profile"]) > 2950.0]
+    assert clad
+    for m in clad:
+        ends = [_off_ridge(m, (d,))[0] for d in (m["depth"], m["depth"] + m["thickness"])]
+        assert all(abs(e - RIDGE_GAP / 2.0) < 0.05 for e in ends), m["name"]
 
 
-def test_the_decks_stand_the_vent_gap_apart():
+def test_the_trays_stand_30_apart_turned_up_15_and_oversail_a_square_cut_deck():
     _link, _params, out = _roof(**SEAM)
+    trays = [m for m in out["geometry"] if m["ifc_type"] == "plank"]
+    assert all(abs(_off_ridge(m)[0] - RIDGE_GAP / 2.0) < 0.05 for m in trays)       # 15 each side: 30 between
+    ups = [m for m in out["geometry"] if m.get("ridge_part")]
+    assert len(ups) == len(trays) and all(m["thickness"] == 15.0 and m["ifc_type"] == "seam" for m in ups)
+    assert all(abs(_off_ridge(m)[0] - RIDGE_GAP / 2.0) < 0.6 for m in ups)          # at the tray's end
     decks = [m for m in out["geometry"] if m["ifc_type"] == "deck"]
     assert len(decks) == 2
-    assert all(abs(_off_ridge(m)[0] - RIDGE_GAP / 2.0) < 0.05 for m in decks)       # 15 each side: 30 between
+    tray = trays[0]
+    for deck in decks:
+        assert not any(sh[3] for sh in deck.get("vshift", [[]])[0])                 # square: no slope with depth
+        top = max(q[1] for q in deck["profile"])
+        assert 10.0 <= max(q[1] for q in tray["profile"]) - top < 14.0              # the pan oversails it
+        assert abs(_off_ridge(deck)[0] - RIDGE_GAP / 2.0) < 0.05                    # its back corner as near as the trays
+    battens = [m for m in out["geometry"] if m["ifc_type"] == "batten"]
+    assert all(abs(_off_ridge(m)[0] - RIDGE_GAP / 2.0) < 0.05 for m in battens)
+    assert not any(sh[3] for m in battens for sh in (m.get("vshift") or [[]])[0])
+
+
+def test_the_cutting_list_has_the_trays_as_long_as_they_are():
+    """The end is moved in the tray's own outline, so its length is the real one: the
+    face's 3000 less the splash-free base offset, plus what the ridge adds."""
+    _link, _params, out = _roof(**SEAM)
+    _l2, _p2, plain = _roof(elev={"clip_v_hi": 2400.0}, **SEAM)
+    tray = next(m for m in out["geometry"] if m["ifc_type"] == "plank")
+    top = max(q[1] for q in tray["profile"])
+    k = math.tan(PITCH)
+    want = 3000.0 - 15.0 * math.sqrt(1 + k * k) + k * (tray["depth"] + tray["thickness"] / 2.0)
+    assert abs(top - want) < 0.05 and top > 3000.0
+    assert max(q[1] for m in plain["geometry"] if m["ifc_type"] == "plank" for q in m["profile"]) <= 2400.0
 
 
 def test_a_top_level_picked_below_the_ridge_leaves_the_slopes_as_they_were():
@@ -179,6 +206,7 @@ def test_a_top_level_picked_below_the_ridge_leaves_the_slopes_as_they_were():
     assert not [m for m in out["geometry"] if m["ifc_type"] in ("ridge_cap", "ridge_filler")]
     assert not any(sh[2] or sh[3] for m in out["geometry"] if m["ifc_type"] in ("deck", "batten", "plank")
                    for ring in (m.get("vshift") or []) for sh in ring)
+    assert not [m for m in out["geometry"] if m.get("ridge_part")]
     assert all("ridge" not in i for i in out["info"])
 
 
@@ -205,7 +233,7 @@ def test_one_cap_over_the_ridge_resting_on_the_seams():
     a = next(e for e in params["elevations"] if e["name"] == "Roof A")
     for m in out["geometry"]:
         if m["elevation"] == "Roof A" and m["ifc_type"] in ("seam", "plank", "deck", "ridge_filler"):
-            assert m["depth"] + m["thickness"] <= rest + 0.01, m["name"]
+            assert m["depth"] + m["thickness"] <= rest + 0.01, m["name"]            # the fillers touch it
     assert a["ridge"]["master"] and out["info"][0]["ridge"]["master"] and not out["info"][1]["ridge"]["master"]
 
 
@@ -213,7 +241,7 @@ def test_fillers_sit_between_the_seams_under_the_cap_on_both_slopes():
     _link, _params, out = _roof(**SEAM)
     for name in ("Roof A", "Roof B"):
         fillers = [m for m in out["geometry"] if m["ifc_type"] == "ridge_filler" and m["elevation"] == name]
-        lines = sorted({round(m["seam_line"], 1) for m in out["geometry"] if m["elevation"] == name and m["ifc_type"] == "seam"})
+        lines = sorted({round(m["seam_line"], 1) for m in out["geometry"] if m["elevation"] == name and m.get("seam_part")})
         stops = [0.0] + lines + [8000.0]
         assert len(fillers) == len([1 for a, b in zip(stops, stops[1:]) if b - a > 60.0]) >= len(lines) - 1
         strip = next(i["ridge_strip"] for i in out["info"] if i["elevation"] == name)
@@ -222,7 +250,9 @@ def test_fillers_sit_between_the_seams_under_the_cap_on_both_slopes():
             us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
             assert not any(min(us) - 5.0 < line < max(us) + 5.0 for line in lines), m["name"]
             assert (round(min(vs) - edge, 1), round(max(vs) - min(vs), 1)) == (90.0, 50.0)   # 80 + 10 in, 50 wide
-            assert m["thickness"] == 25.0                                         # as high as the seams
+            assert m["thickness"] == 27.0                                         # from the tray up to the cap
+            ups = [u for u in out["geometry"] if u.get("ridge_part") and u["elevation"] == name]
+            assert min(q[1] for u in ups for q in u["profile"]) - max(vs) >= 10.0  # 10 clear of the turned-up ends
 
 
 def test_boards_and_panels_get_the_cap_but_no_fillers_and_a_warning():
@@ -235,6 +265,7 @@ def test_boards_and_panels_get_the_cap_but_no_fillers_and_a_warning():
     _link, params, out = _roof(**SEAM)
     (row,) = [c for c in check_rules(params, out["info"]) if c["name"].endswith("Ridge")]
     assert row["status"] == "pass" and "8.00 m" in row["message"] and "Roof A and Roof B" in row["message"]
+    assert out["info"][0]["ridge"]["clip_room"] == 80.0
 
 
 def test_a_cap_over_unequal_pitches_lies_on_both():

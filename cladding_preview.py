@@ -111,7 +111,7 @@ def _preview_one(params):
     # holes left by trimming are mitred as well as the ends that land on a jamb.
     meshes = mitre_to_linings(meshes, p, infos)
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
-    meshes = ridge_ends(meshes, p)       # two slopes meeting at a ridge: cut on its bisecting plane
+    meshes = ridge_ends(meshes, p, infos)    # two slopes meeting at a ridge: cut to it, the vent slot left
     meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)

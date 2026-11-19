@@ -5,21 +5,30 @@ app): the partner's name, the ridge line in this face's own v, the stretch of it
 share in u, and k = tan(half the angle between the two normals), the slope of the plane
 that bisects the ridge. One of the two is the master and carries the cap.
 
-What is modelled, after a ventilated standing seam ridge:
+What is modelled, after VMZINC's standard detail "Ventilated ridge/hip G3"
+(VMZ-SN-MA-NO-G3-01):
 
-  * Every layer runs up to the bisecting plane and is cut on it (a plumb cut on a roof
-    with two equal pitches), so the two slopes' buildups meet above the ridge line rather
-    than leaving the open wedge two square ends would. The chain's top edge offset does
-    not apply at a ridge. Sheathing and insulation meet;
-    battens, deck and cladding stop RIDGE_GAP / 2 short of the plane, measured square to
-    it, which leaves the vent slot between the two decks.
-  * The ridge cap: one folded sheet over both slopes, RIDGE_LEG down each from its apex,
-    resting on the standing seams (or the cladding face), each edge hemmed back under.
-  * Under the cap, between the seams of trays that run up the slope, a vented filler strip
-    on each slope.
+  * The cladding (trays, boards, panels) runs up to the plane that bisects the ridge and
+    stops RIDGE_GAP / 2 short of it, square to the plane: 30 mm clear between the two
+    slopes' trays, the vent slot. A standing seam tray is turned up RIDGE_UPSTAND there.
+  * The deck and the battens under it are cut square, at least RIDGE_OVERSAIL behind the
+    tray's end so the pan oversails the deck, and no nearer the plane than the cladding. Sheathing and insulation, the structure's side of
+    the buildup, meet on the bisecting plane.
+  * The ridge cap: one folded sheet over both slopes, RIDGE_LEG (the detail's maximum)
+    down each from its apex, resting on the standing seams (or the cladding face), each
+    edge hemmed back under.
+  * Under the cap, between the seams of trays that run up the slope, the decompression
+    strip on each slope: FILLER_W up the slope, FILLER_EDGE in from the cap's edge (80 mm
+    for the ridge clip and 10 clear), and at least FILLER_GAP short of the trays'
+    turned-up ends. On a steep roof that last rule moves it down the slope and the room
+    left for the clip is reported.
 
-Not modelled: the cap's clips and continuous cleat, the trays' turned-up ends, laps
-between lengths of cap."""
+The chain's top edge offset does not apply at a ridge. Lengths are real: each end is moved
+in the part's own outline, so the cutting list has the tray as long as it is; only the
+slope of a plumb cut is carried as a shift with depth ("vshift").
+
+Not modelled: the ridge clips (fixed and moving parts), the insect mesh over the slot,
+laps between lengths of cap, the lean of the trays' turned-up ends."""
 
 import math
 
@@ -29,16 +38,20 @@ from shapely.geometry.polygon import orient
 from cladding_constants import _prism, _rect, frame_to_world, frame_v
 from cladding_primitives import clip_bounds_v
 
-RIDGE_GAP = 30.0      # mm – clear between the two slopes' decks, square to the bisecting plane
-RIDGE_LEG = 185.0     # mm – the cap, down each slope from its apex
-RIDGE_HEM = 15.0      # mm – the hem turned back under each edge of the cap
+RIDGE_GAP = 30.0      # mm – clear between the two slopes' trays, square to the bisecting plane
+RIDGE_UPSTAND = 15.0  # mm – a tray's end turned up at the ridge
+RIDGE_OVERSAIL = 10.0  # mm – the deck (and the battens under it) stop this far behind the tray's end
+RIDGE_LEG = 185.0     # mm – the cap, down each slope from its apex (the detail's maximum)
+RIDGE_HEM = 15.0      # mm – the hem turned back under each edge of the cap (scaled, not dimensioned)
 RIDGE_REST = 2.0      # mm – the cap's underside above what it rests on
-FILLER_W = 50.0       # mm – the vented filler under the cap, measured up the slope
+FILLER_W = 50.0       # mm – the decompression strip under the cap, measured up the slope
 FILLER_EDGE = 90.0    # mm – its lower edge, up from the cap's edge (80 for the clip, 10 clear)
+FILLER_GAP = 10.0     # mm – and its upper edge at least this far short of the trays' turned-up ends
 FILLER_CLEAR = 12.0   # mm – a filler stops this far from a seam's line: the seam's own width
 RIDGE_TOL = 30.0      # mm – an end this close under the top of the cladding is an end at the ridge
 SHORT = 200.0         # mm – a batten no longer than this up the slope moves whole rather than stretch
-MEET = ("sheathing", "insulation")                               # these meet on the ridge; the rest leave the vent
+MEET = ("sheathing", "insulation")                               # these meet on the ridge
+CLAD = ("plank", "panel", "seam")                                # these are cut on the plane, the vent slot short of it
 WHOLE = ("batten", "counter_batten", "cross_batten", "gasket", "closer")   # short ones of these move whole
 OWN = ("ridge_cap", "ridge_filler")
 
@@ -65,31 +78,74 @@ def _same_frame(a, b):
     return all(abs(x - y) < 1e-6 for key in ("origin", "n") for x, y in zip(a[key], b[key]))
 
 
-def ridge_ends(meshes, p):
-    """Run every part's top end up to the ridge's bisecting plane (module docstring), as a
-    shift per ring vertex ("vshift": v += c + d·s, s the depth), added to any the part has."""
+def _board(p):
+    return float(p["panel_t"] if p.get("cladding_type") == "panel" else p["plank_t"])
+
+
+def _up_slope(p):
+    """Standing seam trays running with the fall: what the detail is drawn for."""
+    return bool(p.get("seam")) and p.get("plank_orient") == "vertical"
+
+
+def _slot(r):
+    """Where the cladding stops, as v at depth 0: it stops at _slot + k·s at depth s."""
+    return r["v"] - RIDGE_GAP / 2.0 * math.sqrt(1.0 + r["k"] ** 2)
+
+
+def ridge_ends(meshes, p, infos):
+    """Bring every part's top end to the ridge (module docstring). The end is moved in the
+    part's own outline, to where it is at the part's mid-depth; a plumb cut's slope is added
+    as a shift per ring vertex ("vshift": v += c + d·s, s the depth) to any the part has.
+    Returns the meshes with the trays' turned-up ends added."""
     faces = {e.get("name"): (ridge_of(e), e["frame"]) for e in p.get("elevations", [])}
+    face_by = {i["elevation"]: float(i.get("total_depth") or 0.0) for i in infos}
+    board, extra = _board(p), []
     for m in meshes:
         r, frame = faces.get(m.get("elevation")) or (None, None)
-        if not r or m.get("ifc_type") in OWN or not _same_frame(m["frame"], frame):
+        kind = m.get("ifc_type")
+        if not r or kind in OWN or m.get("ridge_part") or not _same_frame(m["frame"], frame):
             continue
-        hold = 0.0 if m.get("ifc_type") in MEET else RIDGE_GAP / 2.0 * math.sqrt(1.0 + r["k"] ** 2)
         rings = [m["profile"]] + list(m.get("holes") or [])
         at = [[q[1] >= r["top"] - RIDGE_TOL and r["u0"] - 1.0 <= q[0] <= r["u1"] + 1.0 for q in ring] for ring in rings]
         if not any(at[0]):
             continue
-        # Each end is brought to the ridge line from wherever it stopped (the top edge's own
-        # offset no longer applies: the vent slot is what is left open here), then held back.
+        face = face_by.get(m.get("elevation"), 0.0)
+        if kind in MEET:
+            end, shear = r["v"], r["k"]
+        elif kind in CLAD:
+            end, shear = _slot(r), r["k"]
+        else:
+            # The deck, battens, closers: cut square, behind the cladding's end, and with the
+            # corner nearest the ridge (the back one) no nearer than the cladding comes.
+            end, shear = _slot(r) + min(r["k"] * (face - board) - RIDGE_OVERSAIL, r["k"] * float(m["depth"])), 0.0
+        mid = float(m["depth"]) + float(m["thickness"]) / 2.0
         vs = [q[1] for q in rings[0]]
-        whole = m.get("ifc_type") in WHOLE and max(vs) - min(vs) <= SHORT
+        whole = kind in WHOLE and max(vs) - min(vs) <= SHORT
+        move = end + shear * mid - max(vs)      # a short batten goes with its top
         old = m.get("vshift") or []
-        out = []
+        shifts = []
         for k, ring in enumerate(rings):
             was = old[k] if k < len(old) and old[k] else [[0.0] * 4] * len(ring)
-            out.append([[sh[0], sh[1], sh[2] + (r["v"] - (max(vs) if whole else q[1]) - hold), sh[3] + r["k"]]
-                        if (on or whole) else list(sh) for q, sh, on in zip(ring, was, at[k])])
-        m["vshift"] = out
-    return meshes
+            row = []
+            for q, sh, on in zip(ring, was, at[k]):
+                if on or whole:
+                    q[1] = round(q[1] + move if whole else end + shear * mid, 3)
+                    row.append([sh[0], sh[1], sh[2] - shear * mid, sh[3] + shear])
+                else:
+                    row.append(list(sh))
+            shifts.append(row)
+        if shear or old:
+            m["vshift"] = shifts
+        if kind == "plank" and _up_slope(p):    # a tray: its end turned up, between its seams
+            us = [q[0] for q, on in zip(rings[0], at[0]) if on]
+            top = _slot(r) + r["k"] * (float(m["depth"]) + float(m["thickness"]))
+            t = float(m["thickness"])
+            if max(us) - min(us) > 20.0:
+                up = _prism(_rect(min(us) + 3.0, top - t, max(us) - 3.0, top), float(m["depth"]) + t, RIDGE_UPSTAND,
+                            m["frame"], "seam", "%s Ridge Upstand" % m.get("name", "Tray"), m.get("elevation"))
+                up.update(opacity=1.0, ridge_part=True)
+                extra.append(up)
+    return meshes + extra
 
 
 def _section(frame, r):
@@ -136,7 +192,7 @@ def ridge_parts(p, meshes, infos):
         if not ro:
             continue
         name, frame = elev.get("name"), elev["frame"]
-        up_slope = p.get("seam") and p.get("plank_orient") == "vertical"      # trays and their seams run with the fall
+        up_slope = _up_slope(p)                                                # trays and their seams run with the fall
         rest = [float(info_by.get(e.get("name"), {}).get("total_depth") or 0.0)
                 + (float(p["seam_h"]) if up_slope else 0.0) + RIDGE_REST for e in (elev, other)]
         t = float(p["seam_t"]) if p.get("seam") else 0.7
@@ -161,18 +217,25 @@ def ridge_parts(p, meshes, infos):
         out.append(cap)
         for e, rr, apex in ((elev, r, apex_a), (other, ro, apex_b)):
             edge = rr["v"] + apex - RIDGE_LEG                     # the cap's edge, in this face's v
+            face = float(info_by.get(e.get("name"), {}).get("total_depth") or 0.0)
+            # The strip sits FILLER_EDGE in from the cap's edge unless that brings it within
+            # FILLER_GAP of the trays' turned-up ends: then it moves down, into the clip's room.
+            upstand = _slot(rr) + rr["k"] * face
+            foot = min(edge + FILLER_EDGE, upstand - FILLER_GAP - FILLER_W)
             info = info_by.get(e.get("name"))
             if info is not None:
                 info["ridge"] = dict(cap["ridge_info"], master=e is elev)
+                if up_slope:
+                    info["ridge"]["clip_room"] = round(foot - edge - 10.0, 1)      # 80 wanted
                 info["ridge_strip"] = _rect(rr["u0"], edge, rr["u1"], max(edge + 1.0, min(float(e["height"]), rr["v"])))
             if up_slope:
-                out += _fillers(p, e, rr, edge, meshes, float(info_by.get(e.get("name"), {}).get("total_depth") or 0.0))
+                out += _fillers(p, e, rr, foot, meshes, face)
     return out
 
 
-def _fillers(p, elev, r, edge, meshes, face):
-    """The vented filler strips on one slope: FILLER_W up the slope, FILLER_EDGE in from
-    the cap's edge, as high as the seams, one between each pair of seams."""
+def _fillers(p, elev, r, foot, meshes, face):
+    """The decompression strips on one slope: FILLER_W up the slope from *foot*, from the
+    tray to the cap, one between each pair of seams."""
     name = elev.get("name")
     lines = sorted({round(float(m["seam_line"]), 1) for m in meshes
                     if m.get("elevation") == name and m.get("ifc_type") == "seam" and m.get("seam_v")
@@ -182,6 +245,6 @@ def _fillers(p, elev, r, edge, meshes, face):
     for i, (a, b) in enumerate(zip(stops, stops[1:])):
         a, b = a + FILLER_CLEAR, b - FILLER_CLEAR
         if b - a > 20.0:
-            out.append(_prism(_rect(a, edge + FILLER_EDGE, b, edge + FILLER_EDGE + FILLER_W), face, float(p["seam_h"]),
+            out.append(_prism(_rect(a, foot, b, foot + FILLER_W), face, float(p["seam_h"]) + RIDGE_REST,
                               elev["frame"], "ridge_filler", "%s Ridge Filler %d" % (name, i + 1), name))
     return out
