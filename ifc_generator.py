@@ -140,13 +140,52 @@ def _prism_solid(ifc, mesh):
 
 
 def _body(ifc, mesh):
-    """A mesh's solid, or with "parts" (a custom profile's section, cladding_profiles) one
-    solid per part, all breps: ([solids], representation type)."""
-    parts = mesh.get("parts")
-    if not parts:
-        solid, kind = _prism_solid(ifc, mesh)
-        return [solid], kind
-    return [_corner_brep(ifc, dict(mesh, **part)) for part in parts], "Brep"
+    """A mesh's solid: ([solids], representation type). A plank of a custom profile
+    (cladding_profiles) is one solid too: _section_solid."""
+    if mesh.get("section_ring") and mesh.get("parts"):
+        try:
+            return _section_solid(ifc, mesh)
+        except Exception:   # noqa: BLE001 — a section that will not sweep keeps its slabs
+            return [_corner_brep(ifc, dict(mesh, **part)) for part in mesh["parts"]], "Brep"
+    solid, kind = _prism_solid(ifc, mesh)
+    return [solid], kind
+
+
+def _section_solid(ifc, mesh):
+    """One solid for a plank of a custom profile: its section swept along the plank. A
+    whole plank (its full section, square ends, no hole) is that sweep alone; one cut
+    by an opening, a gable, the base or a mitre is the sweep intersected with the
+    plank's own board (_prism_solid), a single IfcBooleanResult."""
+    frame = mesh["frame"]
+    horizontal = mesh.get("section_axis", "v") == "v"
+    at = float(mesh["section_at"])
+    ring = [(float(w), float(y)) for w, y in mesh["section_ring"]]
+    width = max(w for w, _y in ring)
+    corner = mesh.get("corner") or {}
+    mitred = bool(corner.get("k_l") or corner.get("k_r") or mesh.get("vshift"))
+    pts = corner_ring(mesh["profile"], corner, float(mesh["depth"]))
+    run = [q[0] if horizontal else q[1] for q in pts]
+    across = [q[1] if horizontal else q[0] for q in pts]
+    r0, r1 = min(run), max(run)
+    whole = (len(pts) == 4 and not mesh.get("holes") and not mitred
+             and abs(min(across) - at) < 0.01 and abs(max(across) - (at + width)) < 0.01)
+    if not whole:
+        r0, r1 = r0 - 1.0, r1 + 1.0             # run past the board's ends, which then cut it
+    U, N = frame["u"], frame["n"]
+    V = frame.get("v") or [0.0, 0.0, 1.0]
+    if horizontal:      # sweep along u from r0; the section's w up v, y out along n (u x v = n)
+        loc, axis, xdir = frame_to_world(frame, r0, at, float(mesh["depth"])), U, V
+    else:               # sweep down v from r1, so w along u and y still out along n
+        loc, axis, xdir = frame_to_world(frame, at, r1, float(mesh["depth"])), [-c for c in V], U
+    profile = ifc.createIfcArbitraryClosedProfileDef("AREA", None, _polyline(ifc, ring))
+    placement = ifc.createIfcAxis2Placement3D(ifc.createIfcCartesianPoint(tuple(float(c) for c in loc)),
+                                              ifc.createIfcDirection(tuple(float(c) for c in axis)),
+                                              ifc.createIfcDirection(tuple(float(c) for c in xdir)))
+    sweep = ifc.createIfcExtrudedAreaSolid(profile, placement, ifc.createIfcDirection((0.0, 0.0, 1.0)), r1 - r0)
+    if whole:
+        return [sweep], "SweptSolid"
+    board, _kind = _prism_solid(ifc, mesh)
+    return [ifc.createIfcBooleanResult("INTERSECTION", sweep, board)], "CSG"
 
 
 def _point(ifc, cache, xyz):

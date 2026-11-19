@@ -147,12 +147,28 @@ def test_an_imported_profile_builds(face):
     assert all(len(m["parts"]) == 1 for m in planks) and out["info"][0]["cover"] == pytest.approx(130)
 
 
-def test_ifc_one_element_per_plank_with_its_section(face):
+@pytest.mark.parametrize("orient", ["horizontal", "vertical"])
+def test_ifc_one_solid_per_plank(face, orient):
+    """Each plank is one element with one solid: a whole plank its section swept along
+    it, a cut one that sweep intersected with its board; both the volume of its parts."""
     import ifcopenshell
+    import ifcopenshell.geom
+    import ifcopenshell.util.shape
     from ifc_generator import meshes_to_ifc
-    params, out = _build(face)
+    params, out = _build(face, reveals=True, plank_orient=orient)
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     planks = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "Cladding plank (Cedral Click)"]
-    assert len(planks) == sum(1 for m in out["geometry"] if m["ifc_type"] == "plank")
-    items = planks[0].Representation.Representations[0].Items
-    assert len(items) == 3 and all(i.is_a("IfcFacetedBrep") for i in items)
+    meshes = {m["name"]: m for m in out["geometry"] if m["ifc_type"] == "plank"}
+    assert len(planks) == len(meshes)
+    kinds = {}
+    for e in planks:
+        items = e.Representation.Representations[0].Items
+        assert len(items) == 1
+        kinds.setdefault(items[0].is_a(), []).append(e)
+    assert set(kinds) == {"IfcExtrudedAreaSolid", "IfcBooleanResult"}
+    settings = ifcopenshell.geom.settings()
+    for kind in kinds:
+        for e in kinds[kind][:3]:
+            shape = ifcopenshell.geom.create_shape(settings, e)
+            vol = ifcopenshell.util.shape.get_volume(shape.geometry) * 1e9        # m³ to mm³
+            assert vol == pytest.approx(sum(_volume(q) for q in meshes[e.Name]["parts"]), rel=2e-3), (kind, e.Name)

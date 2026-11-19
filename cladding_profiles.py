@@ -11,7 +11,8 @@ The engine keeps every plank a plain board (its outline on the wall, the full th
 so set-out, trimming, openings, corners, cutting lists and checks all work as for boards.
 For the finished build each plank also carries "parts": its section as stacked slabs of
 the board, each the plank's outline cut to the strip of width the section fills at that
-depth, so the viewer and the IFC draw the real profile. A slab whose side slopes through
+depth, which the viewer draws; the IFC sweeps the section itself, one solid a plank
+(ifc_generator._section_solid). A slab whose side slopes through
 the depth carries the slope as a vertex shift ("vshift": v += c + d·s), like a board
 mitred to a lining. While a slider is dragged the preview skips this and shows the plain
 board.
@@ -198,6 +199,7 @@ def profile_planks(meshes, p):
             parts = plank_parts(m, sec)
             if parts:
                 m["parts"] = parts
+                m["section_ring"] = [list(q) for q in sec["ring"]]   # the IFC sweeps it: one solid
     return meshes
 
 
