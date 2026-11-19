@@ -446,7 +446,10 @@ function meshTriangles(mesh) {
     return faceTriangles(mesh, Array.from({ length: count }, (_, i) => i));
 }
 
+function triCount(mesh) { const g = mesh.geometry; return (g.index ? g.index.count : g.attributes.position.count) / 3; }
+
 const CONTEXT_TRI_BUDGET = 60000;   // the engine runs in a fixed WASM heap: past this it dies
+const POSTISH = /^IFC(COLUMN|MEMBER|BUILDINGELEMENTPROXY|BUILDINGELEMENTPART|BEAM|PLATE|ELEMENTASSEMBLY)/i;   // fabric_extract.POST_TYPES and POST_LIKE_TYPES
 
 function contextFor(pickedMeshes, tris, margin, outward) {
     // Every other element that could touch the picked face: its bounding box overlaps the
@@ -467,12 +470,15 @@ function contextFor(pickedMeshes, tris, margin, outward) {
             const s = n.x * x + n.y * y + n.z * z - d; lo = Math.min(lo, s); hi = Math.max(hi, s);
         }
         if (hi < -margin || lo > margin) continue;
-        near.push({ meta, reach: Math.min(Math.abs(lo), Math.abs(hi)) });   // how close it comes to the face
+        near.push({ meta, reach: Math.min(Math.abs(lo), Math.abs(hi)),      // how close it comes to the face
+                    post: POSTISH.test(meta.type || '') && triCount(meta.mesh) <= 500 ? 0 : 1 });
     }
     // A big model can offer far more geometry than the engine's heap will hold, and
     // overrunning it kills the runtime outright rather than raising. Send the elements
     // that come closest to the face and report the rest rather than risking that.
-    near.sort((a, b) => a.reach - b.reach);
+    // What may be a client batten goes first: a dozen triangles each, and the set-out hangs
+    // on them, so a wall crowded with heavy windows never squeezes them out.
+    near.sort((a, b) => a.post - b.post || a.reach - b.reach);
     const elements = [];
     let used = 0, dropped = 0;
     for (const { meta } of near) {

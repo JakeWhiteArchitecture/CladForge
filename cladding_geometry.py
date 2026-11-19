@@ -506,11 +506,13 @@ def post_key(u):
     return str(int(math.floor(float(u) + 0.5)))      # half up, as the 2D view's Math.round
 
 
-def post_state(elev, u):
+def post_state(elev, u, default="on"):
     """A model column's use, as toggled in the 2D view: "on" (a batten a joint may land on,
-    the default), "fix" (a batten for fixing only: no joint on it), "off" (not used)."""
-    st = (elev.get("post_states") or {}).get(post_key(u), "on")
-    return st if st in POST_STATES else "on"
+    the default), "fix" (a batten for fixing only: no joint on it), "off" (not used: the
+    default for something batten-shaped that is not a column or member, until turned on)."""
+    default = default if default in POST_STATES else "on"
+    st = (elev.get("post_states") or {}).get(post_key(u), default)
+    return st if st in POST_STATES else default
 
 
 def _posts(p, elev, info):
@@ -522,7 +524,8 @@ def _posts(p, elev, info):
     Every column and its state go to info["posts"] for the 2D view."""
     cols = sorted(elev.get("posts") or [], key=lambda q: q["u"]) if p.get("battens_from_model", True) else []
     info["posts"] = [{"u": round(float(q["u"]), 1), "v0": q.get("v0"), "v1": q.get("v1"), "w": q.get("w"),
-                      "state": post_state(elev, q["u"])} for q in cols]
+                      "state": post_state(elev, q["u"], q.get("default", "on")), "default": q.get("default", "on"),
+                      "name": q.get("name", "")} for q in cols]
     us = [q["u"] for q in info["posts"] if q["state"] != "off"]
     info["model_posts"] = len(us)
     return us or None
