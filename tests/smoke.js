@@ -1232,16 +1232,21 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     // and Profile as the Marley-type corner profile wherever a chain turns a right angle,
     // and on the jambs and head of A's first window: offered there with planks too.
     const planks = await page.evaluate(async () => {
-        selectToggle('cladding-type', 'plank'); onTypeChange();
-        selectToggle('corner-type', 'profile');
-        const e0 = state.elevations[0], key = openingsOf(e0)[0].key;
+        // A's chain has the windows: work on it (each chain keeps its own settings), planks
+        const e0 = state.elevations.find(m => openingsOf(m).length) || state.elevations[0], key = openingsOf(e0)[0].key;
+        setActive(state.elevations.indexOf(e0));
         setOpeningDetail(e0, key, 'jamb', 'profile', 'face', 'one');
         setOpeningDetail(e0, key, 'head', 'profile', 'face', 'one');
+        selectToggle('cladding-type', 'plank'); onTypeChange();
+        selectToggle('corner-type', 'profile');
         const offered = !/value="profile"[^>]*disabled/.test(
             cornerOptions('', !(toggleValue('cladding-type') !== 'panel' && toggleValue('plank-profile') === 'seam'), false));
         document.getElementById('plank_min').value = 1200;
         document.getElementById('plank_splice').value = 30;
         await updatePreview();
+        // the chain's plan follows the rebuild: wait for the planks' one
+        for (let i = 0; i < 60 && !(window._lastPlan && window._lastPlan.kind === 'plank'); i++)
+            await new Promise(r => setTimeout(r, 500));
         await new Promise(r => setTimeout(r, 1500));
         const geo = window._lastPreview.geometry, plan = window._lastPlan;
         const short = geo.filter(m => m.ifc_type === 'plank').map(m => {
