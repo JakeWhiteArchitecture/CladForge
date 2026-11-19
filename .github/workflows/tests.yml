@@ -1,0 +1,62 @@
+# Both suites on every pull request and on main, so a PR shows a tick or a cross without
+# anyone running them by hand (CLAUDE.md, Testing).
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same branch replaces the run in progress.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: Engine and exports (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  browser:
+    name: Browser (smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # the version the test is run with by hand; Chromium to match
+      - run: npm install --no-save playwright@1.56.1
+      - run: npx playwright install --with-deps chromium
+      - name: Start the app
+        run: |
+          python app.py > app.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/ > /dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8080/ > /dev/null
+      # the runtimes (Pyodide, Three.js, web-ifc, the IfcOpenShell wheel) come from their CDNs
+      - name: Smoke test
+        run: node tests/smoke.js
+      - name: Keep the log and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke
+          path: |
+            app.log
+            tests/smoke_*.png
+          if-no-files-found: ignore
