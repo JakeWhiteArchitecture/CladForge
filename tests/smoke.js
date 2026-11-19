@@ -1119,6 +1119,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('add states:', JSON.stringify({ before: [beforeAdd.chains, beforeAdd.elevations], same: addedSame.status,
                                                 afterDelete: afterDelete.elevations, back: addedBack }));
     if (addedSame.elevations !== beforeAdd.elevations || addedSame.chains !== beforeAdd.chains || !/already in the job/.test(addedSame.status)
+        || /renamed/.test(addedSame.status)        // nothing was added, so nothing was renamed
         || afterDelete.elevations !== beforeAdd.elevations - 1 || addedBack.elevations !== beforeAdd.elevations
         || !addedBack.unique || !addedBack.chainNames || !addedBack.resultNames || !/drawing\.xml: not loaded/.test(addedBack.status))
         throw new Error('adding states did not merge as it should: ' + JSON.stringify({ beforeAdd, addedSame, afterDelete, addedBack }));

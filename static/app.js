@@ -1236,12 +1236,7 @@ function restoreState(st, add) {
     const freeElevation = () => { let k = 0; while (state.elevations.some(m => m.name === label(k))) k++; return label(k); };
     const byName = {};
     for (const c of st.chains || []) {
-        let chainName = c.name;
-        if (add && state.chains.some(x => x.name === chainName)) {
-            do { chainName = 'Chain ' + (++state.seq); } while (state.chains.some(x => x.name === chainName));
-            merged.renamed.push(`${c.name} → ${chainName}`);
-        }
-        const chain = { name: chainName, members: [], length: 0, built: !!c.built,
+        const chain = { name: c.name, members: [], length: 0, built: !!c.built,
                         topZ: c.topZ === null || c.topZ === undefined ? null : c.topZ + d[2],
                         bottomZ: c.bottomZ === null || c.bottomZ === undefined ? null : c.bottomZ + d[2],
                         edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}),
@@ -1274,7 +1269,14 @@ function restoreState(st, add) {
             byName[m.name] = e;                   // by its name in the file: what datumFrom says
         }
         chain.datumFrom = byName[c.datumFrom] && byName[c.datumFrom].chain === chain ? byName[c.datumFrom] : null;
-        if (chain.members.length) { relayoutChain(chain); state.chains.push(chain); if (add) merged.chains++; }
+        if (!chain.members.length) continue;      // every face of it left out: no chain, and no name used up
+        if (add && state.chains.some(x => x.name === chain.name)) {
+            do { chain.name = 'Chain ' + (++state.seq); } while (state.chains.some(x => x.name === chain.name));
+            merged.renamed.push(`${c.name} → ${chain.name}`);
+        }
+        relayoutChain(chain);
+        state.chains.push(chain);
+        if (add) merged.chains++;
     }
     state.seq = Math.max(add ? state.seq : 0, st.seq || 0, state.chains.length);
     // A state saved before chains had their own settings: each chain takes the job's.
