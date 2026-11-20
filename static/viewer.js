@@ -121,9 +121,16 @@ function clearGroup(group) {
 }
 
 // ─── WEB-IFC IMPORT ───
-async function initWebIfc() {
-    try { ifcApi = new WebIFC.IfcAPI(); await ifcApi.Init(); }
-    catch (err) { console.error('web-ifc init failed', err); ifcApi = null; }
+// ifcApi is set only once it has started: Init fetches its WASM, and an API handed out before
+// that finishes fails on its first call. webIfcReady settles when it has started, or failed to.
+let webIfcReady = null;
+const WEB_IFC_WAIT_MS = 30000;      // how long a file dropped while it is starting waits for it
+function initWebIfc() {
+    webIfcReady = (async () => {
+        try { const api = new WebIFC.IfcAPI(); await api.Init(); ifcApi = api; }
+        catch (err) { console.error('web-ifc init failed', err); ifcApi = null; }
+    })();
+    return webIfcReady;
 }
 
 let _typeNames = null;
@@ -183,6 +190,13 @@ function readLengthUnitScale(modelID) {
 // the server reader uses IfcOpenShell and builds geometry web-ifc cannot.
 
 async function readWithWebIfc(file, onStatus) {
+    // A file dropped while the browser importer is still starting waits for it, rather than
+    // going to the server: the file stays in the browser, and the two readers do not give
+    // quite the same model.
+    if (!ifcApi && webIfcReady) {
+        if (onStatus) onStatus('Starting the browser importer…');
+        await Promise.race([webIfcReady, new Promise(r => setTimeout(r, WEB_IFC_WAIT_MS))]);
+    }
     if (!ifcApi) throw new Error('web-ifc is still loading');
     onStatus('Parsing IFC in the browser…');
     const data = new Uint8Array(await file.arrayBuffer());
@@ -303,8 +317,25 @@ function buildScene(raw, context, warnings) {
         allMeshes.push(th);
         meshMeta.push({ mesh: th, expressID: r.expressID, type: r.type, name: r.name, storey: r.storey });
     }
+    placeGrid();
     fitCameraTo(modelGroup);
     return new Set(meshMeta.filter(m => m.storey).map(m => m.storey.name)).size;
+}
+
+// The floor grid lies under everything drawn: GRID_CLEAR below the lowest point of the host
+// model and of the cladding, whichever is lower (an eaves apron, a cap's foot or the cladding
+// of a wall's base can hang below the model, and the grid used to cut through them at the
+// model's own lowest point). It is centred under the model, or under the cladding when a
+// saved state is open without its model, on whole grid squares so its lines stay put.
+const GRID_CLEAR = 50, GRID_STEP = 1000;
+function placeGrid() {
+    if (!gridHelper) return;
+    const boxOf = g => (g && g.children.length ? new THREE.Box3().setFromObject(g) : new THREE.Box3());
+    const model = boxOf(modelGroup), clad = boxOf(cladGroup);
+    const all = model.clone().union(clad);
+    if (all.isEmpty()) { gridHelper.position.set(0, 0, 0); return; }
+    const c = (model.isEmpty() ? clad : model).getCenter(new THREE.Vector3());
+    gridHelper.position.set(Math.round(c.x / GRID_STEP) * GRID_STEP, all.min.y - GRID_CLEAR, Math.round(c.z / GRID_STEP) * GRID_STEP);
 }
 
 async function loadIFC(file, onStatus, force) {
@@ -572,7 +603,7 @@ function shapeFromRings(profile, holes) {
 const _layerOf = { sheathing: 'sheathing', insulation: 'insulation', counter_batten: 'counter_batten',
                    batten: 'batten', cross_batten: 'batten', panel: 'cladding', plank: 'cladding',
                    reveal: 'cladding', closer: 'closer', corner_profile: 'cladding', corner_trim: 'cladding', gasket: 'batten',
-                   deck: 'sheathing', seam: 'cladding', ridge_cap: 'cladding', ridge_filler: 'closer', verge_strip: 'cladding', valley_gutter: 'cladding' };
+                   deck: 'sheathing', seam: 'cladding', ridge_cap: 'cladding', ridge_filler: 'closer', verge_strip: 'cladding', valley_gutter: 'cladding', eaves_strip: 'cladding' };
 
 function applyCorner(geo, m, tol = 0.6) {
     // Move the vertices on a corner end to u_end -/+ (ext + k x depth): k shears the
@@ -690,6 +721,7 @@ function renderGeometry(meshes) {
         }
     }
     for (const key of Object.keys(byLayer)) byLayer[key].visible = layerVisible[key] !== false;
+    placeGrid();         // the cladding may reach lower than the model does
     filter2D();          // flat, only the elevation being looked at is drawn
 }
 

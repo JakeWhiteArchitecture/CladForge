@@ -231,18 +231,21 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for m in by_elev.get(name, []):
             if m["ifc_type"] == "reveal":
                 continue        # a reveal lining is perpendicular to this view
-            if m["ifc_type"] in ("corner_profile", "corner_trim", "ridge_cap", "verge_strip", "valley_gutter"):
+            if m["ifc_type"] in ("corner_profile", "corner_trim", "ridge_cap", "verge_strip", "valley_gutter", "eaves_strip") \
+                    and not m.get("cap_leg"):
                 continue        # its profile is a section; the elevation shows its strip
-            layer = _LAYER_FOR_TYPE.get(m["ifc_type"], "0")
+            layer = "CORNER_PROFILE" if m.get("cap_leg") else _LAYER_FOR_TYPE.get(m["ifc_type"], "0")   # a cap's leg lies on the face
             for k in range(1 + len(m.get("holes") or [])):
                 dxf.add_ring(_corner_ring(m, k), layer, ox, 0.0)
         for ring in info.get("profile_strips") or []:      # the nose of each corner profile, D wide
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
-        if info.get("ridge_strip"):                        # the leg of the ridge cap over this slope
+        if info.get("ridge_strip") and not (info.get("ridge") or {}).get("legs"):   # the leg of a folded ridge cap over this slope
             dxf.add_ring(info["ridge_strip"], "CORNER_PROFILE", ox, 0.0)
         for ring in info.get("verge_strips") or []:        # each verge strip, from its lap on the deck to its nose
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         for ring in info.get("valley_strips") or []:       # the valley gutter's side on this slope
+            dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
+        for ring in info.get("eaves_strips") or []:        # an eaves apron (a hip cap's legs are drawn as they are)
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         for d in [d for d in dims if d["elevation"] == name]:
             _draw_dim_line(dxf, (d["p1"][0] + ox, d["p1"][1]), (d["p2"][0] + ox, d["p2"][1]),

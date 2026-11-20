@@ -74,6 +74,24 @@ def ridge_of(elev):
     return r
 
 
+JOIN_TOL = 40.0       # mm – a hip's end this close to an end of the ridge runs into it
+
+
+def meets_hip(elev, r):
+    """Does a hip of this face run into an end of its ridge *r*? Then the ridge cap is mitred
+    to the hip caps there, and is drawn as its two legs (cladding_hip.cap_legs)."""
+    for v in (elev or {}).get("valleys") or []:
+        if v.get("kind") != "hip":
+            continue
+        for q in (v.get("p1"), v.get("p2")):
+            try:
+                if abs(float(q[1]) - r["v"]) <= JOIN_TOL and min(abs(float(q[0]) - r["u0"]), abs(float(q[0]) - r["u1"])) <= JOIN_TOL:
+                    return True
+            except (TypeError, ValueError, IndexError):
+                continue
+    return False
+
+
 def _same_frame(a, b):
     return all(abs(x - y) < 1e-6 for key in ("origin", "n") for x, y in zip(a[key], b[key]))
 
@@ -208,13 +226,16 @@ def ridge_parts(p, meshes, infos):
         along = [level[1], -level[0], 0.0]                                    # level × Z
         length = r["u1"] - r["u0"]
         start = r["u0"] if sum(a * b for a, b in zip(along, U)) > 0 else r["u1"]
-        cap = _prism(ring, 0.0, length, {"origin": frame_to_world(frame, start, r["v"], 0.0), "u": level,
-                                         "v": [0.0, 0.0, 1.0], "n": along},
-                     "ridge_cap", "%s Ridge Cap" % name, name)
         angle = round(math.degrees(2.0 * math.atan(r["k"])), 1)
-        cap["ridge_info"] = {"length": round(length, 1), "leg": RIDGE_LEG, "hem": RIDGE_HEM, "thickness": t,
-                             "gap": RIDGE_GAP, "angle": angle, "between": [name, other.get("name")]}
-        out.append(cap)
+        cap_info = {"length": round(length, 1), "leg": RIDGE_LEG, "hem": RIDGE_HEM, "thickness": t,
+                    "gap": RIDGE_GAP, "angle": angle, "between": [name, other.get("name")],
+                    "legs": meets_hip(elev, r) or meets_hip(other, ro)}
+        if not cap_info["legs"]:        # one folded sheet; mitred to hip caps it is two legs, one a slope
+            cap = _prism(ring, 0.0, length, {"origin": frame_to_world(frame, start, r["v"], 0.0), "u": level,
+                                             "v": [0.0, 0.0, 1.0], "n": along},
+                         "ridge_cap", "%s Ridge Cap" % name, name)
+            cap["ridge_info"] = cap_info
+            out.append(cap)
         for e, rr, apex in ((elev, r, apex_a), (other, ro, apex_b)):
             edge = rr["v"] + apex - RIDGE_LEG                     # the cap's edge, in this face's v
             face = float(info_by.get(e.get("name"), {}).get("total_depth") or 0.0)
@@ -224,7 +245,7 @@ def ridge_parts(p, meshes, infos):
             foot = min(edge + FILLER_EDGE, upstand - FILLER_GAP - FILLER_W)
             info = info_by.get(e.get("name"))
             if info is not None:
-                info["ridge"] = dict(cap["ridge_info"], master=e is elev)
+                info["ridge"] = dict(cap_info, master=e is elev)
                 if up_slope:
                     info["ridge"]["clip_room"] = round(foot - edge - 10.0, 1)      # 80 wanted
                 info["ridge_strip"] = _rect(rr["u0"], edge, rr["u1"], max(edge + 1.0, min(float(e["height"]), rr["v"])))

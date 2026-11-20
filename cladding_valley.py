@@ -36,16 +36,18 @@ VALLEY_LAP = 180.0     # mm – the trays over the gutter, "R" (scaled: see the 
 VALLEY_MIN_PITCH = 14.0   # deg – the detail is for slopes steeper than this
 EDGE_TOL = 15.0        # mm – an end this close to the valley line is an end at the valley
 CLAD = ("plank", "panel", "seam")
-OWN = ("valley_gutter", "ridge_cap", "ridge_filler", "verge_strip")
+OWN = ("valley_gutter", "ridge_cap", "ridge_filler", "verge_strip", "eaves_strip")
 _MIN_AREA = 100.0      # mm² – a scrap of cladding smaller than this, left by the cut, is dropped
 
 
-def valleys_of(elev):
-    """The face's valleys, each {"with", "p1", "p2", "k", "master", "other_up", "other_n",
+def valleys_of(elev, kind="valley"):
+    """The face's valleys (or, *kind* "hip", its hips: the same record), each {"with", "p1", "p2", "k", "master", "other_up", "other_n",
     "m": the unit normal to the line, in the face, pointing into it, "length", "back": how
     far the cladding stands back from the line}."""
     out = []
     for v in (elev or {}).get("valleys") or []:
+        if (v.get("kind") or "valley") != kind:
+            continue                                  # a hip is kept in the same list: cladding_hip
         try:
             p1, p2 = [float(c) for c in v["p1"]], [float(c) for c in v["p2"]]
             k = float(v["k"])

@@ -793,17 +793,35 @@ def _along_plane(elev, other, line, base):
     return (min(ts), max(ts)) if ts else None
 
 
+HIP_SLOPE = 0.02          # a hip's line rises at least this much (its direction's z): level, it is a ridge
+
+
 def valley_link(a, b):
     """Do pitched elevations a and b meet at a valley? None if not, else {"kind": "valley",
-    "a": {"p1", "p2": the valley line in a's own (u, v), "inside": a point inside a,
-    "other_up": the direction up b's slope square to the line, "other_n": b's normal},
-    "b": the same for b, "k": tan of half the angle between the normals, "angle",
+    "a": {"kind", "p1", "p2": the valley line in a's own (u, v), "inside": a point inside
+    a, "other_up": the direction into b square to the line (up its slope), "other_n": b's
+    normal}, "b": the same for b, "k": tan of half the angle between the normals, "angle",
     "length"}.
 
     A valley is where two slopes fall towards each other: each face lies in front of the
     other's plane, and each has an edge of its outline along the line the planes meet on,
     level or sloping. The faces have to be modelled meeting on that line: one roof run
     through another has no such edge and is not joined."""
+    return _roof_link(a, b, "valley")
+
+
+def hip_link(a, b):
+    """Do pitched elevations a and b meet at a hip? None if not, else what valley_link
+    gives, its kind "hip".
+
+    A hip is where two slopes fall away from each other on a sloping line: each face lies
+    behind the other's plane, and each has an edge of its outline along the line the planes
+    meet on. (On a level line that is a ridge: ridge_link, which puts the two in one
+    chain.) "other_up" points into the other face: down its slope, away from the hip."""
+    return _roof_link(a, b, "hip")
+
+
+def _roof_link(a, b, kind):
     fa, fb = a["frame"], b["frame"]
     na, nb = tuple(fa["n"]), tuple(fb["n"])
     if na[2] < 1e-6 or nb[2] < 1e-6:
@@ -814,8 +832,11 @@ def valley_link(a, b):
         return None                                   # parallel
     line = tuple(c / size for c in line)
     ca, cb = _at(fa, *_centre(a)), _at(fb, *_centre(b))
-    if _dot(nb, _sub(ca, fb["origin"])) <= 0 or _dot(na, _sub(cb, fa["origin"])) <= 0:
+    front_a, front_b = _dot(nb, _sub(ca, fb["origin"])), _dot(na, _sub(cb, fa["origin"]))
+    if kind == "valley" and (front_a <= 0 or front_b <= 0):
         return None                                   # one lies behind the other: a ridge or a hip
+    if kind == "hip" and (front_a >= 0 or front_b >= 0 or abs(line[2]) < HIP_SLOPE):
+        return None                                   # a valley; or level, a ridge
     # A point on both planes: from a's centre, straight down a's own slope to b's plane.
     down = _cross(na, line)
     step = _dot(nb, down)
@@ -838,15 +859,16 @@ def valley_link(a, b):
         up = _cross(tuple(other["frame"]["n"]), line)                 # in the other face, square to the line
         if _dot(up, _sub(centre, base)) < 0:
             up = tuple(-c for c in up)
-        return {"p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e)],
+        return {"kind": kind, "p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e)],
                 "other_up": [round(c, 9) for c in up], "other_n": [round(c, 9) for c in n_other]}
-    return {"kind": "valley", "a": side(a, cb, b, nb), "b": side(b, ca, a, na),
+    return {"kind": kind, "a": side(a, cb, b, nb), "b": side(b, ca, a, na),
             "k": round(math.tan(beta / 2.0), 4), "angle": round(math.degrees(beta), 1), "length": round(t1 - t0, 1)}
 
 
 def valley_links(a, others):
-    """valley_link(a, each of *others*), in order: None where the two do not meet at one."""
-    return [valley_link(a, b) for b in others]
+    """For each of *others*, in order: how it meets a, at a valley (valley_link) or a hip
+    (hip_link); None where it does neither."""
+    return [valley_link(a, b) or hip_link(a, b) for b in others]
 
 
 def chain_link(a, b):

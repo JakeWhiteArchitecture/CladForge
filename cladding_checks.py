@@ -173,6 +173,37 @@ def check_rules(params, infos=None):
             else:
                 add("Valley", "pass", what + ". That overlap is the detail's R: confirm it against the installation guide. "
                     "The welt strip, the sheet clips and a water flow controller are not drawn", v["length"])
+    # A hip is reported once, by the slope that carries its cap; seams too far apart along it, by each slope.
+    for i in infos:
+        for h in i.get("hips") or []:
+            spacing, limit = h.get("seam_spacing"), h["seam_limit"]
+            wide = spacing is not None and spacing > limit + 0.5
+            apart = "%s: the seams are %.0f mm apart along the hip with %s; the detail allows at most %.0f mm between two " \
+                    "standing seams at a hip. Use the narrower tray, or agree it with the manufacturer" % (
+                        i["elevation"], spacing or 0.0, h["with"], limit)
+            if not h.get("master"):
+                if wide:
+                    add("Hip", "warn", apart, spacing)
+                continue
+            what = "%s and %s meet at a hip %.2f m long: a cap %.0f mm down each slope, %.0f mm clear between the two " \
+                   "slopes' cladding under it" % (i["elevation"], h["with"], h["length"] / 1000.0, h["leg"], h["gap"])
+            if not p["seam"]:
+                add("Hip", "warn", what + ". The cap is a standing seam detail: agree the hip for %s with the supplier"
+                    % ("panels" if p["cladding_type"] == "panel" else "boards"), h["length"])
+                continue
+            add("Hip", "pass", what + (", the trays turned up 15 mm along their raking ends and the seams %.0f mm apart along "
+                                       "it (%.0f at most)" % (spacing, limit) if spacing is not None and not wide else "")
+                + ". The decompression strips and the ridge clips are not drawn", h["length"])
+            if wide:
+                add("Hip", "warn", apart, spacing)
+    # An eaves: its sizes are assumed, no drawing of one having been supplied.
+    for i in infos:
+        eaves = i.get("eaves") or []
+        if eaves:
+            add("Eaves", "pass", "%s: an eaves apron %.2f m long under the trays, which run out %.0f mm beyond the roof's edge "
+                "over it. No eaves drawing was supplied, so its sizes are assumed: agree them against the supplier's eaves "
+                "detail. Switch it off (Edges, Eaves apron) where the slope runs into a wall or a gutter behind a parapet"
+                % (i["elevation"], sum(e["length"] for e in eaves) / 1000.0, eaves[0]["tray"]), len(eaves))
     # A verge's last seam stands 150 to 370 mm in from the tray's edge.
     for i in infos:
         verges = i.get("verges") or []

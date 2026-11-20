@@ -153,28 +153,67 @@ BUILDS = [dict(cladding_type="panel"), dict(cladding_type="plank", plank_orient=
 def _build(deg, kw):
     kw = dict(kw)
     detail = kw.pop("_detail", None)
-    # no verges: this is the wall's buildup turned onto the slope, nothing a roof adds
-    elev = dict(_extract(deg), offset=0, verge="none", **({"opening_details": {WINDOW: detail}} if detail else {}))
+    # no verges or eaves: this is the wall's buildup turned onto the slope, nothing a roof adds
+    elev = dict(_extract(deg), offset=0, verge="none", eaves="none", **({"opening_details": {WINDOW: detail}} if detail else {}))
     params = dict({"elevations": [elev], "trim": True}, **kw)
     return params, generate_preview(params)
 
 
-@pytest.mark.parametrize("kw", BUILDS)
-def test_the_cladding_on_a_slope_is_the_walls_turned_onto_it(kw):
+LEANS = [35.0, 15.0, -15.0, -30.0]       # leaning back (sloping away, facing the sky) and leaning out (overhanging)
+
+
+@pytest.mark.parametrize("deg", LEANS)
+@pytest.mark.parametrize("kw", BUILDS + [dict(cladding_type="plank", plank_orient="vertical"),
+                                         dict(cladding_type="panel", _detail={"jamb": "lap", "head": "lap"})])
+def test_the_cladding_on_a_slope_is_the_walls_turned_onto_it(kw, deg):
     """Every part (battens, boards, trays and seams, closers, jamb and head linings, corner
     profiles) sits where the upright wall's does, turned through the pitch: so linings are
-    square to the slope and profiles run along it."""
-    deg = 35.0
+    square to the slope and profiles run along it. The same whether the wall leans back or
+    leans out over the ground."""
     _p0, up = _build(0.0, kw)
     _p1, tipped = _build(deg, kw)
     assert [m["name"] for m in tipped["geometry"]] == [m["name"] for m in up["geometry"]]
     kinds = {m["ifc_type"] for m in up["geometry"]}
     assert {"reveal", "closer", "batten"} <= kinds
-    if "_detail" in kw:
+    if (kw.get("_detail") or {}).get("jamb") == "profile":
         assert {"corner_profile", "corner_trim"} & kinds
     for a, b in zip(up["geometry"], tipped["geometry"]):
         assert all(abs(x - y) < 0.2 for x, y in zip(_box(a), _box(b, back=deg))), a["name"]
     assert [d["label"] for d in tipped["dimensions"]] == [d["label"] for d in up["dimensions"]]
+
+
+@pytest.mark.parametrize("deg", [15.0, -15.0, -30.0])
+@pytest.mark.parametrize("kw", [dict(cladding_type="panel"), dict(cladding_type="plank", plank_orient="horizontal"),
+                                dict(cladding_type="plank", plank_orient="vertical"),
+                                dict(cladding_type="plank", plank_orient="horizontal", plank_profile="custom")])
+def test_a_leaning_wall_exports_every_part_where_it_was_built(kw, deg):
+    """Planks and panels on a wall leaning back or leaning out: in the IFC, as a reader
+    builds it, every part has a body and stands where the build put it. A profiled plank
+    cut to a mitre is a sweep cut with a brep: its corners used to be rounded to a tenth of
+    a micron, which on a leaning face left the brep's faces not quite flat, and the cut
+    came back empty: the plank was missing from the model."""
+    import ifcopenshell.geom
+    from test_ifc_placement import _built_box
+    params, out = _build(deg, kw)
+    assert out["info"][0]["elevation"] and params["elevations"][0]["faces_down"] is (deg < 0)
+    ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
+    settings = ifcopenshell.geom.settings()
+    settings.set("use-world-coords", True)
+    meshes = {m["name"]: m for m in out["geometry"]}
+    checked = 0
+    for product in ifc.by_type("IfcElement"):
+        if product.is_a("IfcElementAssembly"):
+            continue
+        verts = ifcopenshell.geom.create_shape(settings, product).geometry.verts
+        assert len(verts) >= 12, product.Name                                # it has a body at all
+        mesh = meshes[product.Name]
+        if mesh.get("section_ring"):
+            continue                                                         # a profiled plank is not its board
+        scale = 1000.0 if max(abs(c) for c in verts) < 100.0 else 1.0
+        xyz = [[verts[i + k] * scale for i in range(0, len(verts), 3)] for k in range(3)]
+        assert [min(a) for a in xyz] + [max(a) for a in xyz] == pytest.approx(_built_box(mesh), abs=0.6), product.Name
+        checked += 1
+    assert checked > 30
 
 
 def test_levels_are_heights_read_up_the_slope():
