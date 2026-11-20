@@ -90,6 +90,9 @@ function syncEdgeFields() {
     }
     document.getElementById('edge-verge').value = VERGES.includes(ed.verge) ? ed.verge : 'both';
     document.getElementById('edge-vergeType').value = VERGE_TYPES.includes(ed.vergeType) ? ed.vergeType : 'g3';
+    const over = document.getElementById('edge-vergeOver');           // blank: taken from the cladding on the wall below
+    if (document.activeElement !== over) over.value = ed.vergeOver == null ? '' : ed.vergeOver;
+    over.disabled = ed.vergeType !== 'cladding';
     document.getElementById('edge-eaves').value = ed.eaves === 'none' ? 'none' : 'on';
     document.getElementById('edge-capEnds').value = ed.capEnds === 'square' ? 'square' : 'edge';
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
@@ -103,6 +106,7 @@ function setEdge(e, key, value) {
     else if (key === 'seamTop' || key === 'seamBottom') e.chain.edges[key] = value === 'flat' ? 'flat' : 'folded';
     else if (key === 'verge') e.chain.edges.verge = VERGES.includes(value) ? value : 'both';
     else if (key === 'vergeType') e.chain.edges.vergeType = VERGE_TYPES.includes(value) ? value : 'g3';
+    else if (key === 'vergeOver') { const v = parseFloat(value); e.chain.edges.vergeOver = isFinite(v) ? Math.max(0, Math.min(400, v)) : null; }
     else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
     else if (key === 'capEnds') e.chain.edges.capEnds = value === 'square' ? 'square' : 'edge';
     else {
@@ -1049,6 +1053,7 @@ function elevationRecords() {
                                                    seam_fold: chain.edges.fold !== 'off',
                                                    verge: VERGES.includes(chain.edges.verge) ? chain.edges.verge : 'both',
                                                    verge_type: VERGE_TYPES.includes(chain.edges.vergeType) ? chain.edges.vergeType : 'g3',
+                                                   verge_oversail: chain.edges.vergeOver == null ? null : chain.edges.vergeOver,
                                                    eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
                                                    cap_ends: chain.edges.capEnds === 'square' ? 'square' : 'edge',
                                                    seam_top: chain.edges.seamTop === 'flat' ? 'flat' : 'folded',

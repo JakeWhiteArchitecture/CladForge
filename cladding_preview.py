@@ -16,7 +16,7 @@ from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip
 from cladding_edges import mitre_to_linings, finish_seams
 from cladding_checks import check_rules as _check_rules
 from cladding_ridge import ridge_ends, ridge_parts
-from cladding_verge import verge_parts
+from cladding_verge import verge_parts, join_verges
 from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
@@ -92,6 +92,7 @@ def build_all_groups(params):
     """(meshes, dims, infos) for every face, each group with its chain's settings, untrimmed:
     the exporters' quick source of dimensions and setting-out info."""
     meshes, dims, infos = [], [], []
+    join_verges(params)      # a verge over a clad wall: how far its plywood oversails
     join_eaves(params)
     for sub, _elevs in setting_groups(params):
         m, d, i = _build_all(_parse(sub))
@@ -101,6 +102,7 @@ def build_all_groups(params):
 
 def generate_preview(params):
     meshes, dims, infos = [], [], []
+    join_verges(params)      # a verge over a clad wall: how far its plywood oversails
     join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
     for sub, _elevs in setting_groups(params):
         m, d, i = _preview_one(sub)

@@ -21,9 +21,12 @@ none — a side that runs into a wall is not a verge and has to be switched off.
 The alternative, where the roof's edge stands over a clad wall, is VMZINC's "Verge with
 cladding" (VMZ-SN-MA-ZI-05), the chain's "verge_type" set to "cladding":
 
+  * **The plywood oversails the roof's edge by the thickness of the cladding on the wall
+    below** (join_verges), as a sill board runs out over the cladding under a window, so
+    everything that follows stands in front of that cladding.
   * **The edge is a standing seam, the same closed double lock as between two trays**
-    (_edge_seam). The last tray runs VERGE_FACE less the seam's air beyond the roof's edge
-    and turns up as the undercloak, the head on the roof's side.
+    (_edge_seam). The last tray runs VERGE_FACE less the seam's air beyond the plywood's
+    edge and turns up as the undercloak, the head on the roof's side.
   * **The verge flashing is the seam's other sheet**, the overcloak: from the seam it runs
     straight down the face of the edge, past the plywood and the ventilation gap under it,
     to cover the head of the wall's cladding by VERGE_COVER (60, dimensioned). Its foot
@@ -105,6 +108,66 @@ def _strip_ring(y0, t):
     path = LineString([(-VERGE_LAP, y0), (VERGE_NOSE, y0), (VERGE_NOSE, y0 - g), (x, y0 - g),
                        (x, y0 - VERGE_DROP), (x - g, y0 - VERGE_DROP), (x - g, y0 - VERGE_DROP + VERGE_HEM)])
     return list(path.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1]
+
+
+VERGE_WALL_REACH = 400.0   # mm – the roof's edge this far or less out from a wall's face stands over that wall
+VERGE_WALL_SHORT = 60.0    # mm – or this far or less short of it
+
+
+def join_verges(params):
+    """Before anything is built: at a verge with cladding **the roof's plywood oversails the
+    roof's edge by the thickness of the cladding on the wall below**, as a sill board runs
+    out over the cladding under a window, so the flashing drops in front of that cladding.
+    Each roof slope is told how far, a side: {"l": mm, "r": mm} as "verge_over", and where
+    it came from as "verge_over_from" (the wall's name, or "set").
+
+    The wall is found among the picked faces: upright, looking out the way the verge
+    does, its face within VERGE_WALL_REACH behind the roof's edge (or VERGE_WALL_SHORT in
+    front of it). What the modelled roof already oversails that face by comes off. The
+    chain's own "verge_oversail" (mm), where it is set, is used instead."""
+    from cladding_constants import _parse, chain_params
+    from cladding_primitives import buildup_depth
+    faces = params.get("elevations") or []
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                                           # noqa: E731
+    for e in faces:
+        e.pop("verge_over", None)
+        e.pop("verge_over_from", None)
+        pitch = e.get("pitch")
+        if verge_type(e) != "cladding" or pitch is None or float(pitch) > ROOF_PITCH or not e.get("frame"):
+            continue
+        f, W, H = e["frame"], float(e.get("width") or 0.0), float(e.get("height") or 0.0)
+        over, source = {}, {}
+        try:
+            fixed = float(e.get("verge_oversail"))
+        except (TypeError, ValueError):
+            fixed = None
+        for side, u, out in (("l", 0.0, [-c for c in f["u"]]), ("r", W, list(f["u"]))):
+            if fixed is not None:
+                over[side], source[side] = max(0.0, fixed), "set"
+                continue
+            at = frame_to_world(f, u, H / 2.0, 0.0)
+            best = None
+            for w in faces:
+                fw = w.get("frame")
+                if w is e or not fw or abs(fw["n"][2]) > 0.26 or dot(fw["n"], out) < 0.98:
+                    continue
+                rel = [a - b for a, b in zip(at, fw["origin"])]
+                d, along = dot(rel, fw["n"]), dot(rel, fw["u"])
+                if -VERGE_WALL_SHORT <= d <= VERGE_WALL_REACH and -100.0 <= along <= float(w.get("width") or 0.0) + 100.0 \
+                        and (best is None or abs(d) < abs(best[0])):
+                    best = (d, w)
+            if best:
+                pw = _parse(dict(chain_params(params, best[1]), elevations=[]))
+                thick = buildup_depth(pw) + (float(pw["seam_h"]) if pw.get("seam") else 0.0)       # to the tips of its seams
+                over[side], source[side] = round(max(0.0, thick - best[0]), 1), best[1].get("name")
+        if over:
+            e["verge_over"], e["verge_over_from"] = over, source
+
+
+def verge_over(elev, side):
+    """How far the plywood oversails the roof's edge on that side (join_verges): 0 where
+    nothing is clad below it."""
+    return float((elev.get("verge_over") or {}).get(side) or 0.0)
 
 
 def verge_seam_out():
@@ -189,7 +252,9 @@ def verge_parts(meshes, p, infos):
             toward = [out * c for c in U]
             across = [V[1] * toward[2] - V[2] * toward[1], V[2] * toward[0] - V[0] * toward[2], V[0] * toward[1] - V[1] * toward[0]]
             sign = 1.0 if sum(a * b for a, b in zip(across, N)) > 0 else -1.0     # which way the section's y runs
-            place = lambda: {"origin": frame_to_world(frame, u, v0, 0.0), "u": toward, "v": across, "n": [float(c) for c in V]}   # noqa: E731
+            over = verge_over(elev, side) if kind == "cladding" else 0.0
+            ue = u + out * over                        # the plywood's edge: the roof's, or out over the cladding below
+            place = lambda: {"origin": frame_to_world(frame, ue, v0, 0.0), "u": toward, "v": across, "n": [float(c) for c in V]}   # noqa: E731
             tidy = lambda pts: [[round(x, 3), round(y, 3)] for x, y in                               # noqa: E731
                                 list(orient(Polygon([(x, sign * y) for x, y in pts]), 1.0).exterior.coords)[:-1]]
             letter = "L" if side == "l" else "R"
@@ -200,13 +265,18 @@ def verge_parts(meshes, p, infos):
                 strip = _prism(tidy(flashing), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Flashing %s" % (name, letter), name)
                 extra.append(_prism(tidy(clip), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Clip %s" % (name, letter), name))
                 edge = [m for m in trays if any(abs(q[0] - u) <= EDGE_TOL for q in m["profile"])]
-                for m in edge + [m for m in mine if m.get("ridge_part")]:      # the last tray runs on to its seam, just beyond the edge
+                for m in decks:                        # the plywood oversails the roof's edge, over the cladding below
                     for q in m["profile"]:
                         if abs(q[0] - u) <= EDGE_TOL and v0 - 1.0 <= q[1]:
-                            q[0] = round(u + out * verge_seam_out(), 3)
-                extra.extend(_edge_seam(p, frame, name, letter, u, out, v0, v1, face, edge[0]["name"] if edge else strip["name"], strip["name"]))
+                            q[0] = round(ue, 3)
+                for m in edge + [m for m in mine if m.get("ridge_part")]:      # the last tray runs on to its seam, just beyond the plywood's edge
+                    for q in m["profile"]:
+                        if abs(q[0] - u) <= EDGE_TOL and v0 - 1.0 <= q[1]:
+                            q[0] = round(ue + out * verge_seam_out(), 3)
+                extra.extend(_edge_seam(p, frame, name, letter, ue, out, v0, v1, face, edge[0]["name"] if edge else strip["name"], strip["name"]))
                 strip["verge_info"] = {"side": side, "type": kind, "length": round(v1 - v0, 1), "lap": 0.0, "nose": VERGE_FACE,
                                        "drop": round(drop, 1), "clear": VERGE_FACE, "cover": VERGE_COVER, "thickness": t,
+                                       "over": round(over, 1), "over_from": (elev.get("verge_over_from") or {}).get(side),
                                        "last_seam": None, "last_tray": None if seam is None else round(seam + verge_seam_out(), 1)}
             else:
                 strip = _prism(tidy(_strip_ring(back - 1.0, t)), 0.0, v1 - v0, place(),
@@ -216,6 +286,6 @@ def verge_parts(meshes, p, infos):
                                        "last_seam": None if seam is None else round(seam + VERGE_TRAY, 1)}
             extra.append(strip)
             info.setdefault("verges", []).append(dict(strip["verge_info"], u=round(u, 1)))
-            a, b = sorted((u - out * strip["verge_info"]["lap"], u + out * (strip["verge_info"]["nose"] + t)))
+            a, b = sorted((ue - out * strip["verge_info"]["lap"], ue + out * (strip["verge_info"]["nose"] + t)))
             info.setdefault("verge_strips", []).append([[a, v0], [b, v0], [b, v1], [a, v1]])
     return meshes + extra

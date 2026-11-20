@@ -15,6 +15,7 @@ import ifcopenshell  # noqa: E402
 from test_ridge import _slope, _roof, SEAM  # noqa: E402
 from test_pitched import _extract  # noqa: E402
 from cladding_checks import check_rules  # noqa: E402
+from fabric_extract import extract_elevation  # noqa: E402
 from cladding_constants import frame_to_world, world_to_frame  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
 from cladding_verge import VERGE_TRAY, VERGE_NOSE, VERGE_LAP, VERGE_CLEAR, VERGE_DROP, verge_sides  # noqa: E402
@@ -264,3 +265,73 @@ def test_the_verge_with_cladding_exports():
         if "Verge Flashing" in e.Name:
             assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5      # the flashing and its five sheets of the seam
     assert len(out["info"][0]["verge_strips"]) == 2 and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
+
+
+# ── the plywood oversails by the thickness of the cladding below ──────────
+
+def _gable(roof, back=0.0, name="Gable", **settings):
+    """An upright wall under the left edge of *roof*, looking out the way that verge does,
+    its face *back* behind the roof's edge (the roof's edge that far out from it)."""
+    f = roof["frame"]
+    out = [-c for c in f["u"]]                                           # the left verge looks out along -u
+    foot, head = frame_to_world(f, 0.0, 0.0, 0.0), frame_to_world(f, 0.0, roof["height"], 0.0)
+    run = math.hypot(head[0] - foot[0], head[1] - foot[1])
+    along = [(head[0] - foot[0]) / run, (head[1] - foot[1]) / run, 0.0]
+    base = [foot[i] - out[i] * back for i in range(3)]
+    q = [[base[0], base[1], foot[2] - 2500.0], [base[0] + along[0] * run, base[1] + along[1] * run, foot[2] - 2500.0],
+         [base[0] + along[0] * run, base[1] + along[1] * run, foot[2]], [base[0], base[1], foot[2]]]
+    wall = extract_elevation({"name": name, "faces": [[q[0], q[1], q[2]], [q[0], q[2], q[3]]], "outward": out, "context": [],
+                              "options": {"debug": False, "clad_depth": 150.0}})
+    return dict(wall, offset=0, settings=settings)
+
+
+@pytest.mark.parametrize("wall_kw, thick", [(dict(cladding_type="panel"), 47.0),
+                                            (dict(cladding_type="plank", plank_profile="seam", plank_orient="vertical"), 83.6)])
+def test_the_plywood_oversails_the_edge_by_the_thickness_of_the_cladding_on_the_wall_below(wall_kw, thick):
+    """As a sill board runs out over the cladding under a window: the roof's plywood, its last
+    tray, the seam at its edge and the flashing all stand out past the roof's edge by the
+    thickness of the wall's cladding (to the tips of its seams, where it is standing seam)."""
+    from cladding_constants import _parse
+    from cladding_primitives import buildup_depth
+    from cladding_verge import VERGE_FACE, join_verges, verge_seam_out
+    roof = dict(dict(_slope("Roof A"), offset=0), verge_type="cladding", settings=dict(SEAM))
+    wall = _gable(roof, **wall_kw)
+    pw = _parse(dict(wall_kw, elevations=[]))
+    assert buildup_depth(pw) + (pw["seam_h"] if pw.get("seam") else 0.0) == pytest.approx(thick)
+    params = {"elevations": [roof, wall], "trim": True, "splash": 0}
+    out = generate_preview(params)
+    info = next(i for i in out["info"] if i["elevation"] == "Roof A")
+    left, right = sorted(info["verges"], key=lambda v: v["side"])
+    assert (left["over"], left["over_from"]) == (pytest.approx(thick, abs=0.1), "Gable")
+    assert (right["over"], right["over_from"]) == (0.0, None)             # nothing clad under the other edge: the plywood stops at it
+    mine = [m for m in out["geometry"] if m["elevation"] == "Roof A"]
+    deck = next(m for m in mine if m["ifc_type"] == "deck")
+    assert min(q[0] for q in deck["profile"]) == pytest.approx(-thick, abs=0.1) and max(q[0] for q in deck["profile"]) == 8000.0
+    assert min(q[0] for m in mine if m["ifc_type"] == "batten" for q in m["profile"]) >= 0.0          # the battens stay on the roof
+    trays = [m for m in mine if m["ifc_type"] == "plank"]
+    assert min(q[0] for m in trays for q in m["profile"]) == pytest.approx(-thick - verge_seam_out(), abs=0.1)
+    assert max(max(q[0] for q in m["profile"]) - min(q[0] for q in m["profile"]) for m in trays) <= 530.5   # set out to where it ends
+    flashing = next(m for m in mine if m["name"] == "Roof A Verge Flashing L")
+    sec = _section(roof, flashing, 0.0, -1.0)
+    assert max(x for x, _d in sec) == pytest.approx(thick + VERGE_FACE + 0.6, abs=0.1)                # in front of the wall's cladding
+    (row,) = [r for r in check_rules(params, out["info"]) if r["name"].endswith("Verge") and "Roof A" in r["message"]]
+    assert "oversails the roof's edge by %.0f mm on the left, the cladding on Gable below" % thick in row["message"]
+    assert "no clad wall was found under the right edge" in row["message"]
+
+
+def test_what_the_modelled_roof_already_oversails_comes_off_and_the_chain_can_set_it():
+    from cladding_verge import join_verges
+    roof = dict(dict(_slope("Roof A"), offset=0), verge_type="cladding", settings=dict(SEAM))
+    for back, want in ((0.0, 47.0), (30.0, 17.0), (100.0, 0.0), (-40.0, 87.0)):
+        params = {"elevations": [dict(roof), _gable(roof, back, cladding_type="panel")]}
+        join_verges(params)
+        assert params["elevations"][0]["verge_over"] == {"l": pytest.approx(want, abs=0.1)}, back
+    far = {"elevations": [dict(roof), _gable(roof, 600.0, cladding_type="panel")]}        # too far behind the edge to be the wall under it
+    join_verges(far)
+    assert "verge_over" not in far["elevations"][0]
+    fixed = {"elevations": [dict(roof, verge_oversail=75), _gable(roof, cladding_type="panel")]}
+    join_verges(fixed)
+    assert fixed["elevations"][0]["verge_over"] == {"l": 75.0, "r": 75.0} and fixed["elevations"][0]["verge_over_from"] == {"l": "set", "r": "set"}
+    g3 = {"elevations": [dict(roof, verge_type="g3"), _gable(roof, cladding_type="panel")]}  # the G3 strip is not moved
+    join_verges(g3)
+    assert "verge_over" not in g3["elevations"][0]

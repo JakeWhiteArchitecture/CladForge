@@ -241,8 +241,12 @@ def check_rules(params, infos=None):
         if over:
             add("Verge", "pass", "%s: a verge flashing over the cladding on the %s (VMZ-SN-MA-ZI-05): a seam at the roof's edge, "
                 "the flashing down %.0f mm from the deck to cover the head of the wall's cladding by %.0f mm, on a continuous "
-                "folded strip. Only the %.0f is dimensioned on the sheet: agree the rest with the supplier" % (
-                    i["elevation"], " and ".join(side[v["side"]] for v in over), over[0]["drop"], over[0]["cover"], over[0]["cover"]),
+                "folded strip; %s. Only the %.0f is dimensioned on the sheet: agree the rest with the supplier" % (
+                    i["elevation"], " and ".join(side[v["side"]] for v in over), over[0]["drop"], over[0]["cover"],
+                    " and ".join(("the plywood oversails the roof's edge by %.0f mm on the %s, %s" % (
+                        v["over"], side[v["side"]], "as set" if v.get("over_from") == "set" else "the cladding on %s below" % v["over_from"]))
+                        if v.get("over") else ("no clad wall was found under the %s edge, so the plywood stops at it: pick the wall, or set "
+                                               "the oversail (Edges)" % side[v["side"]]) for v in over), over[0]["cover"]),
                 len(over))
         verges = [v for v in verges if v.get("type") != "cladding"]
         if not verges:

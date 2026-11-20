@@ -172,7 +172,7 @@ def _tray_reach(p, elev, depth):
     the tray is at least SEAM_MIN_CLOSE, and clear of the turn. Last, which ends are held to
     their limits though the trays do not run on past them: a verge whose edge is itself a
     seam (cladding_verge, "Verge with cladding"), where the last tray stops at the edge."""
-    from cladding_verge import verge_sides, verge_type, verge_seam_out, VERGE_TRAY, VERGE_SEAM
+    from cladding_verge import verge_sides, verge_type, verge_seam_out, verge_over, VERGE_TRAY, VERGE_SEAM
     left, right, (d_left, d_right) = corner_ends(elev, p)
     verges = verge_sides(elev, p)
     reach, limits, held = [], [], []
@@ -183,7 +183,7 @@ def _tray_reach(p, elev, depth):
             reach.append(max(0.0, ext + k_end * depth))
             limits.append((max(SEAM_MIN_CLOSE, reach[-1] + 20.0), p["plank_w"]))
         elif side in verges and not k and verge_type(elev) == "cladding":
-            reach.append(verge_seam_out())                     # the edge is itself a seam: the last tray runs just to it
+            reach.append(verge_over(elev, side) + verge_seam_out())     # out over the cladding below, to the seam at the plywood's edge
             limits.append((SEAM_MIN_CLOSE, p["plank_w"]))
         elif side in verges and not k:
             reach.append(VERGE_TRAY)
