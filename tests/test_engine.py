@@ -112,7 +112,7 @@ def test_panels_joints_on_battens(elevation):
     for m in panels:
         u0, u1 = m["profile"][0][0], m["profile"][1][0]
         for edge in (u0, u1):
-            if 1 < edge < 7999 and edge not in jambs:
+            if 1 < edge < 7999 and min(abs(edge - j) for j in jambs) > 10.5:      # on a jamb line, or the gap off it
                 assert min(abs(b - (edge - 5)) for b in battens) < 1e-6 or min(abs(b - (edge + 5)) for b in battens) < 1e-6
     # Supports are the battens plus the closers at the jambs; only a window is unsupported.
     supports = sorted(set(battens) | jambs)

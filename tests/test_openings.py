@@ -40,11 +40,31 @@ def test_setting_out_starts_from_the_structural_opening(elevation):
     # no bay is wider than the maximum panel, and the jambs are hard joints
     widths = out["info"][0]["panel_widths"]
     assert max(widths) <= 1200 + 1e-6
-    assert not [e for e in edges if WINDOW[0] < e < WINDOW[1]], "a bay crossed the window"
+    # the only edges within the window's width are the joint gap's far side on each jamb line
+    assert [e for e in edges if WINDOW[0] < e < WINDOW[1]] == [WINDOW[0] + 10.0, WINDOW[1] - 10.0], "a bay crossed the window"
     # switching it off returns to a centred array that ignores the window
     centred = generate_preview(_params(elevation, set_out_from_openings=False))
     starts = sorted({round(m["profile"][0][0], 1) for m in centred["geometry"] if m["ifc_type"] == "panel"})
     assert WINDOW[0] not in starts
+
+
+def test_the_joint_gap_on_a_jamb_line_is_taken_under_and_over_the_window(elevation):
+    """Beside the window a panel runs to the jamb and meets the reveal lining. Above the
+    head and below the sill that line is a joint between two panels, and they stand the
+    joint gap apart: the gap comes out of the panel within the window's width."""
+    out = generate_preview(_params(elevation, panel_w=1200, panel_gap=10, trim=True))
+    panels = [m for m in out["geometry"] if m["ifc_type"] == "panel"]
+    span = lambda m: (round(min(q[0] for q in m["profile"]), 1), round(max(q[0] for q in m["profile"]), 1))   # noqa: E731
+    height = lambda m: (min(q[1] for q in m["profile"]), max(q[1] for q in m["profile"]))                      # noqa: E731
+    under = [m for m in panels if span(m) == (WINDOW[0] + 10.0, WINDOW[1] - 10.0)]
+    assert under and all(height(m)[1] <= WINDOW[2] + 0.5 or height(m)[0] >= WINDOW[3] - 0.5 for m in under)
+    left = [m for m in panels if span(m)[1] == WINDOW[0]]
+    right = [m for m in panels if span(m)[0] == WINDOW[1]]
+    assert left and right                                           # the panels beside it still run to the jambs
+    assert not [m for m in panels if span(m)[0] == WINDOW[0] or span(m)[1] == WINDOW[1]]
+    # with no gap asked for, nothing moves
+    tight = generate_preview(_params(elevation, panel_w=1200, panel_gap=0))
+    assert any(span(m) == (WINDOW[0], WINDOW[1]) for m in tight["geometry"] if m["ifc_type"] == "panel")
 
 
 def test_cavity_closer_on_both_vertical_sides(elevation):

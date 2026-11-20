@@ -947,6 +947,22 @@ def _staggers(elev, region, W, margin, holes, posts):
     return out
 
 
+def _gap_at_jamb_lines(panels, holes, gap):
+    """The joint gap on each jamb line, taken out of the bay under and over the opening.
+    Beside an opening a panel runs to the jamb, where it meets the reveal lining, so no
+    gap is taken on that side; but the jamb line carries on above the head and below the
+    sill as an ordinary joint between two panels, and those want their gap. It is given by
+    the bay that lies within the opening's width, so the panel beside the opening still
+    lines through with the reveal."""
+    out = []
+    for s, e, full in panels:
+        inside = [o for o in holes if o[0] - 0.5 <= s and e <= o[1] + 0.5]
+        s2 = s + gap if any(abs(s - o[0]) < 0.5 for o in inside) else s
+        e2 = e - gap if any(abs(e - o[1]) < 0.5 for o in inside) else e
+        out.append((s2, e2, full) if e2 - s2 > 1.0 else (s, e, full))
+    return out
+
+
 def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Panels on vertical battens, joints on battens, noggins at horizontal joints only
     where a counter-batten layer is there to keep the drainage plane clear.
@@ -989,6 +1005,7 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         panels, joints = bays_between([0.0] + jambs + [W], p["panel_w"], gap)
     else:
         panels, joints = panel_bays(W, p["panel_w"], gap, offset)
+    panels = _gap_at_jamb_lines(panels, holes, gap)
     edges = [bw / 2, W - bw / 2]
     if posts:
         supports = dedupe_priority([posts, extra, edges], bw)
