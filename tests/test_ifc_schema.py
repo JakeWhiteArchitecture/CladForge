@@ -14,7 +14,7 @@ import ifcopenshell.validate  # noqa: E402
 from synthetic import payload  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 
 BUILDS = [dict(cladding_type="panel"), dict(cladding_type="plank", plank_profile="seam", plank_orient="vertical"),
           dict(cladding_type="plank", plank_profile="custom", plank_orient="horizontal")]
@@ -47,7 +47,7 @@ def test_every_schema_is_valid_and_carries_every_part(schema, kw):
     ifcopenshell.validate.validate(ifc, logger)
     assert not logger.statements, [s["message"][:200] for s in logger.statements[:3]]
     parts = [e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]
-    assert len(parts) == len(out["geometry"])
+    assert len(parts) == len(own_elements(out["geometry"]))
     assert all(e.Representation for e in parts)
     guids = [e.GlobalId for e in ifc.by_type("IfcRoot")]
     assert len(guids) == len(set(guids))

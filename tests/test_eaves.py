@@ -19,7 +19,7 @@ from cladding_eaves import (EAVES_TRAY, EAVES_NOSE, EAVES_LAP, EAVES_DROP, EAVES
 from cladding_constants import _parse  # noqa: E402
 from cladding_primitives import ring_at  # noqa: E402
 from dxf_generator import meshes_to_dxf_string  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 from test_hip import _build as _hipped, _pair, SEAM  # noqa: E402
 from test_verge import _one  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
@@ -27,7 +27,13 @@ from fabric_extract import extract_elevation, eaves_link, valley_links  # noqa: 
 
 
 def _aprons(out):
+    """The drips: one length per tray at an eaves, each its tray's own sheet."""
     return [m for m in out["geometry"] if m["ifc_type"] == "eaves_strip" and not m.get("eaves_support")]
+
+
+def _runs(out):
+    """The eaves, as built: one support profile along each."""
+    return [m for m in out["geometry"] if m.get("eaves_support")]
 
 
 def _bottoms(out, kind, face=None):
@@ -38,8 +44,8 @@ def _bottoms(out, kind, face=None):
 def test_the_plywood_and_the_trays_run_on_and_the_layers_under_run_to_the_edge():
     _params, out = _one(elev={"verge": "none"})
     _p0, plain = _one(elev={"verge": "none", "eaves": "none"})
-    (apron,) = _aprons(out)
-    assert not _aprons(plain)
+    drips = _aprons(out)
+    assert not _aprons(plain) and len(_runs(out)) == 1
     assert _bottoms(plain, "plank")[0] == 10.0 and _bottoms(plain, "deck") == [10.0]       # the bottom edge offset
     assert _bottoms(out, "plank")[0] == -EAVES_NOSE and _bottoms(out, "deck") == [-EAVES_NOSE]   # the plywood runs on, the trays with it
     assert _bottoms(out, "seam")[0] == -EAVES_NOSE and _bottoms(out, "batten")[0] == 0.0
@@ -49,7 +55,11 @@ def test_the_plywood_and_the_trays_run_on_and_the_layers_under_run_to_the_edge()
     assert tops(out) == tops(plain)
     info = out["info"][0]["eaves"][0]
     assert info["tray"] == EAVES_TRAY and info["length"] == pytest.approx(out["info"][0]["width"], abs=1.0)
-    assert apron["thickness"] == pytest.approx(info["length"])
+    trays = [m for m in out["geometry"] if m["ifc_type"] == "plank"]
+    assert len(drips) == len(trays) and sorted(d["of"] for d in drips) == sorted(m["name"] for m in trays)   # a length of it per tray
+    assert all(d["name"] == d["of"] + " Eaves Drip" for d in drips)
+    assert sum(d["thickness"] for d in drips) == pytest.approx(info["length"])           # seam to seam, the eaves long
+    assert _runs(out)[0]["thickness"] == pytest.approx(info["length"])
 
 
 def _in_section(out, part):
@@ -68,7 +78,7 @@ def test_the_zinc_turns_round_the_end_of_the_plywood_comes_back_under_it_and_dro
     round its end in a half circle and back under it, then drops plumb over a support
     profile fixed under the plywood, and is hooked back under at the foot."""
     _params, out = _one(elev={"verge": "none"})
-    (apron,) = _aprons(out)
+    apron = _aprons(out)[0]
     (support,) = [m for m in out["geometry"] if m.get("eaves_support")]
     deck = next(m for m in out["geometry"] if m["ifc_type"] == "deck")
     zinc, (c, s) = _in_section(out, apron)
@@ -129,7 +139,8 @@ def test_at_a_hip_the_eaves_ends_follow_the_hip_cut():
     """Each slope of a hipped corner has its eaves; a tray cut to the hip carries that cut on
     down its overhang, and only a level bottom edge is an eaves: the hip is not one."""
     _link, params, out = _hipped(elev={"eaves": "on"}, **SEAM)
-    assert sorted(m["name"] for m in _aprons(out)) == ["Roof A Eaves Drip 1", "Roof C Eaves Drip 1"]
+    assert sorted(m["name"] for m in _runs(out)) == ["Roof A Eaves Support 1", "Roof C Eaves Support 1"]
+    assert {m["elevation"] for m in _aprons(out)} == {"Roof A", "Roof C"}
     for face in ("Roof A", "Roof C"):
         assert _bottoms(out, "plank", face) == [-EAVES_TRAY]
     corner = min((m for m in out["geometry"] if m["ifc_type"] == "plank" and m["elevation"] == "Roof A"),
@@ -146,8 +157,15 @@ def test_an_eaves_exports():
     _params, out = _one(elev={"verge": "none"})
     params = _params
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
-    (apron,) = [e for e in ifc.by_type("IfcCovering") if "Eaves Drip" in e.Name]
-    assert apron.PredefinedType == "ROOFING" and apron.ObjectType == "Eaves drip"
+    # the drip is the tray's own sheet: in the tray's element with its seams, not an element of its own
+    assert not [e for e in ifc.by_type("IfcElement") if "Eaves Drip" in (e.Name or "")]
+    trays = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "Standing seam tray"]
+    built = {k: [m for m in out["geometry"] if m["ifc_type"] == k] for k in ("plank", "seam")}
+    assert len(trays) == len(built["plank"])
+    assert sum(len(r.Items) for e in trays for r in e.Representation.Representations) \
+        == len(built["plank"]) + len(built["seam"]) + len(_aprons(out))
+    (support,) = [e for e in ifc.by_type("IfcCovering") if "Eaves Support" in e.Name]
+    assert support.PredefinedType == "ROOFING" and support.ObjectType == "Eaves support profile"
     assert out["info"][0]["eaves_strips"] and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
 
 
@@ -260,7 +278,7 @@ def test_only_the_part_of_the_eaves_over_the_wall_runs_on():
     assert [(e["u0"], e["u1"], e["over"]) for e in eaves] == [(0.0, 2820.0, None), (2820.0, 6000.0, "Wall")] \
         or [(e["u0"], e["u1"], e["over"]) for e in eaves] == [(0.0, 3180.0, "Wall"), (3180.0, 6000.0, None)]
     assert sorted(e["run"] > 0 for e in eaves) == [False, True]
-    assert len(_aprons(out)) == 2
+    assert len(_runs(out)) == 2
 
 
 def test_the_check_tells_both_faces():
@@ -268,7 +286,7 @@ def test_the_check_tells_both_faces():
     rows = [r["message"] for r in check_rules(params, out["info"]) if r["name"].endswith("Eaves")]
     assert len(rows) == 2 and any("over Wall" in m and "laps it" in m for m in rows) and any("under the eaves of Roof" in m for m in rows)
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
-    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
+    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
 
 
 def test_the_drip_is_the_trays_own_sheet_and_the_cutting_list_has_each_tray_that_much_longer():
@@ -277,7 +295,7 @@ def test_the_drip_is_the_trays_own_sheet_and_the_cutting_list_has_each_tray_that
     longer by the sheet that goes round the plywood's end and down into the drip."""
     from cladding_nesting import plank_pieces
     params, out = _one(elev={"verge": "none"})
-    (drip,) = _aprons(out)
+    drip = _aprons(out)[0]
     trays = [m for m in out["geometry"] if m["ifc_type"] == "plank"]
     back, t = min(m["depth"] for m in trays), drip["eaves_info"]["thickness"]
     assert drip.get("tray_sheet") and EAVES_LAP == 0.0 and drip["eaves_info"]["lap"] == 0.0

@@ -12,10 +12,11 @@ the supplier's eaves detail. The face's bottom edge is the edge of the roof's ow
     turn round the end and the drip are added to it. The battens and the layers under them stay at the edge.
   * **The drip is the trays' own sheet**, the same coil as the roof covering: at the
     plywood's end each tray turns round it in a half circle, **comes back under the
-    plywood**, then drops plumb and is hooked back up at its foot (_eaves_rings). It is
-    drawn as one run along the eaves, starting where the trays' flat ends; each tray at
-    the eaves carries the sheet it takes ("cut_extra"), so the cutting list has the tray
-    as long as the coil it is cut from.
+    plywood**, then drops plumb and is hooked back up at its foot (_eaves_rings). Each
+    tray has its own length of it, seam to seam, starting where the tray's flat ends
+    and marked as its ("of": the IFC has a tray, its seams and its drip as one element);
+    each tray at the eaves carries the sheet it takes ("cut_extra"), so the cutting list
+    has the tray as long as the coil it is cut from.
   * **The support profile**: what the zinc is dressed over. An angle, one leg fixed up
     under the plywood and one hanging plumb behind the zinc's drop.
   * The drip's line is where the plywood's underside stands over the roof's edge (the
@@ -277,23 +278,40 @@ def eaves_parts(meshes, p, infos):
                     if kind == "seam":
                         _fold_back(m, at)                  # at this eaves the seams are always folded back
                     elif kind == "plank":
-                        turned.append(m)                   # its sheet goes on round the plywood's end and into the drip
+                        turned.append((min(mid), max(mid), m))   # its sheet goes on round the plywood's end and into the drip
                 ring = lambda pts: [[round(x, 3), round(y, 3)] for x, y in                   # noqa: E731
                                     list(orient(Polygon([(x, sign * y) for x, y in pts]), 1.0).exterior.coords)[:-1]]
                 place = {"origin": frame_to_world(frame, a, ve, 0.0), "u": toward, "v": across, "n": along}
                 zinc, support, sheet = _eaves_rings(back, soffit, t, pitch, below)
-                for m in turned:
-                    m["cut_extra"] = round(sheet, 1)       # the cutting list: the tray is cut this much longer
                 n += 1
-                apron = _prism(ring(zinc), 0.0, b - a, place, "eaves_strip", "%s Eaves Drip %d" % (name, n), name)
-                apron["tray_sheet"] = True                 # not a sheet of its own: the trays', turned round the end
                 prop = _prism(ring(support), 0.0, b - a, dict(place), "eaves_strip", "%s Eaves Support %d" % (name, n), name)
                 prop.update(eaves_support=True, color="#eab308")
                 extra.append(prop)
+                # The drip is each tray's own sheet: one length of it per tray, from seam to seam, and part of that tray
+                # ("of": the IFC has the tray, its seams and its drip as one element).
+                turned.sort(key=lambda q: q[0])
+                marks = [a] + [(p0[1] + p1[0]) / 2.0 for p0, p1 in zip(turned, turned[1:])] + [b]
+                drips = []
+                for (m0, m1), (_lo, _hi, m) in zip(zip(marks, marks[1:]), turned):
+                    m["cut_extra"] = round(sheet, 1)       # the cutting list: the tray is cut this much longer
+                    if m1 - m0 < 0.5:
+                        continue
+                    drip = _prism(ring(zinc), 0.0, m1 - m0, dict(place, origin=frame_to_world(frame, m0, ve, 0.0)),
+                                  "eaves_strip", "%s Eaves Drip" % m["name"], name)
+                    drip.update(tray_sheet=True, of=m["name"], color=m.get("color", drip["color"]))
+                    drips.append(drip)
+                if not drips:                              # no tray reaches this length of the eaves: nothing to turn
+                    extra.pop()
+                    n -= 1
+                    continue
+                apron = drips[0]
+                extra.extend(drips[1:])
                 apron["eaves_info"] = {"length": round(b - a, 1), "lap": EAVES_LAP, "nose": nose, "drop": round(below, 1),
                                        "clear": round(drop_out, 1), "tray": EAVES_TRAY, "thickness": t, "sheet": round(sheet, 1),
                                        "over": over["with"] if over else None, "run": round(run, 1)}
                 extra.append(apron)
+                for d in drips[1:]:
+                    d["eaves_info"] = apron["eaves_info"]
                 info.setdefault("eaves", []).append(dict(apron["eaves_info"], u0=round(a, 1), u1=round(b, 1), v=round(v, 1)))
                 info.setdefault("eaves_strips", []).append([[a, end - t], [b, end - t], [b, end + 2.0], [a, end + 2.0]])
     return meshes + extra
