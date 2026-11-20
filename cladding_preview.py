@@ -129,7 +129,7 @@ def _preview_one(params):
     meshes = rake_parts(meshes, p, infos)
     meshes = verge_parts(meshes, p, infos)   # a roof slope's free side edges: the last tray out over a verge strip
     meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
-    meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays out over an eaves apron
+    meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
     meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
     meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging

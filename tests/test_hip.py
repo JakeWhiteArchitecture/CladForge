@@ -23,7 +23,7 @@ from cladding_primitives import ring_at  # noqa: E402
 from cladding_ridge import RIDGE_GAP, RIDGE_LEG, RIDGE_UPSTAND  # noqa: E402
 from dxf_generator import meshes_to_dxf_string  # noqa: E402
 from fabric_extract import hip_link, valley_link, valley_links, chain_link  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 from test_ridge import _paired  # noqa: E402
 from test_valley import _face, _pair as _valley_pair  # noqa: E402
 
@@ -325,7 +325,7 @@ def test_a_hip_exports(tmp_path):
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     caps = [e for e in ifc.by_type("IfcCovering") if "Hip Cap" in e.Name]
     assert len(caps) == 2 and caps[0].PredefinedType == "ROOFING"                # a leg on each slope
-    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
+    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
     dxf = meshes_to_dxf_string(out["geometry"], params, out["info"])
     assert "CORNER_PROFILE" in dxf
     assert out["info"][0]["hip_strips"] and out["info"][1]["hip_strips"]

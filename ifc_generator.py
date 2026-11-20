@@ -55,7 +55,7 @@ _IFC_TYPE_MAP = {
     "ridge_filler":   ("IfcMember",   "USERDEFINED", "Vented ridge filler"),
     "verge_strip":    ("IfcCovering", "ROOFING",     "Verge strip"),
     "valley_gutter":  ("IfcCovering", "ROOFING",     "Valley gutter"),
-    "eaves_strip":    ("IfcCovering", "ROOFING",     "Eaves apron"),
+    "eaves_strip":    ("IfcCovering", "ROOFING",     "Eaves drip"),
 }
 _MATERIALS = {
     "batten": ("Timber (softwood) batten", "wood"), "counter_batten": ("Timber (softwood) batten", "wood"),
@@ -68,7 +68,7 @@ _MATERIALS = {
     "deck": ("Timber deck (softwood boarding or WBP plywood)", "wood"),
     "seam": ("Standing seam sheet", "metal"),
     "ridge_cap": ("Ridge cap sheet", "metal"), "ridge_filler": ("Vented foam filler", "rubber"),
-    "verge_strip": ("Verge strip sheet", "metal"), "valley_gutter": ("Valley gutter sheet", "metal"), "eaves_strip": ("Eaves apron sheet", "metal"),
+    "verge_strip": ("Verge strip sheet", "metal"), "valley_gutter": ("Valley gutter sheet", "metal"), "eaves_strip": ("Eaves drip (the trays' sheet)", "metal"),
 }
 
 
@@ -314,6 +314,39 @@ def _make_element(ifc, body, ifc_class, name, solid, predefined=None, object_typ
     return element
 
 
+def tray_owners(group):
+    """{id(mesh): the tray it is part of} for one elevation's meshes. Everything that is
+    one standing seam tray's own sheet is one element with it: the folds of its seams and
+    its turned-up ends (ifc_type "seam", named "<tray> ..."), and a drip its end is turned
+    into at the eaves (which says whose it is: "of")."""
+    trays = {m["name"]: m for m in group if m.get("ifc_type") == "plank" and m.get("name")}
+    out = {}
+    if not trays:
+        return out
+    for m in group:
+        name = m.get("of")
+        if name not in trays and m.get("ifc_type") == "seam":
+            mine = m.get("name") or ""
+            name = mine.split(" Seam ")[0] if " Seam " in mine else None
+            if name not in trays:
+                name = max((k for k in trays if mine.startswith(k + " ")), key=len, default=None)
+        if name in trays and m is not trays[name]:
+            out[id(m)] = trays[name]
+    return out
+
+
+def own_elements(meshes):
+    """The meshes that are an element of their own in the IFC: all but those that are part
+    of a standing seam tray (tray_owners), which go out in the tray's element."""
+    by_elev = {}
+    for m in meshes:
+        by_elev.setdefault(m.get("elevation", ""), []).append(m)
+    joined = set()
+    for group in by_elev.values():
+        joined.update(tray_owners(group))
+    return [m for m in meshes if id(m) not in joined]
+
+
 # ── property sets ────────────────────────────────────────────────────────
 
 def _owner(ifc):
@@ -474,21 +507,40 @@ def meshes_to_ifc(meshes, params, infos=None):
         assembly.ObjectPlacement = ifc.createIfcLocalPlacement(None, ifc.createIfcAxis2Placement3D(
             ifc.createIfcCartesianPoint((0.0, 0.0, 0.0)), None, None))
         parts = []
+        owners = tray_owners(by_elev.get(name, []))
+        joined = {}
         for mesh in by_elev.get(name, []):
+            if id(mesh) in owners:
+                joined.setdefault(id(owners[id(mesh)]), []).append(mesh)
+        for mesh in by_elev.get(name, []):
+            if id(mesh) in owners:
+                continue                      # part of a tray: in that tray's element
             ifc_class, predefined, label = _IFC_TYPE_MAP.get(mesh.get("ifc_type"), ("IfcBuildingElementProxy", None, None))
             if mesh.get("ifc_type") == "plank" and pe["seam"]:
                 label = "Standing seam tray"
+            elif mesh.get("eaves_support"):
+                label = "Eaves support profile"
             elif mesh.get("ifc_type") == "plank" and pe.get("section"):
                 label = "Cladding plank (%s)" % pe["section"]["name"]
             if mesh.get("ifc_type") == "panel" and pe["panels_as_walls"]:
                 ifc_class, predefined = "IfcWall", "USERDEFINED"
             try:
-                elem = _make_element(ifc, body, ifc_class, mesh.get("name") or label, _body(ifc, mesh),
+                solids, kind = _body(ifc, mesh)
+                marks = [_mesh_fingerprint(mesh)]
+                for other in joined.get(id(mesh), []):       # the tray's seams, its drip: one element, every solid of it
+                    try:
+                        more, its = _body(ifc, other)
+                    except Exception:   # noqa: BLE001 — a fold that will not make a solid is left out, not the tray
+                        continue
+                    solids = solids + more
+                    kind = kind if its == kind else "SolidModel"
+                    marks.append(_mesh_fingerprint(other))
+                elem = _make_element(ifc, body, ifc_class, mesh.get("name") or label, (solids, kind),
                                      predefined, label)
             except Exception:
                 continue
             parts.append(elem)
-            fingerprints[elem.id()] = "%s|%s|%s" % (ifc_class, mesh.get("name", ""), _mesh_fingerprint(mesh))
+            fingerprints[elem.id()] = "%s|%s|%s" % (ifc_class, mesh.get("name", ""), "+".join(marks))
             seam_tray = mesh.get("ifc_type") == "plank" and pe["seam"]
             by_material.setdefault((mesh.get("ifc_type"), seam_tray), []).append(elem)
             common = {"Reference": ("IfcIdentifier", label), "IsExternal": ("IfcBoolean", True)}

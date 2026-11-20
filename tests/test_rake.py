@@ -19,7 +19,7 @@ from cladding_corners import TRIM_BACK  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
 from cladding_primitives import ring_at  # noqa: E402
 from fabric_extract import extract_elevation, rake_link, chain_link, hip_link, valley_link, valley_links  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 
 H = 3000.0
 PANEL, PLANK_H, PLANK_V = dict(cladding_type="panel"), dict(cladding_type="plank", plank_orient="horizontal"), dict(cladding_type="plank", plank_orient="vertical")
@@ -174,5 +174,5 @@ def test_the_corner_is_one_detail_for_both_faces_whatever_their_chains_say():
 def test_a_raking_corner_exports():
     _faces, params, out = _build(15.0, corner="profile", **PANEL)
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
-    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
+    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
     assert [e.Name for e in ifc.by_type("IfcMember") if "Corner Profile" in e.Name] == ["Leaning Corner Profile Upright"]
