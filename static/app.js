@@ -185,6 +185,7 @@ function elevationCard(e, i) {
                                            return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind === 'eaves' ? (valleyRecords(e).some(v => v.kind === 'eaves' && isPitched(e) && isPitched(state.elevations.find(m => m.name === v.with) || {})) ? 'mansard' : 'eaves (no overhang)') : kind} with ${with_.join(', ')}` : ''; }).join('')
         + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
+        + (ok && matchedTo(e) ? ` · battens matched to ${(matchedTo(e).chain || matchedTo(e).name)} ${matchedTo(e).side}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
         + (e.cover ? ` · course ${Math.round(e.cover)}` : '')
         + (e.panelRows && e.panelRows.length ? ` · rows ${e.panelRows.map(Math.round).join('/')}` : '')
@@ -216,7 +217,7 @@ function renderElevationList() {
         if (members.length > 1) {
             html += `<div class="chain-head">${chain.name} · ${members.map(m => m.name.replace('Elevation ', '')).join(' → ')} · run ${Math.round(chain.length)} mm${pending}</div>`;
             html += cornerRows(chain, members);
-        } else if (pending) {
+        } else if (pending || !/^Chain \d+$/.test(chain.name)) {         // a named chain says its name, one face or many
             html += `<div class="chain-head">${chain.name}${pending}</div>`;
         }
         for (const m of members) html += elevationCard(m, state.elevations.indexOf(m));
@@ -489,11 +490,20 @@ function relayoutChain(chain) {
 // one face that reaches the line) and extracts both again, which is what joins them; the
 // cross leaves that pair alone from then on.
 const HEAL_KINDS = { corner: 'a corner', ridge: 'a ridge', hip: 'a hip', valley: 'a valley', rake: 'a raking corner', edge: 'an edge (no junction is detailed between a roof and a wall)', abutment: 'an abutment (the other face runs on past it, and is left as it is)' };
-const healKey = (a, b) => [a.name, b.name].sort().join(' | ');
+//
+// Where a face runs on a little past the line instead (a wall drawn through its corner, a
+// roof's edge past the wall it lands on) the offer is the other way about: what is past the
+// line is ghosted in red, and the tick trims it off (h.trim: the outlines go to the face as
+// "trims", cut out of its surface when it is read again), bringing a face that is short
+// up to the line with it. A pair can have both offers; each is declined on its own.
+const healKey = (a, b, trim) => [a.name, b.name].sort().join(' | ') + (trim ? ' | trim' : '');
 function showHeals() {
     state.heals = (state.heals || []).filter(h => state.elevations.includes(h.a) && state.elevations.includes(h.b));
-    renderHeals(state.heals.map(h => ({ quads: h.quads.a.concat(h.quads.b),
-        title: `Heal ${h.a.name} and ${h.b.name}: extend ${h.quads.a.length && h.quads.b.length ? 'both' : (h.quads.a.length ? h.a.name : h.b.name)} by up to ${Math.round(h.gap)} mm so they meet at ${HEAL_KINDS[h.kind] || 'an edge'}` })),
+    renderHeals(state.heals.map(h => h.trim ? { quads: h.show.concat(h.quads.a, h.quads.b),
+        title: `Trim ${h.cut.a.length && h.cut.b.length ? h.a.name + ' and ' + h.b.name : (h.cut.a.length ? h.a.name : h.b.name)} back by up to ${Math.round(h.over)} mm, to the line ${h.a.name} and ${h.b.name} meet on, so they meet at ${HEAL_KINDS[h.kind] || 'an edge'}`
+            + (h.quads.a.length || h.quads.b.length ? `; ${h.quads.a.length ? h.a.name : h.b.name} is extended to it` : '') }
+        : { quads: h.quads.a.concat(h.quads.b),
+        title: `Heal ${h.a.name} and ${h.b.name}: extend ${h.quads.a.length && h.quads.b.length ? 'both' : (h.quads.a.length ? h.a.name : h.b.name)} by up to ${Math.round(h.gap)} mm so they meet at ${HEAL_KINDS[h.kind] || 'an edge'}` }),
         applyHeal, dismissHeal);
 }
 
@@ -513,8 +523,13 @@ _json.dumps(_hl(_json.loads(_heal_a), _json.loads(_heal_b)))`));
         } catch (err) { console.warn('heal check failed', err); }
         state.healNo = state.healNo || new Set();
         links.forEach((h, i) => {
-            if (!h || state.healNo.has(healKey(e, others[i]))) return;
-            state.heals.push({ a: e, b: others[i], kind: h.kind, gap: h.gap, length: h.length, quads: { a: h.a, b: h.b } });
+            if (!h) return;
+            if ((h.a.length || h.b.length) && !state.healNo.has(healKey(e, others[i])))
+                state.heals.push({ a: e, b: others[i], kind: h.kind, gap: h.gap, length: h.length, quads: { a: h.a, b: h.b } });
+            const t = h.trim;                     // one or both run on past the line: the overshoot, to trim
+            if (t && !state.healNo.has(healKey(e, others[i], true)))
+                state.heals.push({ a: e, b: others[i], kind: t.kind, trim: true, over: t.over, length: h.length, show: t.show,
+                                   cut: { a: t.a, b: t.b }, quads: { a: t.add.a, b: t.add.b } });
         });
     }
     showHeals();
@@ -524,8 +539,12 @@ _json.dumps(_hl(_json.loads(_heal_a), _json.loads(_heal_b)))`));
 async function applyHeal(i) {
     const h = state.heals[i];
     if (!h) return;
-    state.heals.splice(i, 1);
+    state.heals = state.heals.filter(x => !(x.a === h.a && x.b === h.b) && !(x.a === h.b && x.b === h.a));   // the pair's other offer goes with it
     showHeals();
+    if (h.trim) {                                 // what ran on past the line comes off each face's surface
+        h.a.trims = (h.a.trims || []).concat(h.cut.a);
+        h.b.trims = (h.b.trims || []).concat(h.cut.b);
+    }
     // a strip, and the elements it was healed to: those do not cut it, everything else does (fabric_extract._extract)
     // (healed up under a face that runs on over it, an "abutment", the strip stops under what it was healed to)
     const onto = m => m.picks.map(p => p.mesh.userData.index), under = h.kind === 'abutment';
@@ -551,7 +570,7 @@ async function applyHeal(i) {
 function dismissHeal(i) {
     const h = state.heals[i];
     if (!h) return;
-    (state.healNo = state.healNo || new Set()).add(healKey(h.a, h.b));
+    (state.healNo = state.healNo || new Set()).add(healKey(h.a, h.b, h.trim));
     state.heals.splice(i, 1);
     showHeals();
 }
@@ -771,7 +790,7 @@ function onViewportClick(event) {
     if (existing >= 0) e.picks.splice(existing, 1);
     else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal), point: toIfc(hit.point) });
     e.highlights.forEach(h => { highlightGroup.remove(h); h.geometry.dispose(); });
-    if (!e.picks.length) e.heals = [];         // nothing left to heal onto
+    if (!e.picks.length) { e.heals = []; e.trims = []; }     // nothing left to heal onto, or to trim
     e.highlights = pickHighlights(e);
     if (!e.storey) { const meta = meshMeta[hit.mesh.userData.index]; e.storey = meta && meta.storey ? meta.storey : null; }
     runExtraction(e);
@@ -841,7 +860,7 @@ async function extractOnce(e) {
     e.error = null;
     renderElevationList();
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
-    const payload = { name: e.name, faces: tris, heals: e.heals || [], outward: e.picks[0].normal, context,
+    const payload = { name: e.name, faces: tris, heals: e.heals || [], trims: e.trims || [], outward: e.picks[0].normal, context,
                       seeds: e.picks.map(p => p.point).filter(Boolean),
                       options: { penetrations: document.getElementById('penetrations').checked, wall_depth: wallDepth(e.picks) } };
     const json = JSON.stringify(payload);
@@ -880,7 +899,10 @@ _json.dumps(_ex(_pl))`);
                 + (met('eaves') ? (isPitched(e) && valleys.filter(v => v.kind === 'eaves').every(v => isPitched(v.face))
                     ? ` · a mansard with ${met('eaves')}: the flatter slope runs on over the steeper one's cladding with a drip, and the steeper one stops under it`
                     : ` · an eaves with ${met('eaves')}, no overhang: the roof runs on over the wall's cladding with a drip, and the wall stops under it`) : '');
-            const near = heals.length ? ` · nearly meets ${heals.map(h => (h.a === e ? h.b : h.a).name).join(' and ')}: tick the red strip to heal the junction` : '';
+            const withOf = hs => [...new Set(hs.map(h => (h.a === e ? h.b : h.a).name))].join(' and ');
+            const short = heals.filter(h => !h.trim), past = heals.filter(h => h.trim);
+            const near = (short.length ? ` · nearly meets ${withOf(short)}: tick the red strip to heal the junction` : '')
+                + (past.length ? ` · runs past where it meets ${withOf(past)}: tick the red area to trim it back to the line` : '');
             setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley + near, 'ready');
             // The view stays where it was put: picking a face must not move the camera.
         } else {
@@ -929,7 +951,7 @@ function val(id) { return document.getElementById(id).value; }
 // face of another chain loads that chain's settings into it, and any edit is kept by the
 // chain shown (state.formChain), so one chain's choices never change another's. Live trim,
 // panels as walls and shared offcuts stay job-wide.
-const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model', 'seam_full_length', 'barriers'];
+const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model', 'seam_full_length', 'match_battens', 'barriers'];
 function formSettings() {
     const s = { corner: toggleValue('corner-type') || 'mitre' };
     for (const k of NUM) { const v = parseFloat(val(k)); if (isFinite(v)) s[k] = v; }
@@ -1089,6 +1111,7 @@ function getParams() {
     p.cladding_type = toggleValue('cladding-type');
     p.rotate = document.getElementById('rotate').checked;
     p.battens_from_model = document.getElementById('battens_from_model').checked;
+    p.match_battens = document.getElementById('match_battens').checked;
     p.seam_full_length = document.getElementById('seam_full_length').checked;
     p.panels_as_walls = document.getElementById('panels_as_walls').checked;
     p.ifc_schema = ifcSchema();
@@ -1272,14 +1295,23 @@ function updateDerivedStatic(p) {
 // Set out from the model's columns, the battens are fixed, and with horizontal planks or
 // panels they are all the offset slider would move. Under vertical planks it still moves
 // the planks, so it stays.
+// The face this one's upright battens follow, if any: the chain directly above or below it
+// on the same wall (cladding_match), as the last build found it.
+function matchedTo(e) {
+    const info = ((window._lastPreview || {}).info || []).find(i => e.result && i.elevation === e.result.name);
+    return (info && info.matched_to) || null;
+}
+
 function lockOffsetToModel(i) {
-    const fixed = !!(i && i.model_posts) && !(toggleValue('cladding-type') === 'plank' && toggleValue('plank-orient') === 'vertical');
+    const to = i && i.matched_to;
+    const fixed = !!(i && (i.model_posts || to)) && !(toggleValue('cladding-type') === 'plank' && toggleValue('plank-orient') === 'vertical');
     for (const id of ['offset', 'edit-offset']) {
         const s = document.getElementById(id);
         s.disabled = fixed;
-        s.title = fixed ? "Set out from the model's columns: the battens follow the client's" : '';
+        s.title = !fixed ? '' : to ? `Matched to the battens of ${to.chain || to.name} ${to.side}: move them there, or untick "Match the battens" for this chain`
+                                   : "Set out from the model's columns: the battens follow the client's";
     }
-    if (fixed) document.getElementById('offset-val').textContent = 'model';
+    if (fixed) document.getElementById('offset-val').textContent = to ? 'matched' : 'model';
 }
 
 function renderInfo(infos) {
@@ -1288,7 +1320,8 @@ function renderInfo(infos) {
     const set = (id, v) => document.getElementById(id).textContent = v;
     if (!i) { ['dim-size', 'dim-centres', 'dim-courses', 'dim-cuts', 'dim-boards'].forEach(id => set(id, '--')); return; }
     set('dim-size', `${Math.round(i.width)} × ${Math.round(i.height)} mm`);
-    set('dim-centres', i.model_posts ? `on ${i.model_posts} model columns` : `${i.batten_centres.toFixed(0)} mm`);
+    set('dim-centres', i.model_posts ? `on ${i.model_posts} model columns`
+        : i.matched_to ? `matched to ${i.matched_to.chain || i.matched_to.name} ${i.matched_to.side} (${i.matched_to.count})` : `${i.batten_centres.toFixed(0)} mm`);
     lockOffsetToModel(i);
     set('dim-courses', `${i.n_courses} @ ${i.cover.toFixed(0)}`);
     set('dim-cuts', `L ${Math.round(i.closing_cut_left)} · R ${Math.round(i.closing_cut_right)} · T ${Math.round(i.closing_cut_top)}`);
@@ -1306,7 +1339,7 @@ function setStatus(text, cls) {
 // (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
-const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls', 'seam_full_length', 'barriers'];
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls', 'seam_full_length', 'match_battens', 'barriers'];
 const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient', 'plank-profile'];
 
 function snapshotState() {
@@ -1343,6 +1376,16 @@ function snapshotState() {
              seq: state.seq, active: act ? act.name : null, settings, chains };
 }
 
+// A state file is named after the chains in it, so it says what it holds: one chain's own
+// name, two or three joined, or the first and how many more. Chains never named (a state
+// from before chains had names) fall back on the dated name every other download has.
+function stateFileName(snap) {
+    const names = snap.chains.filter(c => c.members.length).map(c => c.name);
+    if (!names.length || names.every(n => /^Chain \d+$/.test(n))) return downloadName('state.xml');
+    const label = names.length <= 3 ? names.join(' + ') : `${names[0]} + ${names.length - 1} more`;
+    return label.replace(/[^A-Za-z0-9 _.,()+-]/g, ' ').replace(/\s+/g, ' ').trim() + '.state.xml';
+}
+
 async function saveState() {
     if (!pyReady) { setStatus('The engine is still loading — try again in a moment', 'busy'); return; }
     const snap = snapshotState();
@@ -1355,7 +1398,7 @@ import json as _json
 from cladding_state import to_xml as _to_xml
 _to_xml(_json.loads(_state_json))`);
         const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' })), a = document.createElement('a');
-        a.href = url; a.download = downloadName('state.xml'); document.body.appendChild(a); a.click();
+        a.href = url; a.download = stateFileName(snap); document.body.appendChild(a); a.click();
         document.body.removeChild(a); URL.revokeObjectURL(url);
         const n = snap.chains.reduce((k, c) => k + c.members.length, 0);
         setStatus(`State saved: ${snap.chains.filter(c => c.members.length).length} chain(s), ${n} elevation(s)`
@@ -1398,7 +1441,7 @@ from cladding_state import load as _load
 _json.dumps(_load(_state_xml))`));
     } catch (err) { res = { ok: false, error: err.message }; }
     if (!res.ok) { setStatus('Not loaded: ' + res.error, 'busy'); return false; }
-    const merged = restoreState(res.state, !!add && state.elevations.length > 0);
+    const merged = restoreState(res.state, !!add && state.elevations.length > 0, fileName);
     await updatePreview();
     if (!allMeshes.length) fitCameraTo(cladGroup.children.length ? cladGroup : outlineGroup);
     const n = state.elevations.length;
@@ -1407,13 +1450,29 @@ _json.dumps(_load(_state_xml))`));
         if (merged.renamed.length) parts.push(`renamed ${merged.renamed.join(', ')}`);
         if (merged.skipped.length) parts.push(`${merged.skipped.length} already in the job, left out (${merged.skipped.join(', ')})`);
         if (merged.otherModel) parts.push(`saved from ${merged.otherModel}: placed by its coordinates`);
+        if (merged.near.length) parts.push(nearNote(merged.near, res.state.saved, fileName));
         merged.note = parts.join(' · ');
-        setStatus(`Added ${fileName || 'state'}: ${merged.note}`, 'ready');
+        setStatus(`Added ${fileName || 'state'}: ${merged.note}`, merged.near.length ? 'busy' : 'ready');
         return merged;
     }
     setStatus(`Loaded ${fileName || 'state'}: ${state.chains.length} chain(s), ${n} elevation(s)`
               + (allMeshes.length ? '' : ' · no host model open'), 'ready');
     return {};
+}
+
+// What to say of faces left out because the job has nearly the same ones: which chains, and
+// which of the two is the later save, so the latest file is the one that gets used.
+function nearNote(near, saved, fileName) {
+    const pairs = [...new Set(near.map(q => `${q.chain} ≈ ${q.inJob.name}`))];
+    const mine = near[0].inJob.source, theirs = saved ? new Date(saved) : null, ours = mine && mine.saved ? new Date(mine.saved) : null;
+    const file = fileName || 'the file being added', job = mine && mine.file ? mine.file : 'the job as it stands';
+    let advice;
+    if (!ours || isNaN(ours)) advice = `the job's own has not come from a saved file, so it is the latest: keep it, or save it over ${file}`;
+    else if (!theirs || isNaN(theirs)) advice = `${file} does not say when it was saved: check which is the latest before using it`;
+    else if (theirs > ours) advice = `${file} is the later save (${savedWhen(saved)}, against ${savedWhen(mine.saved)} for ${job}): use it instead. Remove the chain from the job, or Load state with ${file}`;
+    else advice = `${job} is the later save (${savedWhen(mine.saved)}, against ${savedWhen(saved)}): keep it and leave ${file} out`;
+    return `WARNING: ${near.length} face(s) left out because the job has nearly the same surfaces, but not the same (${pairs.join(', ')}). `
+        + `This looks like two saves of one chain. Use the latest file: ${advice}`;
 }
 
 // A saved state's job-wide settings (keyed by form field) as a chain's own settings: what a
@@ -1428,6 +1487,22 @@ function chainSettingsOf(s) {
     for (const k of ['seam_deck', 'counter_batten', 'custom_profile', 'custom_section']) if (s[k]) out[k] = s[k];
     return Object.keys(out).length ? out : null;
 }
+
+// Two surfaces that are nearly the same wall face but not the same: on one plane, and one
+// covering at least half of the other. A chain saved, changed and saved again comes back
+// like this: adding both would clad the wall twice.
+function nearSurface(a, b) {
+    if (!a || !b || !a.frame || !b.frame || sameSurface(a, b)) return false;
+    const dot = (p, q) => p.reduce((t, x, k) => t + x * q[k], 0);
+    if (dot(a.frame.n, b.frame.n) < 0.999 || dot(a.frame.u, b.frame.u) < 0.99) return false;
+    const off = b.frame.origin.map((x, k) => x - a.frame.origin[k]);
+    if (Math.abs(dot(off, a.frame.n)) > 5) return false;
+    const v = a.frame.v || [0, 0, 1], u0 = dot(off, a.frame.u), v0 = dot(off, v);
+    const lap = (p0, p1, q0, q1) => Math.max(0, Math.min(p1, q1) - Math.max(p0, q0));
+    const shared = lap(0, a.width, u0, u0 + b.width) * lap(0, a.height, v0, v0 + b.height);
+    return shared >= 0.5 * Math.min(a.width * a.height, b.width * b.height);
+}
+const savedWhen = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
 
 // Two surfaces are the same wall face: the same place, direction and size.
 function sameSurface(a, b) {
@@ -1444,10 +1519,11 @@ function sameSurface(a, b) {
 // free one, and a wall face the job already has is left out, so the same state added twice
 // adds nothing. Returns what was added ({chains, elevations, renamed, skipped}), or null
 // for a plain load.
-function restoreState(st, add) {
+function restoreState(st, add, fileName) {
     closeEditWidget();
     if (in2D()) { exit2D(); update2DButton(); }
-    const merged = add ? { chains: 0, elevations: 0, renamed: [], skipped: [], otherModel: null } : null;
+    const merged = add ? { chains: 0, elevations: 0, renamed: [], skipped: [], near: [], otherModel: null } : null;
+    const source = { file: fileName || null, saved: st.saved || null };       // where each chain it brings came from
     if (!add) {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
         state.heals = []; state.healNo = new Set(); renderHeals([]);      // a new job: nothing offered, nothing declined
@@ -1484,7 +1560,7 @@ function restoreState(st, add) {
         const chain = { name: c.name, members: [], length: 0, built: !!c.built,
                         topZ: c.topZ === null || c.topZ === undefined ? null : c.topZ + d[2],
                         bottomZ: c.bottomZ === null || c.bottomZ === undefined ? null : c.bottomZ + d[2],
-                        edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}),
+                        edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}), source,
                         settings: c.settings ? Object.assign({}, c.settings) : (add ? chainSettingsOf(s) : null) };
         for (const m of c.members || []) {
             const surface = m.surface;
@@ -1494,6 +1570,10 @@ function restoreState(st, add) {
             if (add) {
                 const twin = state.elevations.find(x => sameSurface(x.result, surface));
                 if (twin) { merged.skipped.push(`${m.name.replace('Elevation ', '')} = ${twin.name.replace('Elevation ', '')}`); continue; }
+                // Nearly the same face as one the job has, but not the same: an earlier or later
+                // save of the same chain. Not added on top of it; the newer of the two is named.
+                const close = state.elevations.find(x => x.result && x.result.ok && nearSurface(x.result, surface));
+                if (close) { merged.near.push({ face: m.name, chain: c.name, twin: close.name, inJob: close.chain }); continue; }
                 if (state.elevations.some(x => x.name === name)) {
                     name = freeElevation();
                     merged.renamed.push(`${m.name.replace('Elevation ', '')} → ${name.replace('Elevation ', '')}`);
@@ -1522,7 +1602,9 @@ function restoreState(st, add) {
         chain.datumFrom = byName[c.datumFrom] && byName[c.datumFrom].chain === chain ? byName[c.datumFrom] : null;
         if (!chain.members.length) continue;      // every face of it left out: no chain, and no name used up
         if (add && state.chains.some(x => x.name === chain.name)) {
-            do { chain.name = 'Chain ' + (++state.seq); } while (state.chains.some(x => x.name === chain.name));
+            // a numbered chain takes the next number; a named one keeps its name with a number after it
+            if (/^Chain \d+$/.test(chain.name)) do { chain.name = 'Chain ' + (++state.seq); } while (state.chains.some(x => x.name === chain.name));
+            else chain.name = freeChainName(chain.name, chain);
             merged.renamed.push(`${c.name} → ${chain.name}`);
         }
         relayoutChain(chain);
@@ -2017,7 +2099,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_rake', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

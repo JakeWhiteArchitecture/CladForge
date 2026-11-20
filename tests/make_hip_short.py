@@ -2,6 +2,10 @@
 modelled 150 mm short of the hip (on plan), as roofs often are: the two slopes nearly meet
 but neither has an edge on the hip line, so they are not joined until they are healed. Used
 by the browser smoke test.
+
+And tests/hip_long_roof.ifc, the other way about: each slab drawn 300 mm on **past** the hip,
+so each slope runs through the other's plane and neither has an edge on the hip line. They
+are joined by trimming what is past the line.
 Run: python tests/make_hip_short.py"""
 
 import math
@@ -16,9 +20,11 @@ from make_valley import slab
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hip_short_roof.ifc")
 T = math.tan(math.radians(30.0))
 SHORT = 150.0
+LONG = -300.0
+OUT_LONG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hip_long_roof.ifc")
 
 
-def main():
+def main(g=SHORT, out=OUT):
     ifc = ifcopenshell.api.run("project.create_file", version="IFC4")
     project = ifcopenshell.api.run("root.create_entity", ifc, ifc_class="IfcProject", name="Hip Roof, short")
     ifcopenshell.api.run("unit.assign_unit", ifc, length={"is_metric": True, "raw": "MILLIMETERS"})
@@ -31,14 +37,14 @@ def main():
     ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=project, products=[site])
     ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=site, products=[building])
     ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=building, products=[storey])
-    g = SHORT
     element(ifc, body, storey, "IfcRoof", "Roof A", None, shape=slab(
         ifc, body, [(g, 0), (6000, 0), (6000, 3000), (3000 + g, 3000)], lambda x, y: 3000.0 + y * T))
     element(ifc, body, storey, "IfcRoof", "Roof C", None, shape=slab(
         ifc, body, [(0, g), (3000, 3000 + g), (3000, 6000), (0, 6000)], lambda x, y: 3000.0 + x * T))
-    ifc.write(OUT)
-    print("wrote", OUT, os.path.getsize(OUT), "bytes")
+    ifc.write(out)
+    print("wrote", out, os.path.getsize(out), "bytes")
 
 
 if __name__ == "__main__":
     main()
+    main(LONG, OUT_LONG)

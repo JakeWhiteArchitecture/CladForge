@@ -35,7 +35,7 @@ from shapely import union_all
 from shapely.ops import unary_union, polygonize
 from shapely.affinity import translate
 
-from cladding_booleans import iter_polygons, polygon_to_rings, _difference, near_misses, ROBUST_GRID
+from cladding_booleans import iter_polygons, polygon_to_rings, _difference, _intersection, near_misses, ROBUST_GRID
 
 PLANE_TOL = 25.0          # mm – off-plane distance still treated as on the face
 VERTICAL_TOL = math.sin(math.radians(1.0))   # a face this close to vertical is a wall, and is stood up
@@ -457,6 +457,18 @@ def _extract(payload):
     u = face_axis(n, faces)
     result["pitch"], result["faces_down"] = round(face_pitch(n), 1), n[2] < 0
     region = _union_faces(faces, n, u)
+    # What was trimmed off the face (heal_link's "trim", the app's tick): outlines in the
+    # world, each the part of the face that ran on past the line it meets another on.
+    for ring in payload.get("trims") or []:
+        try:
+            cut = Polygon([_to_local(tuple(float(c) for c in q), n, u) for q in ring])
+            cut = cut if cut.is_valid else cut.buffer(0)
+            if region is not None and not cut.is_empty:
+                region = _difference(region, cut)
+                if region is not None and not region.is_empty:          # in a hair and out again: no sliver is left on the line
+                    region = region.buffer(-0.02, join_style=2, mitre_limit=5.0).buffer(0.02, join_style=2, mitre_limit=5.0)
+        except Exception:   # noqa: BLE001 — a trim that will not build leaves the face as picked
+            continue
     if region is None or region.is_empty:
         result["warnings"].append("Picked faces have no area")
         return result
@@ -1078,6 +1090,8 @@ def valley_links(a, others):
 HEAL_MAX = 500.0          # mm – an edge this far or less from the line two faces would meet on nearly touches it
 HEAL_ON = 2.0             # mm – and this close, it is on it already
 HEAL_MIN = 300.0          # mm – the two have to run along at least this much of the line together
+HEAL_TRIM_MAX = 1000.0    # mm – a face that runs on past the line by this much or less overshoots it: it can be trimmed back
+HEAL_TRIM_SHARE = 0.5     # and what is past the line is under this share of what is short of it: the overshoot, not the face
 
 
 def _joined(a, b):
@@ -1165,6 +1179,53 @@ def _reach(elev, other, line, base):
     return ([] if reaches else strips, (min(ts), max(ts))) if ts else (None, None)
 
 
+def _overshoot(elev, other, line):
+    """Where *elev* runs on through the line its plane meets *other*'s on: the part of it
+    past the line, as {"rings": its outlines in the world, "show": the same as triangles
+    (each a quad whose last corner is repeated, as the app draws strips), "over": how far
+    past the line it runs}. None unless it is an overshoot: the smaller side of the line by
+    far (HEAL_TRIM_SHARE) and no more than HEAL_TRIM_MAX deep."""
+    from shapely.ops import triangulate
+    f, fo = elev["frame"], other["frame"]
+    n, no = tuple(f["n"]), tuple(fo["n"])
+    w = _cross(n, line)
+    rate = _dot(no, w)
+    if abs(rate) < 1e-6:
+        return None
+    V = f.get("v") or (0.0, 0.0, 1.0)
+    wu, wv, lu, lv = _dot(w, f["u"]), _dot(w, V), _dot(line, f["u"]), _dot(line, V)
+    off = lambda q: -_dot(no, _sub(_at(f, q[0], q[1]), fo["origin"])) / rate     # noqa: E731 — along w from the point to the line
+    try:
+        shape = _union([Polygon(pg["exterior"], pg.get("holes") or []).buffer(0) for pg in elev.get("polygons") or []])
+        q0 = (elev["polygons"][0]["exterior"][0][0], elev["polygons"][0]["exterior"][0][1])
+        d0 = off(q0)
+        at = (q0[0] + wu * d0, q0[1] + wv * d0)                # a point of the line, in the face
+        R = 1e6
+        ends = [(at[0] - lu * R, at[1] - lv * R), (at[0] + lu * R, at[1] + lv * R)]
+        # each side of the line, by an operation that cannot kill the engine (cladding_booleans._safe)
+        sides = [_intersection(shape, Polygon(ends + [(ends[1][0] + s * wu * R, ends[1][1] + s * wv * R),
+                                                      (ends[0][0] + s * wu * R, ends[0][1] + s * wv * R)])) for s in (1.0, -1.0)]
+    except Exception:   # noqa: BLE001 — a face that will not split is left alone
+        return None
+    if any(g is None for g in sides):
+        return None
+    small, big = sorted(sides, key=lambda g: g.area)
+    if small.is_empty or small.area < 100.0 or small.area > HEAL_TRIM_SHARE * big.area:
+        return None
+    parts = [g for g in getattr(small, "geoms", [small]) if g.geom_type == "Polygon" and g.area >= 100.0]
+    over = max((abs(off(q)) for g in parts for q in g.exterior.coords), default=0.0)
+    if not parts or over <= HEAL_ON or over > HEAL_TRIM_MAX + 0.5:
+        return None
+    world = lambda q: [round(c, 2) for c in _at(f, q[0], q[1])]                  # noqa: E731
+    show = []
+    for g in parts:
+        for t in triangulate(g):
+            if g.contains(t.representative_point()):
+                c = [world(q) for q in list(t.exterior.coords)[:3]]
+                show.append(c + [c[2]])
+    return {"rings": [[world(q) for q in list(g.exterior.coords)[:-1]] for g in parts], "show": show, "over": round(over, 1)}
+
+
 def heal_link(a, b):
     """Do faces a and b nearly meet, so that extending one or both to the line their planes
     meet on would join them? None if not (they are joined already, are parallel, are too
@@ -1176,7 +1237,16 @@ def heal_link(a, b):
     together, no junction detailed between them), or "abutment": one of the two runs on through
     the line (a roof oversailing a wall, its plywood carried over the wall's head), so only
     the other is extended, up to it and through whatever it is made of; the one that runs
-    on is left as it is}."""
+    on is left as it is}.
+
+    **Where a face runs on a little past the line** (HEAL_TRIM_MAX: a wall drawn through a
+    corner, a roof's edge past the wall it lands on) there is also, under "trim", the other
+    way to join them (two upright walls up to CORNER_TOL past their corner are a corner as
+    they stand, and are not offered): {"kind": what they meet at once trimmed, "a", "b": the outlines to cut
+    off each, in the world, "show": those as triangles for the app to draw, "over": how far
+    past the line the deepest runs, "add": {"a", "b"} the strips that bring a face that is
+    short up to the line}. With nothing to extend (each runs through the other, or the
+    other is on the line already) "a" and "b" are empty and "trim" is the only offer."""
     fa, fb = a["frame"], b["frame"]
     na, nb = tuple(fa["n"]), tuple(fb["n"])
     line = _cross(na, nb)
@@ -1191,30 +1261,44 @@ def heal_link(a, b):
         return None
     base = tuple(ca[i] - down[i] * _dot(nb, _sub(ca, fb["origin"])) / step for i in range(3))
     (sa, ra), (sb, rb) = _reach(a, b, line, base), _reach(b, a, line, base)
-    through = sa == "through" or sb == "through"
-    if sa == "through" and sb == "through":
-        return None                                   # each runs through the other: nothing nearly meets
-    sa, sb = ([] if sa == "through" else sa), ([] if sb == "through" else sb)
-    if ra is None or rb is None or not (sa or sb):
+    past_a, past_b = sa == "through", sb == "through"
+    through = past_a or past_b
+    sa, sb = ([] if past_a else sa), ([] if past_b else sb)
+    if ra is None or rb is None:
         return None
     t0, t1 = max(ra[0], rb[0]), min(ra[1], rb[1])
     if t1 - t0 < HEAL_MIN:
         return None
     wall_a, wall_b = abs(na[2]) < 1e-6, abs(nb[2]) < 1e-6
-    if through:
-        kind = "abutment"                             # one runs up to the other, which carries on past
-    elif wall_a and wall_b:
-        kind = "corner"
+    if wall_a and wall_b:
+        met = "corner"
     elif wall_a or wall_b or na[2] < 0 or nb[2] < 0:
         # a raking corner (a leaning wall and another wall); or a roof and a wall: brought together, no junction detailed
-        kind = "rake" if max(abs(na[2]), abs(nb[2])) <= RAKE_LEAN else "edge"
+        met = "rake" if max(abs(na[2]), abs(nb[2])) <= RAKE_LEAN else "edge"
     else:
         cb = _at(fb, *_centre(b))
         front = _dot(nb, _sub(ca, fb["origin"])) > 0 and _dot(na, _sub(cb, fa["origin"])) > 0
-        kind = "valley" if front else ("ridge" if abs(line[2]) < HIP_SLOPE else "hip")
+        met = "valley" if front else ("ridge" if abs(line[2]) < HIP_SLOPE else "hip")
     quads = lambda strips: [[[round(c, 2) for c in p] for p in s["quad"]] for s in strips or []]      # noqa: E731
-    return {"kind": kind, "a": quads(sa), "b": quads(sb), "length": round(t1 - t0, 1),
-            "gap": round(max(s["gap"] for s in (sa or []) + (sb or [])), 1)}
+    # Where a face runs on a little past the line, the other way to bring them together:
+    # trim what is past it (and extend the other to the line, where that one is short).
+    trim = None
+    if through:
+        oa = _overshoot(a, b, line) if past_a else None
+        ob = _overshoot(b, a, line) if past_b else None
+        if (oa or not past_a) and (ob or not past_b):
+            trim = {"kind": met, "a": oa["rings"] if oa else [], "b": ob["rings"] if ob else [],
+                    "show": (oa["show"] if oa else []) + (ob["show"] if ob else []),
+                    "over": max(o["over"] for o in (oa, ob) if o), "add": {"a": quads(sa), "b": quads(sb)}}
+    extend = bool(sa or sb) and not (past_a and past_b)       # each runs through the other: nothing nearly meets
+    if not extend and not trim:
+        return None
+    out = {"kind": "abutment" if through else met,            # one runs up to the other, which carries on past
+           "a": quads(sa) if extend else [], "b": quads(sb) if extend else [], "length": round(t1 - t0, 1),
+           "gap": round(max(s["gap"] for s in (sa or []) + (sb or [])), 1) if extend else 0.0}
+    if trim:
+        out["trim"] = trim
+    return out
 
 
 def heal_links(a, others):
