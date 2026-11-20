@@ -19,7 +19,7 @@ from cladding_ridge import ridge_ends, ridge_parts
 from cladding_verge import verge_parts
 from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
-from cladding_eaves import eaves_parts
+from cladding_eaves import eaves_parts, eaves_under, join_eaves
 from cladding_rake import rake_ends, rake_parts
 
 
@@ -92,6 +92,7 @@ def build_all_groups(params):
     """(meshes, dims, infos) for every face, each group with its chain's settings, untrimmed:
     the exporters' quick source of dimensions and setting-out info."""
     meshes, dims, infos = [], [], []
+    join_eaves(params)
     for sub, _elevs in setting_groups(params):
         m, d, i = _build_all(_parse(sub))
         meshes, dims, infos = meshes + m, dims + d, infos + i
@@ -100,6 +101,7 @@ def build_all_groups(params):
 
 def generate_preview(params):
     meshes, dims, infos = [], [], []
+    join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
     for sub, _elevs in setting_groups(params):
         m, d, i = _preview_one(sub)
         meshes, dims, infos = meshes + m, dims + d, infos + i
@@ -125,7 +127,8 @@ def _preview_one(params):
     meshes = rake_parts(meshes, p, infos)
     meshes = verge_parts(meshes, p, infos)   # a roof slope's free side edges: the last tray out over a verge strip
     meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
-    meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays out over an eaves apron
+    meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
+    meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too

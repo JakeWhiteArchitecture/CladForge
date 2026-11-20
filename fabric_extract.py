@@ -420,14 +420,28 @@ def _extract(payload):
     # Strips healed onto the face (heal_link, the app's tick): each a quad in the world from
     # the face's own edge (its first two corners) to the line it was healed to, with the
     # elements it was healed to ("through", ids or names). A strip is part of the face, and
-    # what the model cuts out of the face it cuts out of the strip, with two differences. The
-    # elements it was healed to do not cut it: a wall healed up to a roof that oversails it
-    # passes through that roof's plywood, which would otherwise be cut out of it again and
-    # leave the same 20 mm to heal for ever. And anything else that cuts it cuts it right
-    # through to the line: no sliver of cladding is left between a rafter and the roof it
-    # carries. That includes the members, plates and generic objects that never cut a face
-    # as picked (HEAL_CUT_TYPES): a rafter is most often a member, and its tail does pass
-    # through a wall healed up to the roof.
+    # what the model cuts out of the face it cuts out of the strip, with these differences.
+    #
+    # Two faces brought together side by side (a corner, a ridge, a hip): the elements a
+    # strip was healed to do not cut it. A wall carried on to a corner passes through the
+    # other wall's own thickness, which would otherwise be cut out of it again.
+    #
+    # A face healed up *under* one that runs on over it ("under": a wall up to a roof that
+    # oversails it) stops under what it was healed to: the cladding ends below the underside
+    # of the plywood, it does not run up through it to the roof's top. How far below is the
+    # chain's top offset (the ventilation gap), which stands every top edge back.
+    #
+    # Anything that cuts a strip cuts it right through to the line: no sliver of cladding is
+    # left between a rafter and the roof it carries. That includes the members, plates and
+    # generic objects that never cut a face as picked (HEAL_CUT_TYPES): a rafter is most
+    # often a member, and its tail does pass through a wall healed up to the roof.
+    #
+    # And it cuts **level through the build-up**. A soffit or a rafter that slopes stands
+    # lower at the outside of the cladding than on the wall's face, so the cut is taken
+    # where the element is across the whole cladding zone (_zone_shadow), which is its
+    # height at the cladding's outside surface: every layer behind is cut back to match,
+    # the top under the plywood and each notch round a rafter's foot alike, and nothing
+    # further out runs into it.
     heals = [h if isinstance(h, dict) else {"quad": h} for h in payload.get("heals") or []]
     heals = [h for h in heals if len(h.get("quad") or []) == 4]
     healed = [[tuple(float(c) for c in h["quad"][i]) for i in idx] for h in heals for idx in ((0, 1, 2), (0, 2, 3))]
@@ -517,10 +531,9 @@ def _extract(payload):
                 # Left alone on the face as picked; but one that passes right through a healed
                 # strip (a rafter's tail through a wall healed up to the roof) cuts that strip.
                 if strips and etype in HEAL_CUT_TYPES:
-                    crosses, _touches, poly, _pts = _section(tris, n, d, u)
-                    part = poly.intersection(strip_area) if crosses and poly is not None and strip_area is not None else None
-                    if part is not None and not part.is_empty and part.area > 1.0:
-                        cuts.append((part, elem))
+                    shadow = _zone_shadow(tris, n, d, u, clad_depth, strip_area)
+                    if shadow is not None:
+                        cuts.append((None, elem, shadow))
                 clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
                 continue
             if etype in FRAME_TYPES:
@@ -528,10 +541,13 @@ def _extract(payload):
                 if fr:
                     frames.append(dict(fr, name=elem.get("name", ""), type=elem.get("type") or etype))
             straddles, touches, poly, pts = _section(tris, n, d, u)
+            shadow = _zone_shadow(tris, n, d, u, clad_depth, strip_area) if strips else None
             # An abutment counts if it reaches the wall or merely stands in the cladding
             # zone in front of it; a penetration still has to cross the face to be a hole.
             zone = _zone_section(tris, n, d, u, clad_depth) if etype in ABUTMENT_TYPES and clad_depth > 0 else None
             if (not touches or poly is None) and zone is None:
+                if shadow is not None:
+                    cuts.append((None, elem, shadow))
                 continue
             if etype in ABUTMENT_TYPES:
                 shape = poly if zone is None else (zone if poly is None else _union([poly, zone]))
@@ -542,10 +558,10 @@ def _extract(payload):
                             _meets_foot(zone, top, vmin0, umin0, umax0, clad_depth):
                         abutments.append({"line": line, "source": elem.get("type") or etype,
                                           "name": elem.get("name", "")})
-                if straddles:
-                    cuts.append((poly, elem))
-            elif straddles and options.get("penetrations", True):
-                cuts.append((poly, elem))
+                if straddles or shadow is not None:
+                    cuts.append((poly if straddles else None, elem, shadow))
+            elif (straddles and options.get("penetrations", True)) or shadow is not None:
+                cuts.append((poly if straddles and options.get("penetrations", True) else None, elem, shadow))
         except Exception:   # noqa: BLE001
             skipped += 1
         clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
@@ -555,9 +571,9 @@ def _extract(payload):
     result["posts_passed"] = _passed_report(passed)
     for line in result["posts_passed"]:
         result["warnings"].append(line)
-    for cut_poly, elem in cuts:
+    for cut_poly, elem, shadow in cuts:
         try:
-            cut_poly = _cut_round_heals(cut_poly, elem, strips)
+            cut_poly = _cut_round_heals(cut_poly, elem, strips, shadow)
             if cut_poly is None or cut_poly.is_empty:
                 continue
             if cut_poly.intersection(region).area > MIN_HOLE_AREA:
@@ -593,6 +609,8 @@ def _extract(payload):
 
     _say(dbg, "  seeding and notches")
     notches = _notches(polygons)
+    # the lines it was healed to: it stands at them though its cladding may stop short (heal_link)
+    result["healed"] = [[[round(float(c), 2) for c in h["quad"][3]], [round(float(c), 2) for c in h["quad"][2]]] for h in heals]
     result.update({"ok": True, "frame": make_frame(n, d, umin, vmin, u=u), "polygons": polygons,
                    "width": round(width, 2), "height": round(height, 2),
                    "area": round(region.area, 1), "notches": notches,
@@ -612,7 +630,7 @@ def _extract(payload):
 
 def _heal_strips(heals, n, u):
     """[(the strip in the face's plane, the step from the face's edge to the line, what it
-    was healed to)] for the heals of a payload."""
+    was healed to, whether it was healed up under that)] for the heals of a payload."""
     out = []
     for h in heals:
         try:
@@ -622,32 +640,72 @@ def _heal_strips(heals, n, u):
             if shape.is_empty or shape.area < 1.0:
                 continue
             step = ((pts[3][0] - pts[0][0] + pts[2][0] - pts[1][0]) / 2.0, (pts[3][1] - pts[0][1] + pts[2][1] - pts[1][1]) / 2.0)
-            out.append((shape, step, {str(x) for x in h.get("through") or []}))
+            out.append((shape, step, {str(x) for x in h.get("through") or []}, bool(h.get("under"))))
         except Exception:   # noqa: BLE001 — a strip that will not build is left to be cut like the face
             continue
     return out
 
 
-def _cut_round_heals(cut, elem, strips):
-    """What the section *cut* of the element *elem* takes out of a face with healed strips
-    (see _extract): nothing of a strip that was healed to that element, and of any other
-    strip it reaches, everything from the cut on to the line."""
-    keys = {str(elem.get("id")), str(elem.get("name"))} - {"None", ""}
-    for shape, step, through in strips:
+SHADOW_PLANES = (0.0, 0.5, 1.0)   # fractions of the cladding depth, from the face out, an element is sectioned at
+CONVEX = 1.05                     # a section no bigger than this against its own hull is a plain bar or sheet
+
+
+def _zone_shadow(tris, n, d, u, depth, near):
+    """Where an element stands across the whole cladding zone, seen square on to the face:
+    its sections on the face and out through the build-up to the cladding's outside
+    surface, joined up. Only the pieces that reach *near* (the healed strips); None if
+    none does.
+
+    A rafter or a sheet of plywood that slopes is lower at the outside of the cladding
+    than on the wall, by the build-up's depth times its slope: cut at the face alone, the
+    boards further out would run into it. Between two sections of a plain bar or sheet
+    (each one convex) the element fills their hull, so the hull is taken; anything of a
+    more awkward shape is left as its sections, which is what it is known to be."""
+    if near is None or depth <= 0:
+        return None
+    parts = []
+    for f in SHADOW_PLANES:
         try:
-            if not cut.intersects(shape):
+            _straddles, touches, poly, _pts = _section(tris, n, d + f * depth, u)
+        except Exception:   # noqa: BLE001
+            continue
+        if touches and poly is not None and not poly.is_empty:
+            parts.append(poly)
+    if not parts:
+        return None
+    try:
+        plain = all(pg.geom_type == "Polygon" and pg.convex_hull.area <= CONVEX * pg.area for pg in parts)
+        whole = _union(parts).convex_hull if plain else _union(parts)
+        pieces = [pg for pg in iter_polygons(whole) if pg.area > 1.0 and pg.intersects(near)]
+        return _union(pieces) if pieces else None
+    except Exception:   # noqa: BLE001
+        return None
+
+
+def _cut_round_heals(cut, elem, strips, shadow=None):
+    """What the element *elem* takes out of a face with healed strips (see _extract). *cut*:
+    its section on the face, or None where it does not cut the face as picked; *shadow*:
+    where it stands across the cladding zone by the strips (_zone_shadow). Nothing of a
+    strip healed side by side to that element; of any other strip it reaches, itself, as
+    far out as the cladding goes, and everything from there on to the line."""
+    keys = {str(elem.get("id")), str(elem.get("name"))} - {"None", ""}
+    for shape, step, through, under in strips:
+        try:
+            if keys & through and not under:
+                if cut is not None and cut.intersects(shape):
+                    cut = _difference(cut, shape)
+                    if cut is None or cut.is_empty:
+                        cut = None
                 continue
-            if keys & through:
-                cut = _difference(cut, shape)
-                if cut is None or cut.is_empty:
-                    return None
+            whole = [g for g in (cut, shadow) if g is not None and not g.is_empty and g.intersects(shape)]
+            if not whole:
                 continue
-            part = cut.intersection(shape)
+            whole = _union(whole + ([cut] if cut is not None and not cut.is_empty else []))
+            part = whole.intersection(shape)
             if part.is_empty or part.area < 1.0:
                 continue
             on = _union([part, translate(part, step[0], step[1])]).convex_hull.intersection(shape)
-            if not on.is_empty:
-                cut = _union([cut, on])
+            cut = whole if on.is_empty else _union([whole, on])
         except Exception:   # noqa: BLE001 — left as the plain cut
             continue
     return cut
@@ -934,6 +992,10 @@ def _roof_link(a, b, kind):
             return None                               # two walls: a chain corner; two slopes: a roof junction
         if max(abs(na[2]), abs(nb[2])) > RAKE_LEAN:
             return None                               # one of them is a roof, not a leaning wall: an eaves, not a corner
+    elif kind == "eaves":
+        wall, roof = sorted((na, nb), key=lambda v: abs(v[2]))
+        if abs(wall[2]) > EAVES_PLUMB or roof[2] <= RAKE_LEAN:
+            return None                               # an upright wall under a roof slope, or it is something else
     elif na[2] < 1e-6 or nb[2] < 1e-6:
         return None                                   # a wall, or a face that looks down
     line = _cross(na, nb)
@@ -949,6 +1011,9 @@ def _roof_link(a, b, kind):
         return None                                   # a valley; or level, a ridge
     if kind == "rake" and front_a * front_b <= 0:
         return None                                   # one in front of the other, one behind: they do not turn a corner
+    if kind == "eaves":
+        if front_a >= 0 or front_b >= 0 or abs(line[2]) > HIP_SLOPE:
+            return None                               # on a level line, turning outward
     external = front_a < 0
     # A point on both planes: from a's centre, straight down a's own slope to b's plane.
     down = _cross(na, line)
@@ -979,13 +1044,35 @@ def _roof_link(a, b, kind):
            "k": round(k if kind != "rake" or external else -k, 4), "angle": round(math.degrees(beta), 1), "length": round(t1 - t0, 1)}
     if kind == "rake":
         out["external"] = external
+    if kind == "eaves":
+        out["a"]["roof"], out["b"]["roof"] = abs(na[2]) > abs(nb[2]), abs(nb[2]) > abs(na[2])
+        roof = cb if out["b"]["roof"] else ca
+        if roof[2] <= base[2] + 1.0:
+            return None                               # the roof falls away from the head of the wall: a monopitch's head, not its eaves
     return out
+
+
+EAVES_PLUMB = 0.035       # a wall under an eaves is upright: its normal's z no more than this (2 degrees)
+
+
+def eaves_link(a, b):
+    """Does a roof slope come down to the head of a wall, with no overhang? None if not,
+    else what valley_link gives, its kind "eaves", and on each side "roof": is this face the
+    roof.
+
+    The wall is upright and the roof a slope (flatter than a leaning wall: steeper, the two
+    turn a raking corner or a mansard's knuckle). Their planes meet on a level line, the
+    wall's top edge and the roof's bottom edge both lie on it, and the corner turns
+    outward. A roof that sails on over the wall has no edge on the line and is not this:
+    it has an eaves of its own out at its edge, and the wall is healed up under it."""
+    return _roof_link(a, b, "eaves")
 
 
 def valley_links(a, others):
     """For each of *others*, in order: how it meets a, at a valley (valley_link), a hip
-    (hip_link) or a raking corner (rake_link); None where it does none of them."""
-    return [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) for b in others]
+    (hip_link), a raking corner (rake_link) or an eaves on a wall (eaves_link); None where
+    it does none of them."""
+    return [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) for b in others]
 
 
 HEAL_MAX = 500.0          # mm – an edge this far or less from the line two faces would meet on nearly touches it
@@ -997,7 +1084,7 @@ HEAL_TRIM_SHARE = 0.5     # and what is past the line is under this share of wha
 
 def _joined(a, b):
     """Are the two joined as they stand: at a corner or a ridge, a valley or a hip?"""
-    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b) or rake_link(a, b))
+    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b))
 
 
 def _reach(elev, other, line, base):
@@ -1069,6 +1156,12 @@ def _reach(elev, other, line, base):
                 return None, None
             along = [(x - at[0]) * lu + (y - at[1]) * lv for g in getattr(cut, "geoms", [cut]) for x, y in g.coords]
             return "through", (t_at + min(along), t_at + max(along))
+    # A face healed to the line stands at it, though its cladding stops under what sails over.
+    for P, Q in elev.get("healed") or []:
+        P, Q = tuple(float(c) for c in P), tuple(float(c) for c in Q)
+        if max(abs(off(P)), abs(off(Q))) <= HEAL_ON and math.dist(P, Q) >= 50.0:
+            reaches = True
+            ts += [_dot(_sub(P, base), line), _dot(_sub(Q, base), line)]
     # A face with an edge on the line reaches it: what else of it stands back (the foot of a
     # notch cut round a rafter) is not a near miss.
     return ([] if reaches else strips, (min(ts), max(ts))) if ts else (None, None)

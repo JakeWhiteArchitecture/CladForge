@@ -182,7 +182,7 @@ function elevationCard(e, i) {
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + ROOF_JOINS.map(kind => { const with_ = ok ? valleyRecords(e).filter(v => v.kind === kind).map(v => v.with.replace('Elevation ', '')) : [];
-                                           return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind} with ${with_.join(', ')}` : ''; }).join('')
+                                           return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind === 'eaves' ? 'eaves (no overhang)' : kind} with ${with_.join(', ')}` : ''; }).join('')
         + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
@@ -394,7 +394,7 @@ function ridgeRecord(e) {
 // face that was there first masters the valley: it carries the gutter.
 const isRoofSlope = m => !!(m.result && m.result.ok && m.result.pitch !== undefined && m.result.pitch < 89 && !m.result.faces_down);
 const isPitched = m => !!(m.result && m.result.ok && m.result.pitch !== undefined && (m.result.pitch < 89 || m.result.faces_down));
-const ROOF_JOINS = ['valley', 'hip', 'rake'];
+const ROOF_JOINS = ['valley', 'hip', 'rake', 'eaves'];
 async function linkValleys(e) {
     for (const m of state.elevations) if (m.valleys) m.valleys = m.valleys.filter(v => v.partner !== e);
     e.valleys = [];
@@ -439,7 +439,7 @@ function rakeDetail(master, other) {
 function valleyRecords(e) {
     return (e.valleys || []).filter(v => v.partner && state.elevations.includes(v.partner) && v.partner.result && v.partner.result.ok)
         .map(v => Object.assign(v.kind === 'rake' ? rakeDetail(v.master ? e : v.partner, v.master ? v.partner : e) : {}, { kind: ROOF_JOINS.includes(v.kind) ? v.kind : 'valley', with: v.partner.name, p1: v.p1, p2: v.p2, inside: v.inside, other_up: v.other_up, other_n: v.other_n,
-                     k: v.k, angle: v.angle, length: v.length, master: !!v.master }));
+                     k: v.k, angle: v.angle, length: v.length, master: !!v.master, roof: !!v.roof }));
 }
 
 function placeInChain(e, other, link) {
@@ -510,7 +510,7 @@ async function offerHeals(e) {
     state.heals = (state.heals || []).filter(h => h.a !== e && h.b !== e);
     const others = state.elevations.filter(m => m !== e && m.result && m.result.ok && m.picks.length);
     if (e.result && e.result.ok && e.picks.length && others.length) {
-        const slim = r => ({ frame: r.frame, width: r.width, height: r.height, polygons: r.polygons });
+        const slim = r => ({ frame: r.frame, width: r.width, height: r.height, polygons: r.polygons, healed: r.healed });
         pyodide.globals.set('_heal_a', JSON.stringify(slim(e.result)));
         pyodide.globals.set('_heal_b', JSON.stringify(others.map(m => slim(m.result))));
         let links = [];
@@ -545,9 +545,10 @@ async function applyHeal(i) {
         h.b.trims = (h.b.trims || []).concat(h.cut.b);
     }
     // a strip, and the elements it was healed to: those do not cut it, everything else does (fabric_extract._extract)
-    const onto = m => m.picks.map(p => p.mesh.userData.index);
-    h.a.heals = (h.a.heals || []).concat(h.quads.a.map(quad => ({ quad, through: onto(h.b) })));
-    h.b.heals = (h.b.heals || []).concat(h.quads.b.map(quad => ({ quad, through: onto(h.a) })));
+    // (healed up under a face that runs on over it, an "abutment", the strip stops under what it was healed to)
+    const onto = m => m.picks.map(p => p.mesh.userData.index), under = h.kind === 'abutment';
+    h.a.heals = (h.a.heals || []).concat(h.quads.a.map(quad => ({ quad, through: onto(h.b), under })));
+    h.b.heals = (h.b.heals || []).concat(h.quads.b.map(quad => ({ quad, through: onto(h.a), under })));
     // Two walls, or two slopes at a ridge, become one chain: a face that was given a chain
     // of its own for want of a neighbour goes back into its partner's before it is re-read.
     if ((h.kind === 'corner' || h.kind === 'ridge') && h.a.chain !== h.b.chain) {
@@ -893,7 +894,8 @@ _json.dumps(_ex(_pl))`);
             const met = kind => valleys.filter(v => v.kind === kind).map(v => v.face.name).join(' and ');
             const valley = (met('valley') ? ` · a valley with ${met('valley')}: the cladding stands back from it, over a valley gutter` : '')
                 + (met('hip') ? ` · a hip with ${met('hip')}: the cladding is cut to it, under a hip cap` : '')
-                + (met('rake') ? ` · a raking corner with ${met('rake')}: mitred, or under a corner profile where the job's corner is Profile` : '');
+                + (met('rake') ? ` · a raking corner with ${met('rake')}: mitred, or under a corner profile where the job's corner is Profile` : '')
+                + (met('eaves') ? ` · an eaves with ${met('eaves')}, no overhang: the roof runs on over the wall's cladding with a drip, and the wall stops under it` : '');
             const withOf = hs => [...new Set(hs.map(h => (h.a === e ? h.b : h.a).name))].join(' and ');
             const short = heals.filter(h => !h.trim), past = heals.filter(h => h.trim);
             const near = (short.length ? ` · nearly meets ${withOf(short)}: tick the red strip to heal the junction` : '')
