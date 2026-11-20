@@ -1540,6 +1540,46 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || valley.gutters.join() !== 'Elevation A Valley Gutter' || valley.trays < 8 || valley.check.length !== 1 || !/200 mm clear/.test(valley.check[0]))
         throw new Error('the two roof slopes were not joined at their valley: ' + JSON.stringify(valley));
 
+    // A third model: a hipped corner, two roof slopes falling away from each other. They too
+    // stay in their own chains and are joined by the hip they share: cut to it under a hip
+    // cap, which one of them carries. Each has an eaves apron along its level bottom edge.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'hip_roof.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    await lookAt('Roof A', [0.05, 0.87, 0.5]);
+    await picked(1);
+    await seamRoof();
+    await settle();
+    await lookAt('Roof C', [-0.5, 0.87, 0.05]);
+    await picked(2);
+    const hipStatus = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    await seamRoof();
+    await settle();
+    const roofParts = () => page.evaluate(() => {
+        const [a, c] = state.elevations;
+        const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
+        return { error: a.error || c.error, chains: a.chain !== c.chain,
+                 records: [valleyRecords(a), valleyRecords(c)].map(v => v.map(x => [x.kind, x.with, x.master, Math.round(x.length)])),
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')),
+                 caps: names.filter(n => /Hip Cap/.test(n)), gutters: names.filter(n => /Valley Gutter/.test(n)).length,
+                 upstands: names.filter(n => /Hip Upstand/.test(n)).length, aprons: names.filter(n => /Eaves Apron/.test(n)),
+                 checks: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a hip|eaves apron/.test(t)).length };
+    });
+    const hip = await roofParts();
+    console.log('hip:', JSON.stringify(hip), '|', hipStatus);
+    if (hip.error || !hip.chains || hip.records[0].join() !== 'hip,Elevation B,true,4583' || hip.records[1].join() !== 'hip,Elevation A,false,4583'
+        || !/a hip with Elevation A/.test(hipStatus) || !/hip with B/.test(hip.cards[0]) || !/hip with A/.test(hip.cards[1])
+        || hip.caps.length !== 1 || hip.gutters || hip.upstands < 8 || hip.aprons.length !== 2 || hip.checks !== 3)
+        throw new Error('the two roof slopes were not joined at their hip: ' + JSON.stringify(hip));
+    // The eaves is the chain's to switch off: the active chain's apron goes, the other's stays.
+    await page.evaluate(() => { const s = document.getElementById('edge-eaves'); s.value = 'none'; s.onchange(); });
+    await settle();
+    const noEaves = await roofParts();
+    console.log('eaves off on the active chain:', JSON.stringify(noEaves.aprons));
+    if (noEaves.aprons.length !== 1 || noEaves.caps.length !== 1) throw new Error('the eaves apron did not follow its chain setting: ' + JSON.stringify(noEaves));
+
     console.log('SMOKE OK');
     await browser.close();
 }

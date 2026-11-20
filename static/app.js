@@ -10,7 +10,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // seam running out upward: the head, under a sill) and bottom ends (the base, over a head) each
 // folded or flat.
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both' };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', eaves: 'on' };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -85,6 +85,7 @@ function syncEdgeFields() {
         el.disabled = ed.fold === 'off';
     }
     document.getElementById('edge-verge').value = VERGES.includes(ed.verge) ? ed.verge : 'both';
+    document.getElementById('edge-eaves').value = ed.eaves === 'none' ? 'none' : 'on';
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
     document.getElementById('edge-chain').textContent = e ? 'for ' + e.chain.name : 'for the active chain';
 }
@@ -95,6 +96,7 @@ function setEdge(e, key, value) {
     else if (key === 'fold') e.chain.edges.fold = value === 'off' ? 'off' : 'on';
     else if (key === 'seamTop' || key === 'seamBottom') e.chain.edges[key] = value === 'flat' ? 'flat' : 'folded';
     else if (key === 'verge') e.chain.edges.verge = VERGES.includes(value) ? value : 'both';
+    else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
     else {
         const v = parseFloat(value);
         if (!isFinite(v)) return false;
@@ -176,7 +178,8 @@ function elevationCard(e, i) {
     const clipped = ok && (e.clipLo > 0.5 || (e.clipHi !== null && e.clipHi < r.width - 0.5));
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
-        + (ok && valleyRecords(e).length ? ` · valley with ${valleyRecords(e).map(v => v.with.replace('Elevation ', '')).join(', ')}` : '')
+        + ['valley', 'hip'].map(kind => { const with_ = ok ? valleyRecords(e).filter(v => v.kind === kind).map(v => v.with.replace('Elevation ', '')) : [];
+                                           return with_.length ? ` · ${kind} with ${with_.join(', ')}` : ''; }).join('')
         + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
@@ -409,7 +412,7 @@ _json.dumps(_vl(_json.loads(_valley_a), _json.loads(_valley_b)))`));
         const part = (partner, side, master) => Object.assign({ partner, k: link.k, angle: link.angle, length: link.length, master }, side);
         (other.valleys = other.valleys || []).push(part(e, link.b, true));
         e.valleys.push(part(other, link.a, false));
-        found.push(other);
+        found.push({ face: other, kind: link.kind === 'hip' ? 'hip' : 'valley' });
     });
     return found;
 }
@@ -417,7 +420,7 @@ _json.dumps(_vl(_json.loads(_valley_a), _json.loads(_valley_b)))`));
 // A face's valleys as the engine and a saved state take them: each partner by name.
 function valleyRecords(e) {
     return (e.valleys || []).filter(v => v.partner && state.elevations.includes(v.partner) && v.partner.result && v.partner.result.ok)
-        .map(v => ({ with: v.partner.name, p1: v.p1, p2: v.p2, inside: v.inside, other_up: v.other_up, other_n: v.other_n,
+        .map(v => ({ kind: v.kind === 'hip' ? 'hip' : 'valley', with: v.partner.name, p1: v.p1, p2: v.p2, inside: v.inside, other_up: v.other_up, other_n: v.other_n,
                      k: v.k, angle: v.angle, length: v.length, master: !!v.master }));
 }
 
@@ -737,7 +740,9 @@ _json.dumps(_ex(_pl))`);
             const corner = !linked ? e.name + ' extracted'
                 : e.link.kind === 'ridge' ? `${e.name} joined ${e.chain.name} at a ridge with ${e.ridge.partner.name}: one setting-out over both slopes, and a ridge cap`
                 : `${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)`;
-            const valley = valleys.length ? ` · a valley with ${valleys.map(m => m.name).join(' and ')}: the cladding stands back from it, over a valley gutter` : '';
+            const met = kind => valleys.filter(v => v.kind === kind).map(v => v.face.name).join(' and ');
+            const valley = (met('valley') ? ` · a valley with ${met('valley')}: the cladding stands back from it, over a valley gutter` : '')
+                + (met('hip') ? ` · a hip with ${met('hip')}: the cladding is cut to it, under a hip cap` : '');
             setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley, 'ready');
             // The view stays where it was put: picking a face must not move the camera.
         } else {
@@ -902,6 +907,7 @@ function elevationRecords() {
                                                    frame_setback: chain.edges.frame === undefined ? 50 : chain.edges.frame,
                                                    seam_fold: chain.edges.fold !== 'off',
                                                    verge: VERGES.includes(chain.edges.verge) ? chain.edges.verge : 'both',
+                                                   eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
                                                    seam_top: chain.edges.seamTop === 'flat' ? 'flat' : 'folded',
                                                    seam_bottom: chain.edges.seamBottom === 'flat' ? 'flat' : 'folded',
                                                    opening_details: e.openingDetails || {} }));
@@ -1867,7 +1873,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

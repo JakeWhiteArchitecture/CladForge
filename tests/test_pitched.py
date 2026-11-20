@@ -153,8 +153,8 @@ BUILDS = [dict(cladding_type="panel"), dict(cladding_type="plank", plank_orient=
 def _build(deg, kw):
     kw = dict(kw)
     detail = kw.pop("_detail", None)
-    # no verges: this is the wall's buildup turned onto the slope, nothing a roof adds
-    elev = dict(_extract(deg), offset=0, verge="none", **({"opening_details": {WINDOW: detail}} if detail else {}))
+    # no verges or eaves: this is the wall's buildup turned onto the slope, nothing a roof adds
+    elev = dict(_extract(deg), offset=0, verge="none", eaves="none", **({"opening_details": {WINDOW: detail}} if detail else {}))
     params = dict({"elevations": [elev], "trim": True}, **kw)
     return params, generate_preview(params)
 
