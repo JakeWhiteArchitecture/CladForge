@@ -545,7 +545,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         return { closers: tags('closer'), dpm: tags('dpm'), tops: mine.filter(g => g.ifc_type === 'dpm' && / (Top|Side) /.test(g.name)).length, near, cut: (info.barriers || {}).cut || 0,
                  button: document.getElementById('barriers-2d').textContent, shown: document.getElementById('barriers-2d').style.display !== 'none',
                  box: document.getElementById('barriers').checked,
-                 check: [...document.querySelectorAll('#checks-container > div')].some(x => /Cavity barriers/.test(x.textContent)) };
+                 check: [...document.querySelectorAll('#checks-container > div')].some(x => /cavity barriers on all four sides/.test(x.textContent)) };
     });
     const barriersOff = await barrierParts();
     await page.click('#barriers-2d');
