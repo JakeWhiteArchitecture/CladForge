@@ -185,6 +185,7 @@ function elevationCard(e, i) {
                                            return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind} with ${with_.join(', ')}` : ''; }).join('')
         + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
+        + (ok && matchedTo(e) ? ` · battens matched to ${(matchedTo(e).chain || matchedTo(e).name)} ${matchedTo(e).side}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
         + (e.cover ? ` · course ${Math.round(e.cover)}` : '')
         + (e.panelRows && e.panelRows.length ? ` · rows ${e.panelRows.map(Math.round).join('/')}` : '')
@@ -897,7 +898,7 @@ function val(id) { return document.getElementById(id).value; }
 // face of another chain loads that chain's settings into it, and any edit is kept by the
 // chain shown (state.formChain), so one chain's choices never change another's. Live trim,
 // panels as walls and shared offcuts stay job-wide.
-const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model', 'seam_full_length'];
+const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model', 'seam_full_length', 'match_battens'];
 function formSettings() {
     const s = { corner: toggleValue('corner-type') || 'mitre' };
     for (const k of NUM) { const v = parseFloat(val(k)); if (isFinite(v)) s[k] = v; }
@@ -1056,6 +1057,7 @@ function getParams() {
     p.cladding_type = toggleValue('cladding-type');
     p.rotate = document.getElementById('rotate').checked;
     p.battens_from_model = document.getElementById('battens_from_model').checked;
+    p.match_battens = document.getElementById('match_battens').checked;
     p.seam_full_length = document.getElementById('seam_full_length').checked;
     p.panels_as_walls = document.getElementById('panels_as_walls').checked;
     p.ifc_schema = ifcSchema();
@@ -1237,14 +1239,23 @@ function updateDerivedStatic(p) {
 // Set out from the model's columns, the battens are fixed, and with horizontal planks or
 // panels they are all the offset slider would move. Under vertical planks it still moves
 // the planks, so it stays.
+// The face this one's upright battens follow, if any: the chain directly above or below it
+// on the same wall (cladding_match), as the last build found it.
+function matchedTo(e) {
+    const info = ((window._lastPreview || {}).info || []).find(i => e.result && i.elevation === e.result.name);
+    return (info && info.matched_to) || null;
+}
+
 function lockOffsetToModel(i) {
-    const fixed = !!(i && i.model_posts) && !(toggleValue('cladding-type') === 'plank' && toggleValue('plank-orient') === 'vertical');
+    const to = i && i.matched_to;
+    const fixed = !!(i && (i.model_posts || to)) && !(toggleValue('cladding-type') === 'plank' && toggleValue('plank-orient') === 'vertical');
     for (const id of ['offset', 'edit-offset']) {
         const s = document.getElementById(id);
         s.disabled = fixed;
-        s.title = fixed ? "Set out from the model's columns: the battens follow the client's" : '';
+        s.title = !fixed ? '' : to ? `Matched to the battens of ${to.chain || to.name} ${to.side}: move them there, or untick "Match the battens" for this chain`
+                                   : "Set out from the model's columns: the battens follow the client's";
     }
-    if (fixed) document.getElementById('offset-val').textContent = 'model';
+    if (fixed) document.getElementById('offset-val').textContent = to ? 'matched' : 'model';
 }
 
 function renderInfo(infos) {
@@ -1253,7 +1264,8 @@ function renderInfo(infos) {
     const set = (id, v) => document.getElementById(id).textContent = v;
     if (!i) { ['dim-size', 'dim-centres', 'dim-courses', 'dim-cuts', 'dim-boards'].forEach(id => set(id, '--')); return; }
     set('dim-size', `${Math.round(i.width)} × ${Math.round(i.height)} mm`);
-    set('dim-centres', i.model_posts ? `on ${i.model_posts} model columns` : `${i.batten_centres.toFixed(0)} mm`);
+    set('dim-centres', i.model_posts ? `on ${i.model_posts} model columns`
+        : i.matched_to ? `matched to ${i.matched_to.chain || i.matched_to.name} ${i.matched_to.side} (${i.matched_to.count})` : `${i.batten_centres.toFixed(0)} mm`);
     lockOffsetToModel(i);
     set('dim-courses', `${i.n_courses} @ ${i.cover.toFixed(0)}`);
     set('dim-cuts', `L ${Math.round(i.closing_cut_left)} · R ${Math.round(i.closing_cut_right)} · T ${Math.round(i.closing_cut_top)}`);
@@ -1271,7 +1283,7 @@ function setStatus(text, cls) {
 // (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
-const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls', 'seam_full_length'];
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls', 'seam_full_length', 'match_battens'];
 const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient', 'plank-profile'];
 
 function snapshotState() {
@@ -1982,7 +1994,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_rake', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

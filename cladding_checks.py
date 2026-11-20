@@ -289,6 +289,13 @@ def check_rules(params, infos=None):
         add("Window frames", "warn" if notes else "pass",
             "; ".join(notes) if notes else "Linings run to the frame: %d from the model, %d set on the opening, %d at the "
             "chain's frame position" % (count["model"], count["set"], count["default"]), len(ops))
+    # Faces whose upright battens follow the chain directly above or below (cladding_match).
+    for i in infos:
+        to = i.get("matched_to")
+        if to:
+            add("Battens matched", "pass", "%s: %d upright batten%s on the lines of %s %s, so they run through" % (
+                i.get("elevation"), to["count"], "" if to["count"] == 1 else "s",
+                " ".join(x for x in (to.get("chain"), "(%s)" % to["name"] if to.get("name") else "") if x), to["side"]), to["count"])
     bad = sum(i.get("unsupported_joints", 0) for i in infos)
     if bad:
         add("End joints", "warn", "%d board end joints fall between battens — shorten max length or adjust centres" % bad, bad)
