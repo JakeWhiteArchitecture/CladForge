@@ -1,5 +1,5 @@
 """CladForge — thin facade for Pyodide and Flask: generate_preview(params) ->
-{"geometry", "dimensions", "info"}; generate_preview_geometry(params) -> list[prism].
+{"geometry", "dimensions", "info", "masses"}; generate_preview_geometry(params) -> list[prism].
 check_rules is wrapped here so callers have one import.
 
 Each chain carries its own cladding settings on its elevation records ("settings"): the
@@ -22,6 +22,7 @@ from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
 from cladding_rake import rake_ends, rake_parts
+from cladding_lod import at_lod, masses, tag  # noqa: F401 — at_lod is the app's and the exporters'
 from cladding_match import plan_matches
 
 
@@ -128,7 +129,10 @@ def generate_preview(params):
     for p, ready in _groups(params):
         m, d, i = _preview_one(p, ready)
         meshes, dims, infos = meshes + m, dims + d, infos + i
-    return {"geometry": _ensure_unique_names(meshes), "dimensions": dims, "info": infos}
+    # Each mesh says the lowest level of development it is there at, and LOD 100's sheets
+    # go with them (cladding_lod): the app and the exporters choose, the build is always whole.
+    meshes = tag(_ensure_unique_names(meshes))
+    return {"geometry": meshes, "dimensions": dims, "info": infos, "masses": masses(meshes, setting_groups(params))}
 
 
 def _preview_one(p, ready=None):
