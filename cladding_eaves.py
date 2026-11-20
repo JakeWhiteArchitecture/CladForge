@@ -111,7 +111,7 @@ def join_eaves(params):
     by = {e.get("name"): e for e in params.get("elevations") or []}
     for e in params.get("elevations") or []:
         for v in e.get("valleys") or []:
-            other = by.get(v.get("with")) if v.get("kind") == "eaves" else None
+            other = by.get(v.get("with")) if v.get("kind") in ("eaves", "head") else None
             if other is None:
                 continue
             po = _parse(dict(chain_params(params, other), elevations=[]))
@@ -120,13 +120,13 @@ def join_eaves(params):
                      other_seam=float(po["seam_h"]) if po.get("seam") else 0.0)
 
 
-def _joins(elev, roof):
+def _joins(elev, roof, kind="eaves"):
     """The face's eaves on a wall, as cladding_valley.valleys_of gives its junctions, each
     with what join_eaves noted: those where it is the roof (*roof* True) or the wall. The
     line is level: "v" its height on the face, "u0", "u1" its ends."""
-    raw = {v.get("with"): v for v in elev.get("valleys") or [] if v.get("kind") == "eaves"}
+    raw = {v.get("with"): v for v in elev.get("valleys") or [] if v.get("kind") == kind}
     out = []
-    for j in valleys_of(elev, "eaves"):
+    for j in valleys_of(elev, kind):
         v = raw.get(j["with"]) or {}
         if bool(v.get("roof")) != roof or "other_depth" not in v or abs(j["p1"][1] - j["p2"][1]) > 2.0:
             continue
