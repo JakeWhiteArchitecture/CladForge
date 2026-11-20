@@ -306,3 +306,4 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .lod-switch span { margin-right: 4px; letter-spacing: 0.5px; }
 .lod-switch button { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px; font-size: 11px; cursor: pointer; }
 .lod-switch button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.wiz-names { grid-template-columns: 1fr; }
