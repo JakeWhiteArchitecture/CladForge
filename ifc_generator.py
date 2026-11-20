@@ -57,6 +57,7 @@ _IFC_TYPE_MAP = {
     "verge_strip":    ("IfcCovering", "ROOFING",     "Verge strip"),
     "valley_gutter":  ("IfcCovering", "ROOFING",     "Valley gutter"),
     "eaves_strip":    ("IfcCovering", "ROOFING",     "Eaves drip"),
+    "mass":           ("IfcCovering", "CLADDING",    "Cladding zone (LOD 100)"),
 }
 _MATERIALS = {
     "batten": ("Timber (softwood) batten", "wood"), "counter_batten": ("Timber (softwood) batten", "wood"),
@@ -71,6 +72,7 @@ _MATERIALS = {
     "seam": ("Standing seam sheet", "metal"),
     "ridge_cap": ("Ridge cap sheet", "metal"), "ridge_filler": ("Vented foam filler", "rubber"),
     "verge_strip": ("Verge strip sheet", "metal"), "valley_gutter": ("Valley gutter sheet", "metal"), "eaves_strip": ("Eaves drip (the trays' sheet)", "metal"),
+    "mass": ("Cladding (not yet specified)", "cladding"),
 }
 
 
@@ -580,8 +582,10 @@ def meshes_to_ifc(meshes, params, infos=None):
                 _pset(ifc, [elem], "Pset_PlateCommon", common)
         if parts:
             ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=assembly, products=parts)
-        _pset(ifc, [assembly], "%s_SettingOut" % TOOL_NAME,
-              _setting_out_props(pe, info_by_name.get(name, {}), elev, _schema_label(ifc)))
+        props = _setting_out_props(pe, info_by_name.get(name, {}), elev, _schema_label(ifc))
+        if params.get("lod") in (100, 200, 300):     # which level of development this file was written at (cladding_lod)
+            props["LevelOfDevelopment"] = ("IfcLabel", "LOD %d" % params["lod"])
+        _pset(ifc, [assembly], "%s_SettingOut" % TOOL_NAME, props)
         elements += parts
         assemblies.append((name, assembly))
 
