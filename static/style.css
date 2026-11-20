@@ -302,3 +302,4 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .run-board svg { transition: opacity 0.25s; }
 .run-rack-item.taken rect:first-child { fill: transparent; stroke-dasharray: 30 20; }
 .run-rack-item.taken text, .run-rack-item.taken .run-rack-hatch { opacity: 0.25; }
+.wiz-names { grid-template-columns: 1fr; }
