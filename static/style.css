@@ -136,6 +136,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
     color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
 #view-2d:hover:not(:disabled) { background: #1a4a80; }
 #view-2d:disabled { opacity: 0.4; cursor: default; }
+#barriers-2d { padding: 9px 16px; border: 1px solid var(--accent); border-radius: 20px; background: rgba(22,33,62,0.92);
+    color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+#barriers-2d:hover:not(:disabled) { background: #1a4a80; }
+#barriers-2d:disabled { opacity: 0.4; cursor: default; }
+#barriers-2d.on { border-color: #ea580c; color: #fdba74; }
 #make-chain { padding: 9px 16px; border: none;
     border-radius: 20px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
     cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }

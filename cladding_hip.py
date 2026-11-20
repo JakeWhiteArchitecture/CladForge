@@ -122,6 +122,40 @@ def _hip_cut(h, kind, near, t, face, board, _elev, _p):
     return h["back"] - min(k * (face - board) - RIDGE_OVERSAIL, k * near), 0.0
 
 
+def _whole_corners(ring, rows, h, tol, keep):
+    """Give a part back a corner the trim took off it but the cut does not. Trimmed to the
+    face, a board near the line has its corner clipped: an edge along the line between two
+    of its own edges. Where the cut stands further out than the trim did (a corner profile:
+    the boards run on past the wall's corner line), the corner those two edges would meet
+    at may lie inside the cut, and then the board has it whole. Slid along their edges
+    instead, the two ends pass each other and the board grows a spike past its own top.
+    *keep*: how far in from the line a point must stand to be inside the cut at every
+    depth. Changes *ring* in place; returns its vshift rows, one fewer per corner restored."""
+    while len(ring) > 3:
+        slides = _at_hip(ring, h, tol)
+        n = len(ring)
+        for i in range(n):
+            j = (i + 1) % n
+            (a, e1), (b, e2) = (ring[i], slides[i]), (ring[j], slides[j])
+            if e1 is None or e2 is None:
+                continue
+            det = e1[0] * e2[1] - e1[1] * e2[0]
+            if abs(det) < 0.05:
+                continue
+            s = ((b[0] - a[0]) * e2[1] - (b[1] - a[1]) * e2[0]) / det
+            u = ((b[0] - a[0]) * e1[1] - (b[1] - a[1]) * e1[0]) / det
+            corner = [round(a[0] + s * e1[0], 3), round(a[1] + s * e1[1], 3)]
+            if s < -1e-6 or u < -1e-6 or _dist(corner, h) < keep - 1e-6:
+                continue
+            ring[i][0], ring[i][1] = corner
+            del ring[j]
+            del rows[j]
+            break
+        else:
+            return rows
+    return rows
+
+
 def hip_ends(meshes, p, infos):
     """Bring every part's end to the hip (module docstring). Returns the meshes with the
     trays' turned-up ends added."""
@@ -156,6 +190,7 @@ def cut_to_lines(meshes, p, infos, lines_of, cut, upstands=False):
             shifts, moved = [], []
             for j, ring in enumerate(rings):
                 was = old[j] if j < len(old) and old[j] else [[0.0] * 4] * len(ring)
+                was = _whole_corners(ring, [list(sh) for sh in was], h, tol, target + abs(lean) * t / 2.0)
                 row = []
                 for i, (q, sh, e) in enumerate(zip(ring, was, _at_hip(ring, h, tol))):
                     if e is None:

@@ -22,6 +22,7 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "batten": ("#c8a87c", 1.0), "cross_batten": ("#c8a87c", 1.0), "panel": ("#6b8fa3", 0.45),
     "plank": ("#6b8fa3", 0.45), "closer": ("#a0522d", 1.0), "reveal": ("#6b8fa3", 0.7),
     "corner_profile": ("#c0c6cc", 1.0), "corner_trim": ("#9aa1a8", 1.0), "gasket": ("#1c1c1c", 1.0),
+    "dpm": ("#10233f", 1.0),        # the damp proof membrane on a cavity barrier
     "deck": ("#c9a46a", 1.0), "seam": ("#6b8fa3", 1.0),   # a seam is its trays' own metal
     "ridge_cap": ("#7d9bab", 1.0), "ridge_filler": ("#2b2b2b", 1.0), "verge_strip": ("#7d9bab", 1.0),
     "valley_gutter": ("#8fa9b6", 1.0), "eaves_strip": ("#7d9bab", 1.0),
@@ -36,6 +37,7 @@ SEAM_STANDOFF = 2.0     # mm – the metal off the deck, and off the reveal behi
 SEAM_CENTRES = (430.0, 530.0)   # mm – the standard tray widths, seam to seam
 DECK_T = {"boards": 22.0, "ply": 18.0}   # mm – softwood boarding, or WBP plywood (the default)
 DECK_SPAN = {"boards": 600.0, "ply": 600.0}   # mm – the most batten centres each deck spans
+DPM_T = 1.0                     # damp proof membrane on a cavity barrier, as drawn
 EPDM_T, EPDM_LAP = 2.0, 15.0    # EPDM gasket on vertical timbers: thickness, and past the timber each side
 _NUMERIC = {  # name: (default, min, max)
     "sheathing_t": (9, 6, 18), "insulation_t": (100, 25, 200),
@@ -49,6 +51,7 @@ _NUMERIC = {  # name: (default, min, max)
     # standing seam (a plank profile): seam centres 430 or 530, seam height, sheet thickness
     "seam_centres": (530, 430, 530), "seam_h": (25, 25, 38), "seam_t": (0.6, 0.5, 1.0),
     "closer_w": (50, 25, 150),
+    "barrier_gap": (200, 200, 600),     # battens stop this far short of a head or sill cavity barrier: never under 200
     "board_w": (1250, 300, 3000), "board_h": (2500, 300, 5000), "kerf": (3, 0, 10), "board_trim": (0, 0, 50),   # stock and saw
 }
 
@@ -70,6 +73,7 @@ def _parse(params):
             p[key] = float(default)
     p["sheathing"], p["insulation"] = bool(params.get("sheathing")), bool(params.get("insulation"))
     p["reveals"], p["set_out_from_openings"] = bool(params.get("reveals", True)), bool(params.get("set_out_from_openings", True))
+    p["barriers"] = bool(params.get("barriers"))        # openings closed with cavity barriers on all four sides
     p["cladding_type"] = "panel" if params.get("cladding_type") == "panel" else "plank"
     p["counter_batten"] = params.get("counter_batten", "auto")   # auto | yes | no
     p["plank_orient"] = "vertical" if params.get("plank_orient") == "vertical" else "horizontal"

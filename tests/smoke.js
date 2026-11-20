@@ -527,6 +527,44 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (!/50 mm behind the wall face · Chain \d+'s frame setback/.test(frameText) || reachDefault !== face0 + 50
         || reachSet !== face0 + 20 || reachBack !== reachDefault)
         throw new Error('opening frame position wrong: ' + JSON.stringify({ frameText, face0, reachDefault, reachSet, reachBack }));
+    // Cavity barriers on all four sides: the 2D view's button sets the chain (and the
+    // sidebar's box with it); an opening's own box sets just that one. The head and sill
+    // barriers arrive, all four timbers carry a membrane, and no upright batten comes
+    // within 200 mm of them.
+    const barrierParts = () => page.evaluate(() => {
+        const mine = window._lastPreview.geometry.filter(g => g.elevation === 'Elevation A');
+        const tags = t => mine.filter(g => g.ifc_type === t).map(g => g.name.split(' ').pop()).sort().join(',');
+        const info = window._lastPreview.info.find(i => i.elevation === 'Elevation A') || {};
+        const zones = mine.filter(g => g.ifc_type === 'closer' && /Barrier \d+[HS]$/.test(g.name)).map(g => {
+            const us = g.profile.map(q => q[0]), vs = g.profile.map(q => q[1]);
+            return [Math.min(...us), Math.max(...us), Math.min(...vs) - 199.9, Math.max(...vs) + 199.9]; });
+        const near = mine.filter(g => g.ifc_type === 'batten').filter(g => {
+            const us = g.profile.map(q => q[0]), vs = g.profile.map(q => q[1]);
+            if (Math.max(...vs) - Math.min(...vs) < Math.max(...us) - Math.min(...us)) return false;
+            return zones.some(z => Math.min(...us) < z[1] && Math.max(...us) > z[0] && Math.min(...vs) < z[3] && Math.max(...vs) > z[2]); }).length;
+        return { closers: tags('closer'), dpm: tags('dpm'), tops: mine.filter(g => g.ifc_type === 'dpm' && / (Top|Side) /.test(g.name)).length, near, cut: (info.barriers || {}).cut || 0,
+                 button: document.getElementById('barriers-2d').textContent, shown: document.getElementById('barriers-2d').style.display !== 'none',
+                 box: document.getElementById('barriers').checked,
+                 check: [...document.querySelectorAll('#checks-container > div')].some(x => /cavity barriers on all four sides/.test(x.textContent)) };
+    });
+    const barriersOff = await barrierParts();
+    await page.click('#barriers-2d');
+    await settle();
+    const barriersOn = await barrierParts();
+    await (await jambBadges())[0].click();
+    await page.click('#o2-barriers');                       // this opening on its own: off
+    await settle();
+    const barriersOne = await barrierParts();
+    await page.click('#barriers-2d');                       // the chain off again: the one opening's own say goes with it
+    await settle();
+    const barriersBack = await barrierParts();
+    console.log('cavity barriers:', JSON.stringify({ barriersOff, barriersOn, barriersOne, barriersBack }));
+    if (!barriersOff.shown || barriersOff.box || /[HS]/.test(barriersOff.closers) || barriersOff.dpm
+        || !barriersOn.box || !/on$/.test(barriersOn.button) || !/1H/.test(barriersOn.closers) || !/1S/.test(barriersOn.closers)
+        || barriersOn.dpm.split(',').length - barriersOn.tops !== barriersOn.closers.split(',').length || !barriersOn.tops || barriersOn.near || !barriersOn.cut || !barriersOn.check
+        || barriersOne.closers.split(',').length >= barriersOn.closers.split(',').length || !barriersOne.box
+        || barriersBack.box || barriersBack.closers !== barriersOff.closers || barriersBack.dpm || barriersBack.check)
+        throw new Error('cavity barriers did not follow the 2D button: ' + JSON.stringify({ barriersOff, barriersOn, barriersOne, barriersBack }));
     // "Every window and door in this chain" reaches every member of the chain and no other chain.
     const scopeOnly = await page.evaluate(() => {
         const saved = window._lastPreview;
