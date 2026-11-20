@@ -174,9 +174,11 @@ def test_the_opening_mitre_is_on_the_true_bisector(elevation):
     pull = 5.0 * math.sqrt(2)
     edge = {}
     for m in out["geometry"]:
-        if m["ifc_type"] == "panel" and m.get("vshift"):
+        # the panel left of the window: its edge on the jamb line is one edge, cut the same
+        # from end to end, so its vertices are at the panel's own corners
+        if m["ifc_type"] == "panel" and m.get("vshift") and abs(max(q[0] for q in m["profile"]) - u0) < 0.5:
             for d in (face - board, face):
-                us = [q[0] for q in ring_at(m, 0, d) if abs(q[0] - u0) < 20 and 905 <= q[1] <= 2095]
+                us = [q[0] for q in ring_at(m, 0, d) if abs(q[0] - u0) < 20]
                 if us:
                     edge[d] = max(us)
     assert abs(edge[face - board] - (u0 - pull)) < 1e-6          # back of the board: pulled off

@@ -67,6 +67,30 @@ def test_the_joint_gap_on_a_jamb_line_is_taken_under_and_over_the_window(elevati
     assert any(span(m) == (WINDOW[0], WINDOW[1]) for m in tight["geometry"] if m["ifc_type"] == "panel")
 
 
+@pytest.mark.parametrize("detail", ["mitre", "lap"])
+def test_a_panel_running_past_the_sill_keeps_one_straight_edge(elevation, detail):
+    """The panel beside the window is 150-1350 high and the sill is at 900: its edge on the
+    jamb line is beside the opening for part of its height only. It is still one board with
+    one straight edge, cut the same from end to end, not stepped at the sill."""
+    from cladding_primitives import ring_at
+    elev = dict(elevation, opening_details={"2000,900": {"jamb": detail}})
+    out = generate_preview(dict(_params(elev, panel_w=1200, panel_gap=10, trim=True)))
+    span = lambda m: (round(min(q[0] for q in m["profile"]), 1), round(max(q[0] for q in m["profile"]), 1))   # noqa: E731
+    beside = [m for m in out["geometry"] if m["ifc_type"] == "panel" and span(m)[1] == WINDOW[0]
+              and min(q[1] for q in m["profile"]) < WINDOW[2] - 50 < WINDOW[2] + 50 < max(q[1] for q in m["profile"])]
+    assert beside
+    under = [m for m in out["geometry"] if m["ifc_type"] == "panel" and WINDOW[0] < span(m)[0] < WINDOW[0] + 30]
+    for m in beside:
+        on_line = [q for q in m["profile"] if abs(q[0] - WINDOW[0]) < 0.5]
+        assert len(on_line) == 2, on_line                                 # its two ends: no vertex at the sill or the head
+        for depth in (m["depth"], m["depth"] + m["thickness"]):
+            right = sorted(q[0] for q in ring_at(m, 0, depth))[-2:]
+            assert abs(right[0] - right[1]) < 1e-6                      # the edge is straight, top to bottom
+        # and the panel under the window still stands the joint gap off it, at its face and its back
+        face = max(q[0] for q in ring_at(m, 0, m["depth"] + m["thickness"]))
+        assert all(min(q[0] for q in u["profile"]) - face >= (10.0 if detail == "lap" else 7.0) - 0.05 for u in under) and under
+
+
 def test_cavity_closer_on_both_vertical_sides(elevation):
     p = _parse(_params(elevation, closer_w=50))
     out = generate_preview(_params(elevation, closer_w=50))
