@@ -216,7 +216,7 @@ function renderElevationList() {
         if (members.length > 1) {
             html += `<div class="chain-head">${chain.name} · ${members.map(m => m.name.replace('Elevation ', '')).join(' → ')} · run ${Math.round(chain.length)} mm${pending}</div>`;
             html += cornerRows(chain, members);
-        } else if (pending) {
+        } else if (pending || !/^Chain \d+$/.test(chain.name)) {         // a named chain says its name, one face or many
             html += `<div class="chain-head">${chain.name}${pending}</div>`;
         }
         for (const m of members) html += elevationCard(m, state.elevations.indexOf(m));
