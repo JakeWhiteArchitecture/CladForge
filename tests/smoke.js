@@ -1749,49 +1749,55 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (healed.offers.length || healed.marks || healed.hips !== '1,1' || healed.widths !== '6000,6000' || healedCaps !== 2)
         throw new Error('the heal did not join the two slopes: ' + JSON.stringify(healed));
 
-    // The same corner the other way about: each slab drawn 300 mm on past the hip, so each
-    // slope runs through the other's plane. There is nothing to extend: what is past the
-    // line is ghosted in red, and the tick trims both back to the hip line, where they join.
-    await page.setInputFiles('#ifc-file', path.join(__dirname, 'hip_long_roof.ifc'));
+    // Faces that run on past each other: two walls at a corner, A drawn 600 mm on past it
+    // and B stopped against A's back. B can be extended up to A as before (an abutment); or,
+    // the new offer, what of A is past the line is ghosted in red under its own tick and
+    // cross, and the tick trims it off and brings B to the line: a corner, one chain.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'overrun_corner.ifc'));
     await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
                                && state.elevations.length === 1 && !state.elevations[0].picks.length
                                && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
     await page.evaluate(() => setPickMode('pick'));
-    await lookAt('Roof A', [0.05, 0.87, 0.5]);
+    await lookAt('Wall A', [0.1, 0.3, 1]);
     await picked(1);
-    await seamRoof();
+    await page.evaluate(() => { openWizard(); WIZ.draft.type = 'panel'; wizBuild(); dismissLevels(); });
     await settle();
-    await lookAt('Roof C', [-0.5, 0.87, 0.05]);
+    await lookAt('Wall B', [1, 0.3, -0.1]);
     await picked(2);
     await page.waitForFunction(() => (state.heals || []).some(h => h.trim), null, { timeout: 60000 });
     const trimOffer = () => page.evaluate(() => ({
-        offers: (state.heals || []).map(h => [h.a.name, h.b.name, h.kind, h.trim ? 'trim' : 'extend', Math.round(h.over || 0), h.cut ? h.cut.a.length : 0, h.cut ? h.cut.b.length : 0].join()),
+        offers: (state.heals || []).map(h => [h.a.name, h.b.name, h.kind, h.trim ? 'trim' : 'extend', Math.round(h.trim ? h.over : h.gap),
+                                              h.cut ? h.cut.a.length : 0, h.cut ? h.cut.b.length : 0, h.quads.a.length, h.quads.b.length].join()),
         marks: document.querySelectorAll('.heal-mark').length, ghosts: healGroup.children.length,
-        title: (document.querySelector('.heal-mark .heal-yes') || {}).title || '',
-        hips: state.elevations.map(e => valleyRecords(e).length).join(), widths: state.elevations.map(e => e.result && Math.round(e.result.width)).join(),
-        trims: state.elevations.map(e => (e.trims || []).length).join(), status: document.getElementById('status-chip').textContent }));
+        titles: [...document.querySelectorAll('.heal-mark .heal-yes')].map(b => b.title),
+        chains: state.elevations.map(e => state.chains.indexOf(e.chain)).join(), widths: state.elevations.map(e => e.result && Math.round(e.result.width)).join(),
+        trims: state.elevations.map(e => (e.trims || []).length).join(), heals: state.elevations.map(e => (e.heals || []).length).join(),
+        status: document.getElementById('status-chip').textContent }));
     const over = await trimOffer();
     console.log('trim offered:', JSON.stringify(over));
-    if (over.offers.join() !== 'Elevation B,Elevation A,hip,trim,227,1,1' || over.marks !== 1 || over.ghosts !== 1 || over.hips !== '0,0'
-        || !/^Trim Elevation B and Elevation A back by up to 227 mm/.test(over.title) || !/runs past where it meets Elevation A/.test(over.status))
+    if (over.offers.join(' / ') !== 'Elevation B,Elevation A,abutment,extend,300,0,0,1,0 / Elevation B,Elevation A,corner,trim,600,0,1,1,0'
+        || over.marks !== 2 || over.ghosts !== 2 || over.widths !== '4600,3000' || over.chains !== '0,1'
+        || !/^Trim Elevation A back by up to 600 mm.*meet at a corner; Elevation B is extended to it$/.test(over.titles[1])
+        || !/nearly meets Elevation A/.test(over.status) || !/runs past where it meets Elevation A/.test(over.status))
         throw new Error('the overshoot was not offered for trimming: ' + JSON.stringify(over));
-    // the cross: gone, and not offered again; asked afresh, then the tick
-    await page.evaluate(() => document.querySelector('.heal-mark .heal-no').click());
+    // the trim's cross: that offer goes, for good; the other stays
+    await page.evaluate(() => document.querySelectorAll('.heal-mark .heal-no')[1].click());
     await page.evaluate(() => runExtraction(state.elevations[1]));
     await page.waitForFunction(() => state.elevations.every(e => !e._running && e.result), null, { timeout: 60000 });
     const left = await trimOffer();
-    if (left.offers.length || left.marks || left.ghosts) throw new Error('a declined trim came back: ' + JSON.stringify(left));
+    if (left.offers.length !== 1 || !/extend/.test(left.offers[0]) || left.marks !== 1) throw new Error('a declined trim came back: ' + JSON.stringify(left));
+    // asked afresh, then the trim's tick: A is cut back to the corner, B brought to it, and the two are one chain
     await page.evaluate(async () => { state.healNo.clear(); await offerHeals(state.elevations[1]); });
-    await page.evaluate(() => document.querySelector('.heal-mark .heal-yes').click());
-    await page.waitForFunction(() => state.elevations.length === 2 && state.elevations.every(e => !e._running && e.result && (e.trims || []).length === 1)
-                               && valleyRecords(state.elevations[1]).length === 1, null, { timeout: 120000 });
-    await seamRoof();
+    await page.evaluate(() => document.querySelectorAll('.heal-mark .heal-yes')[1].click());
+    await page.waitForFunction(() => state.elevations.length === 2 && state.elevations.every(e => !e._running && e.result)
+                               && (state.elevations[0].trims || []).length === 1 && state.elevations[0].chain === state.elevations[1].chain
+                               && Math.round(state.elevations[0].result.width) === 4000, null, { timeout: 120000 });
     await settle();
     const trimDone = await trimOffer();
-    const trimmedCaps = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Hip Cap/.test(m.userData.name || '')).length);
-    console.log('trimmed:', JSON.stringify(trimDone), 'hip caps', trimmedCaps);
-    if (trimDone.offers.length || trimDone.marks || trimDone.hips !== '1,1' || trimDone.widths !== '6000,6000' || trimmedCaps !== 2)
-        throw new Error('the trim did not join the two slopes: ' + JSON.stringify(trimDone));
+    console.log('trimmed:', JSON.stringify(trimDone));
+    if (trimDone.offers.length || trimDone.marks || trimDone.ghosts || trimDone.widths !== '4000,3300' || trimDone.trims !== '1,0'
+        || trimDone.heals !== '0,1' || trimDone.chains !== '0,0')
+        throw new Error('the trim did not join the two walls at their corner: ' + JSON.stringify(trimDone));
 
     // A sixth model: a wall leaning back 15° and an upright wall round the corner from it. Two
     // chains, joined at a raking corner: mitred, then under a corner profile when the job's
