@@ -1496,6 +1496,24 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || ridge.seams[0].length !== ridge.seams[1].length || ridge.seams[0].some((x, k) => Math.abs(x - ridge.seams[1][k]) > 20)
         || ridge.check.length !== 1 || ridge.upstands < 4 || ridge.verges !== 4)
         throw new Error('the two roof slopes did not join at a ridge: ' + JSON.stringify(ridge));
+    // The verge with cladding (VMZ-SN-MA-ZI-05), the chain's Verge type: no strip and no tray
+    // welted round a nose, but a seam at the roof's edge and a flashing down over the wall's
+    // cladding on a continuous strip. Back to the G3 strip afterwards.
+    await page.selectOption('#edge-vergeType', 'cladding');
+    await settle();
+    const zi05 = await page.evaluate(() => {
+        const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
+        return { strips: names.filter(n => /Verge Strip/.test(n)).length, flashings: names.filter(n => /Verge Flashing/.test(n)).length,
+                 clips: names.filter(n => /Verge Clip/.test(n)).length, type: state.elevations[state.elevations.length - 1].chain.edges.vergeType,
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /verge flashing over the cladding/.test(t)).length };
+    });
+    console.log('verge with cladding:', JSON.stringify(zi05));
+    if (zi05.strips || zi05.flashings !== 4 || zi05.clips !== 4 || zi05.type !== 'cladding' || zi05.check < 1)
+        throw new Error('the verge with cladding was not built: ' + JSON.stringify(zi05));
+    await page.selectOption('#edge-vergeType', 'g3');
+    await settle();
+    const g3Again = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Verge Strip/.test(m.userData.name || '')).length);
+    if (g3Again !== 4) throw new Error('the G3 verge strips did not come back: ' + g3Again);
     await page.evaluate(async () => { for (let k = 0; k < 2; k++) { setActive(state.elevations.length - 1); deleteElevation(); await settled(); } });
 
     await page.evaluate(() => hideElement(allMeshes[0]));           // a new model starts with none hidden

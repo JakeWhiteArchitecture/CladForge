@@ -10,7 +10,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // seam running out upward: the head, under a sill) and bottom ends (the base, over a head) each
 // folded or flat.
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', eaves: 'on', capEnds: 'edge' };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', eaves: 'on', capEnds: 'edge' };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -70,6 +70,9 @@ function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' ·
 // Which sides of a roof slope's chain take a verge strip (cladding_verge.py): the start of
 // the run is the left of the chain's first face, as you look at it.
 const VERGES = ['both', 'start', 'end', 'none'];
+// What a verge is built as: the G3 strip the last tray is welted over, or the flashing down
+// over a clad wall's head from a seam at the roof's edge (VMZ-SN-MA-ZI-05).
+const VERGE_TYPES = ['g3', 'cladding'];
 
 // The panel's edge fields show the active elevation's chain and write to all of it.
 function syncEdgeFields() {
@@ -86,6 +89,7 @@ function syncEdgeFields() {
         el.disabled = ed.fold === 'off';
     }
     document.getElementById('edge-verge').value = VERGES.includes(ed.verge) ? ed.verge : 'both';
+    document.getElementById('edge-vergeType').value = VERGE_TYPES.includes(ed.vergeType) ? ed.vergeType : 'g3';
     document.getElementById('edge-eaves').value = ed.eaves === 'none' ? 'none' : 'on';
     document.getElementById('edge-capEnds').value = ed.capEnds === 'square' ? 'square' : 'edge';
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
@@ -98,6 +102,7 @@ function setEdge(e, key, value) {
     else if (key === 'fold') e.chain.edges.fold = value === 'off' ? 'off' : 'on';
     else if (key === 'seamTop' || key === 'seamBottom') e.chain.edges[key] = value === 'flat' ? 'flat' : 'folded';
     else if (key === 'verge') e.chain.edges.verge = VERGES.includes(value) ? value : 'both';
+    else if (key === 'vergeType') e.chain.edges.vergeType = VERGE_TYPES.includes(value) ? value : 'g3';
     else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
     else if (key === 'capEnds') e.chain.edges.capEnds = value === 'square' ? 'square' : 'edge';
     else {
@@ -1013,6 +1018,7 @@ function elevationRecords() {
                                                    frame_setback: chain.edges.frame === undefined ? 50 : chain.edges.frame,
                                                    seam_fold: chain.edges.fold !== 'off',
                                                    verge: VERGES.includes(chain.edges.verge) ? chain.edges.verge : 'both',
+                                                   verge_type: VERGE_TYPES.includes(chain.edges.vergeType) ? chain.edges.vergeType : 'g3',
                                                    eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
                                                    cap_ends: chain.edges.capEnds === 'square' ? 'square' : 'edge',
                                                    seam_top: chain.edges.seamTop === 'flat' ? 'flat' : 'folded',

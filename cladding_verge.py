@@ -18,8 +18,24 @@ strip's other sizes are scaled from it. Which sides of a chain get a verge is th
 "verge" setting: both, the start of the run (the left of its first face), the end, or
 none — a side that runs into a wall is not a verge and has to be switched off.
 
+The alternative, where the roof's edge stands over a clad wall, is VMZINC's "Verge with
+cladding" (VMZ-SN-MA-ZI-05), the chain's "verge_type" set to "cladding":
+
+  * The last tray stops at the roof's edge and is turned up there: the edge is a seam.
+  * The verge flashing is the seam's outer leaf: welted over the tray's upstand, then
+    straight down the face of the edge, past the plywood and the ventilation gap under it,
+    to cover the head of the wall's cladding by VERGE_COVER (60, dimensioned). Its foot
+    is hemmed inward.
+  * The continuous folded strip is fixed down the face of the edge behind the flashing,
+    its foot kicked out into the flashing's hem to hold it.
+
+Only the 60 is dimensioned on that sheet; the gap under the plywood and the flashing's
+stand-off are scaled from it. No tray is widened and the 150 to 370 rule does not apply:
+the last tray is a tray, between two seams.
+
 Not modelled: the vertical plywood and the timber behind it, the fixings, the lift the
-strip gives the tray's edge."""
+strip gives the tray's edge, the insect mesh, and the wall's cladding stopping under the
+roof's plywood (heal the wall up to the roof for that)."""
 
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import orient
@@ -34,6 +50,11 @@ VERGE_CLEAR = 10.0    # mm – the strip's drop, clear of the edge's face (dimen
 VERGE_DROP = 65.0     # mm – the drop, down from the deck (scaled)
 VERGE_HEM = 16.0      # mm – the hem at its foot (scaled)
 VERGE_SEAM = (150.0, 370.0)   # mm – the last seam, in from the tray's edge (dimensioned)
+VERGE_COVER = 60.0    # mm – ZI-05: the flashing over the head of the wall's cladding (dimensioned)
+VERGE_GAP = 25.0      # mm – ZI-05: the ventilation gap under the roof's plywood (scaled)
+VERGE_FACE = 5.0      # mm – ZI-05: the flashing, clear of the edge's face (scaled)
+VERGE_LOCK = 10.0     # mm – ZI-05: the flashing turned down inside the seam (scaled)
+VERGE_TYPES = ("g3", "cladding")
 ROOF_PITCH = 75.0     # deg – steeper than this a face is a wall, and has no verge
 EDGE_TOL = 12.0       # mm – a tray edge this close to the roof's edge is the edge
 
@@ -49,6 +70,13 @@ def verge_sides(elev, p):
         return ()
     start, end = ("r", "l") if elev.get("chain_reversed") else ("l", "r")
     return {"both": (start, end), "start": (start,), "end": (end,)}.get(want, (start, end))
+
+
+def verge_type(elev):
+    """Which verge this face's chain takes: "g3" (the strip, VMZ-SN-MA-ZI-G3-01) or
+    "cladding" (the flashing down over a clad wall, VMZ-SN-MA-ZI-05)."""
+    want = elev.get("verge_type")
+    return want if want in VERGE_TYPES else "g3"
 
 
 def _edges(info):
@@ -76,6 +104,22 @@ def _strip_ring(y0, t):
     return list(path.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1]
 
 
+def _flashing_rings(y0, top, drop, t):
+    """ZI-05's two sheets in section (x out from the roof's edge, y the depth from the
+    face): the flashing, turned down inside the seam at *top*, over it, down the face to
+    *drop* below the deck's top *y0* and hemmed inward; and the continuous strip behind
+    it, down the edge's face, its foot kicked out into that hem."""
+    g = 2.5 * t
+    x = VERGE_FACE + t
+    foot = y0 - drop
+    flashing = LineString([(-t - g / 2.0, top - VERGE_LOCK), (-t - g / 2.0, top), (x, top), (x, foot),
+                           (x - g, foot), (x - g, foot + VERGE_HEM)])
+    e = t / 2.0 + 0.5
+    clip = LineString([(e, y0 - 2.0), (e, foot + VERGE_HEM + 12.0), (x - g / 2.0, foot + VERGE_HEM), (x - g / 2.0, foot + t)])
+    ring = lambda path: list(path.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1]   # noqa: E731
+    return ring(flashing), ring(clip)
+
+
 def verge_parts(meshes, p, infos):
     """Widen the last tray at each verge and add the strip under it. Records each face's
     verges on its info ("verges", "verge_strips")."""
@@ -99,26 +143,41 @@ def verge_parts(meshes, p, infos):
                 continue
             u, v0, v1 = found[side]
             out = -1.0 if side == "l" else 1.0
-            for m in trays + [m for m in mine if m.get("ridge_part")]:
-                for q in m["profile"]:
-                    if abs(q[0] - u) <= EDGE_TOL and v0 - 1.0 <= q[1]:
-                        q[0] = round(u + out * VERGE_TRAY, 3)
+            kind = verge_type(elev)
+            decks = [m for m in mine if m.get("ifc_type") == "deck"]
+            deck_t = max((float(m["thickness"]) for m in decks), default=18.0)
+            drop = VERGE_DROP if kind == "g3" else deck_t + VERGE_GAP + VERGE_COVER
+            if kind == "g3":
+                for m in trays + [m for m in mine if m.get("ridge_part")]:
+                    for q in m["profile"]:
+                        if abs(q[0] - u) <= EDGE_TOL and v0 - 1.0 <= q[1]:
+                            q[0] = round(u + out * VERGE_TRAY, 3)
             if r:       # at a ridge: square-ended, its foot no nearer the bisecting plane than the trays come
-                v1 = _slot(r) + r["k"] * (back - 1.0 - VERGE_DROP)
+                v1 = _slot(r) + r["k"] * (back - 1.0 - drop)
             V, U, N = frame_v(frame), frame["u"], frame["n"]
             toward = [out * c for c in U]
             across = [V[1] * toward[2] - V[2] * toward[1], V[2] * toward[0] - V[0] * toward[2], V[0] * toward[1] - V[1] * toward[0]]
             sign = 1.0 if sum(a * b for a, b in zip(across, N)) > 0 else -1.0     # which way the section's y runs
-            ring = orient(Polygon([(x, sign * y) for x, y in _strip_ring(back - 1.0, t)]), 1.0)
-            strip = _prism([[round(x, 3), round(y, 3)] for x, y in list(ring.exterior.coords)[:-1]], 0.0, v1 - v0,
-                           {"origin": frame_to_world(frame, u, v0, 0.0), "u": toward, "v": across, "n": [float(c) for c in V]},
-                           "verge_strip", "%s Verge Strip %s" % (name, "L" if side == "l" else "R"), name)
-            seam = min((abs(x - u) for x in lines), default=None)
-            strip["verge_info"] = {"side": side, "length": round(v1 - v0, 1), "lap": VERGE_LAP, "nose": VERGE_NOSE,
-                                   "drop": VERGE_DROP, "clear": VERGE_CLEAR, "thickness": t,
-                                   "last_seam": None if seam is None else round(seam + VERGE_TRAY, 1)}
+            place = lambda: {"origin": frame_to_world(frame, u, v0, 0.0), "u": toward, "v": across, "n": [float(c) for c in V]}   # noqa: E731
+            tidy = lambda pts: [[round(x, 3), round(y, 3)] for x, y in                               # noqa: E731
+                                list(orient(Polygon([(x, sign * y) for x, y in pts]), 1.0).exterior.coords)[:-1]]
+            letter = "L" if side == "l" else "R"
+            seam = min((abs(x - u) for x in lines if abs(x - u) > EDGE_TOL), default=None)
+            if kind == "cladding":
+                flashing, clip = _flashing_rings(back - 1.0, back + float(p["seam_h"]), drop, t)
+                strip = _prism(tidy(flashing), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Flashing %s" % (name, letter), name)
+                extra.append(_prism(tidy(clip), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Clip %s" % (name, letter), name))
+                strip["verge_info"] = {"side": side, "type": kind, "length": round(v1 - v0, 1), "lap": 0.0, "nose": VERGE_FACE,
+                                       "drop": round(drop, 1), "clear": VERGE_FACE, "cover": VERGE_COVER, "thickness": t,
+                                       "last_seam": None, "last_tray": None if seam is None else round(seam, 1)}
+            else:
+                strip = _prism(tidy(_strip_ring(back - 1.0, t)), 0.0, v1 - v0, place(),
+                               "verge_strip", "%s Verge Strip %s" % (name, letter), name)
+                strip["verge_info"] = {"side": side, "type": kind, "length": round(v1 - v0, 1), "lap": VERGE_LAP, "nose": VERGE_NOSE,
+                                       "drop": VERGE_DROP, "clear": VERGE_CLEAR, "thickness": t,
+                                       "last_seam": None if seam is None else round(seam + VERGE_TRAY, 1)}
             extra.append(strip)
             info.setdefault("verges", []).append(dict(strip["verge_info"], u=round(u, 1)))
-            a, b = sorted((u - out * VERGE_LAP, u + out * VERGE_NOSE))
+            a, b = sorted((u - out * strip["verge_info"]["lap"], u + out * (strip["verge_info"]["nose"] + t)))
             info.setdefault("verge_strips", []).append([[a, v0], [b, v0], [b, v1], [a, v1]])
     return meshes + extra

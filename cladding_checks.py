@@ -227,6 +227,16 @@ def check_rules(params, infos=None):
             continue
         lo, hi = VERGE_SEAM
         side = {"l": "left", "r": "right"}
+        over = [v for v in verges if v.get("type") == "cladding"]
+        if over:
+            add("Verge", "pass", "%s: a verge flashing over the cladding on the %s (VMZ-SN-MA-ZI-05): a seam at the roof's edge, "
+                "the flashing down %.0f mm from the deck to cover the head of the wall's cladding by %.0f mm, on a continuous "
+                "folded strip. Only the %.0f is dimensioned on the sheet: agree the rest with the supplier" % (
+                    i["elevation"], " and ".join(side[v["side"]] for v in over), over[0]["drop"], over[0]["cover"], over[0]["cover"]),
+                len(over))
+        verges = [v for v in verges if v.get("type") != "cladding"]
+        if not verges:
+            continue
         off = [v for v in verges if v.get("last_seam") is not None and not (lo - 0.5 <= v["last_seam"] <= hi + 0.5)]
         if off:
             add("Verge", "warn", "%s: the last seam is %s from the tray's edge at the verge; the detail takes %.0f to %.0f mm. "
