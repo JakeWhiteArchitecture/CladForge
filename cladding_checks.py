@@ -207,6 +207,8 @@ def check_rules(params, infos=None):
                 add("Raking corner", "pass", what + ": the boards stop square against a corner profile run up the corner", r["length"])
             else:
                 said = {"lap": "Master is", "butt": "Square is", "profile": "Profile is for external right-angled corners in boards or panels and is"}.get(r["asked"])
+                if r["asked"] == "profile" and not r.get("match", True):
+                    said = "The two faces are not clad alike, so a corner profile is"
                 tail = ". %s not drawn on this raking corner: it is mitred" % said if said else ""
                 add("Raking corner", "warn" if said or p["seam"] else "pass",
                     what + ": every layer is cut to the plane that bisects it, the boards %.0f mm apart across the mitre" % r["gap"] + tail

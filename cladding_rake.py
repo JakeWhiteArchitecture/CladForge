@@ -48,10 +48,19 @@ def rakes_of(elev):
     return out
 
 
-def rake_detail(p, k):
-    """The detail built at a raking corner of slope k: "profile" where the job asks for it
-    and the corner takes one, else "mitre"."""
-    return "profile" if corner_detail(p, None, k) == "profile" and not p.get("seam") else "mitre"
+def rake_asked(p, r):
+    """The corner detail asked for at this raking corner: the one its record carries (its
+    master's chain's, so both faces build the same corner whatever chain each is in), else
+    this face's own."""
+    return corner_detail(p, r.get("detail"), None)
+
+
+def rake_detail(p, r):
+    """The detail built at the raking corner *r*: "profile" where that is asked for, the
+    corner takes one (external, right-angled, boards or panels) and both faces are clad
+    alike; else "mitre"."""
+    takes = corner_detail(p, r.get("detail"), r["k"]) == "profile" and not p.get("seam") and r.get("match", True)
+    return "profile" if takes else "mitre"
 
 
 def _rake_cut(r, kind, near, t, face, board, elev, p):
@@ -59,7 +68,7 @@ def _rake_cut(r, kind, near, t, face, board, elev, p):
     if kind in MEET:
         return -k * mid, k
     if kind in CLAD:
-        if rake_detail(p, k) == "profile" and kind != "seam":
+        if rake_detail(p, r) == "profile" and kind != "seam":
             pgap = edge_settings(elev)["pgap"]
             if p["cladding_type"] == "panel":
                 return board + pgap - k * face, 0.0                        # the nose (the panel's thickness) and its gap
@@ -91,11 +100,11 @@ def rake_parts(meshes, p, infos):
         for r in rakes:
             k, (mx, my) = r["k"], r["m"]
             (x1, y1), (x2, y2) = r["p1"], r["p2"]
-            asked = corner_detail(p, None, None)
-            detail = rake_detail(p, k)
+            asked = rake_asked(p, r)
+            detail = rake_detail(p, r)
             info.setdefault("rakes", []).append({
                 "with": r["with"], "master": r["master"], "length": round(r["length"], 1), "external": k > 0,
-                "angle": round(math.degrees(2.0 * math.atan(abs(k))), 1), "detail": detail, "asked": asked,
+                "angle": round(math.degrees(2.0 * math.atan(abs(k))), 1), "detail": detail, "asked": asked, "match": r.get("match", True),
                 "gap": edge_settings(elev)["gap"]})
             if detail != "profile":
                 continue

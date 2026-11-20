@@ -59,6 +59,7 @@ def valleys_of(elev, kind="valley"):
             if (inside[0] - p1[0]) * m[0] + (inside[1] - p1[1]) * m[1] < 0:
                 m = [-m[0], -m[1]]
             out.append({"with": v.get("with"), "p1": p1, "p2": p2, "k": k, "master": bool(v.get("master")),
+                        "detail": v.get("detail"), "match": v.get("match", True),
                         "other_up": [float(c) for c in v["other_up"]], "other_n": [float(c) for c in v["other_n"]],
                         "m": m, "length": length, "back": VALLEY_CLEAR / 2.0 * math.sqrt(1.0 + k * k)})
         except (KeyError, TypeError, ValueError):
