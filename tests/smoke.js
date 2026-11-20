@@ -801,6 +801,11 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  options: [...document.getElementById('ifc_lod').options].map(o => o.value).join() };
     });
     console.log('LOD view:', JSON.stringify(lod));
+    for (const level of [100, 200, 300]) {
+        await page.evaluate(n => document.querySelector(`#lod-switch button[data-lod="${n}"]`).click(), level);
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: path.join(__dirname, `smoke_lod${level}.png`) });
+    }
     if (lod.sheets !== lod.masses || lod.sheets < 1 || !(lod.plain < lod.full && lod.plain > lod.sheets) || lod.back !== lod.full
         || lod.active !== '100' || !lod.tagged || lod.options !== '300,200,100,all')
         throw new Error('the LOD switch did not redraw the build at each level: ' + JSON.stringify(lod));
