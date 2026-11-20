@@ -84,7 +84,10 @@ def build_elevation(p, elev, layout=None):
     holes = openings(elev)
     prof = {"strips": [], "warnings": [], "count": 0}     # corner profiles, for the DXF and checks
     edges = classify_edges(elev, outline)
-    _openings_extras(p, elev, meshes, holes, layers, depth - board - layers, depth, board, prof, v0)
+    # Under standing seam the closer stops at the back of the deck, which runs to the jamb
+    # over it: carried on to the trays it ran through the deck, and showed through them.
+    over = (p["deck_t"] + SEAM_STANDOFF) if p["seam"] else 0.0
+    _openings_extras(p, elev, meshes, holes, layers, depth - board - layers - over, depth, board, prof, v0)
     info["openings"] = len(holes)
     frames = opening_frames(elev, holes, depth)
     info["opening_details"] = [dict(d, key=opening_key(r), rect=list(r), frame_depth=frames[r]["depth"],

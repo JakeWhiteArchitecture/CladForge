@@ -768,6 +768,20 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         await download.saveAs(out);
         console.log(ext, 'download:', download.suggestedFilename(), fs.statSync(out).size, 'bytes');
     }
+    // IFC version: the default is IFC4X3; choosing IFC4 relabels the button and writes that schema.
+    const schemaOf = file => (fs.readFileSync(file, 'latin1').match(/FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'/) || [])[1];
+    const firstSchema = schemaOf(path.join(__dirname, 'smoke_out.ifc'));
+    await page.selectOption('#ifc_schema', 'IFC4');
+    const ifcLabel = await page.textContent('#ifc-btn');
+    await page.click('#ifc-btn');
+    await page.waitForSelector('#download-reminder.open', { timeout: 300000 });
+    const [ifc4] = await Promise.all([page.waitForEvent('download'), page.click('#download-reminder .btn-primary')]);
+    await ifc4.saveAs(path.join(__dirname, 'smoke_out.4.ifc'));
+    const secondSchema = schemaOf(path.join(__dirname, 'smoke_out.4.ifc'));
+    console.log('IFC version:', firstSchema, 'then', JSON.stringify(ifcLabel), '->', secondSchema);
+    if (!/^IFC4X3/.test(firstSchema || '') || secondSchema !== 'IFC4' || ifcLabel.trim() !== 'Download IFC4')
+        throw new Error('IFC version choice: ' + firstSchema + ' / ' + ifcLabel + ' / ' + secondSchema);
+    await page.selectOption('#ifc_schema', 'IFC4X3');
     // Corners: the chain's corner row, the master-lap detail and the master swap.
     await page.click('#cladding-type .turn-btn[data-value="panel"]');
     await settle();
