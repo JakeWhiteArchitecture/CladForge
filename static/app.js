@@ -1308,6 +1308,16 @@ function snapshotState() {
              seq: state.seq, active: act ? act.name : null, settings, chains };
 }
 
+// A state file is named after the chains in it, so it says what it holds: one chain's own
+// name, two or three joined, or the first and how many more. Chains never named (a state
+// from before chains had names) fall back on the dated name every other download has.
+function stateFileName(snap) {
+    const names = snap.chains.filter(c => c.members.length).map(c => c.name);
+    if (!names.length || names.every(n => /^Chain \d+$/.test(n))) return downloadName('state.xml');
+    const label = names.length <= 3 ? names.join(' + ') : `${names[0]} + ${names.length - 1} more`;
+    return label.replace(/[^A-Za-z0-9 _.,()+-]/g, ' ').replace(/\s+/g, ' ').trim() + '.state.xml';
+}
+
 async function saveState() {
     if (!pyReady) { setStatus('The engine is still loading — try again in a moment', 'busy'); return; }
     const snap = snapshotState();
@@ -1320,7 +1330,7 @@ import json as _json
 from cladding_state import to_xml as _to_xml
 _to_xml(_json.loads(_state_json))`);
         const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' })), a = document.createElement('a');
-        a.href = url; a.download = downloadName('state.xml'); document.body.appendChild(a); a.click();
+        a.href = url; a.download = stateFileName(snap); document.body.appendChild(a); a.click();
         document.body.removeChild(a); URL.revokeObjectURL(url);
         const n = snap.chains.reduce((k, c) => k + c.members.length, 0);
         setStatus(`State saved: ${snap.chains.filter(c => c.members.length).length} chain(s), ${n} elevation(s)`
@@ -1363,7 +1373,7 @@ from cladding_state import load as _load
 _json.dumps(_load(_state_xml))`));
     } catch (err) { res = { ok: false, error: err.message }; }
     if (!res.ok) { setStatus('Not loaded: ' + res.error, 'busy'); return false; }
-    const merged = restoreState(res.state, !!add && state.elevations.length > 0);
+    const merged = restoreState(res.state, !!add && state.elevations.length > 0, fileName);
     await updatePreview();
     if (!allMeshes.length) fitCameraTo(cladGroup.children.length ? cladGroup : outlineGroup);
     const n = state.elevations.length;
@@ -1372,13 +1382,29 @@ _json.dumps(_load(_state_xml))`));
         if (merged.renamed.length) parts.push(`renamed ${merged.renamed.join(', ')}`);
         if (merged.skipped.length) parts.push(`${merged.skipped.length} already in the job, left out (${merged.skipped.join(', ')})`);
         if (merged.otherModel) parts.push(`saved from ${merged.otherModel}: placed by its coordinates`);
+        if (merged.near.length) parts.push(nearNote(merged.near, res.state.saved, fileName));
         merged.note = parts.join(' · ');
-        setStatus(`Added ${fileName || 'state'}: ${merged.note}`, 'ready');
+        setStatus(`Added ${fileName || 'state'}: ${merged.note}`, merged.near.length ? 'busy' : 'ready');
         return merged;
     }
     setStatus(`Loaded ${fileName || 'state'}: ${state.chains.length} chain(s), ${n} elevation(s)`
               + (allMeshes.length ? '' : ' · no host model open'), 'ready');
     return {};
+}
+
+// What to say of faces left out because the job has nearly the same ones: which chains, and
+// which of the two is the later save, so the latest file is the one that gets used.
+function nearNote(near, saved, fileName) {
+    const pairs = [...new Set(near.map(q => `${q.chain} ≈ ${q.inJob.name}`))];
+    const mine = near[0].inJob.source, theirs = saved ? new Date(saved) : null, ours = mine && mine.saved ? new Date(mine.saved) : null;
+    const file = fileName || 'the file being added', job = mine && mine.file ? mine.file : 'the job as it stands';
+    let advice;
+    if (!ours || isNaN(ours)) advice = `the job's own has not come from a saved file, so it is the latest: keep it, or save it over ${file}`;
+    else if (!theirs || isNaN(theirs)) advice = `${file} does not say when it was saved: check which is the latest before using it`;
+    else if (theirs > ours) advice = `${file} is the later save (${savedWhen(saved)}, against ${savedWhen(mine.saved)} for ${job}): use it instead. Remove the chain from the job, or Load state with ${file}`;
+    else advice = `${job} is the later save (${savedWhen(mine.saved)}, against ${savedWhen(saved)}): keep it and leave ${file} out`;
+    return `WARNING: ${near.length} face(s) left out because the job has nearly the same surfaces, but not the same (${pairs.join(', ')}). `
+        + `This looks like two saves of one chain. Use the latest file: ${advice}`;
 }
 
 // A saved state's job-wide settings (keyed by form field) as a chain's own settings: what a
@@ -1393,6 +1419,22 @@ function chainSettingsOf(s) {
     for (const k of ['seam_deck', 'counter_batten', 'custom_profile', 'custom_section']) if (s[k]) out[k] = s[k];
     return Object.keys(out).length ? out : null;
 }
+
+// Two surfaces that are nearly the same wall face but not the same: on one plane, and one
+// covering at least half of the other. A chain saved, changed and saved again comes back
+// like this: adding both would clad the wall twice.
+function nearSurface(a, b) {
+    if (!a || !b || !a.frame || !b.frame || sameSurface(a, b)) return false;
+    const dot = (p, q) => p.reduce((t, x, k) => t + x * q[k], 0);
+    if (dot(a.frame.n, b.frame.n) < 0.999 || dot(a.frame.u, b.frame.u) < 0.99) return false;
+    const off = b.frame.origin.map((x, k) => x - a.frame.origin[k]);
+    if (Math.abs(dot(off, a.frame.n)) > 5) return false;
+    const v = a.frame.v || [0, 0, 1], u0 = dot(off, a.frame.u), v0 = dot(off, v);
+    const lap = (p0, p1, q0, q1) => Math.max(0, Math.min(p1, q1) - Math.max(p0, q0));
+    const shared = lap(0, a.width, u0, u0 + b.width) * lap(0, a.height, v0, v0 + b.height);
+    return shared >= 0.5 * Math.min(a.width * a.height, b.width * b.height);
+}
+const savedWhen = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
 
 // Two surfaces are the same wall face: the same place, direction and size.
 function sameSurface(a, b) {
@@ -1409,10 +1451,11 @@ function sameSurface(a, b) {
 // free one, and a wall face the job already has is left out, so the same state added twice
 // adds nothing. Returns what was added ({chains, elevations, renamed, skipped}), or null
 // for a plain load.
-function restoreState(st, add) {
+function restoreState(st, add, fileName) {
     closeEditWidget();
     if (in2D()) { exit2D(); update2DButton(); }
-    const merged = add ? { chains: 0, elevations: 0, renamed: [], skipped: [], otherModel: null } : null;
+    const merged = add ? { chains: 0, elevations: 0, renamed: [], skipped: [], near: [], otherModel: null } : null;
+    const source = { file: fileName || null, saved: st.saved || null };       // where each chain it brings came from
     if (!add) {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
         state.heals = []; state.healNo = new Set(); renderHeals([]);      // a new job: nothing offered, nothing declined
@@ -1449,7 +1492,7 @@ function restoreState(st, add) {
         const chain = { name: c.name, members: [], length: 0, built: !!c.built,
                         topZ: c.topZ === null || c.topZ === undefined ? null : c.topZ + d[2],
                         bottomZ: c.bottomZ === null || c.bottomZ === undefined ? null : c.bottomZ + d[2],
-                        edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}),
+                        edges: Object.assign({}, EDGE_DEFAULTS, c.edges || {}), source,
                         settings: c.settings ? Object.assign({}, c.settings) : (add ? chainSettingsOf(s) : null) };
         for (const m of c.members || []) {
             const surface = m.surface;
@@ -1459,6 +1502,10 @@ function restoreState(st, add) {
             if (add) {
                 const twin = state.elevations.find(x => sameSurface(x.result, surface));
                 if (twin) { merged.skipped.push(`${m.name.replace('Elevation ', '')} = ${twin.name.replace('Elevation ', '')}`); continue; }
+                // Nearly the same face as one the job has, but not the same: an earlier or later
+                // save of the same chain. Not added on top of it; the newer of the two is named.
+                const close = state.elevations.find(x => x.result && x.result.ok && nearSurface(x.result, surface));
+                if (close) { merged.near.push({ face: m.name, chain: c.name, twin: close.name, inJob: close.chain }); continue; }
                 if (state.elevations.some(x => x.name === name)) {
                     name = freeElevation();
                     merged.renamed.push(`${m.name.replace('Elevation ', '')} → ${name.replace('Elevation ', '')}`);
@@ -1487,7 +1534,9 @@ function restoreState(st, add) {
         chain.datumFrom = byName[c.datumFrom] && byName[c.datumFrom].chain === chain ? byName[c.datumFrom] : null;
         if (!chain.members.length) continue;      // every face of it left out: no chain, and no name used up
         if (add && state.chains.some(x => x.name === chain.name)) {
-            do { chain.name = 'Chain ' + (++state.seq); } while (state.chains.some(x => x.name === chain.name));
+            // a numbered chain takes the next number; a named one keeps its name with a number after it
+            if (/^Chain \d+$/.test(chain.name)) do { chain.name = 'Chain ' + (++state.seq); } while (state.chains.some(x => x.name === chain.name));
+            else chain.name = freeChainName(chain.name, chain);
             merged.renamed.push(`${c.name} → ${chain.name}`);
         }
         relayoutChain(chain);

@@ -48,8 +48,61 @@ function wizNeedsCb() {
     return WIZ.draft.type === 'plank' && WIZ.draft.orient === 'vertical';     // trays lie on a deck on vertical battens
 }
 
+// ─── CHAIN NAMES ───
+// A chain is asked its name once the cladding is chosen, and offered one made of the way
+// it faces and what it is: "South-West Panel cladding". The way it faces is read off its
+// faces' own outward normals, with the model's +Y taken as north (project north: an IFC's
+// true north is not read). A saved state is named after its chains, so a file says what
+// it holds before it is added to a job.
+const COMPASS = ['North', 'North-East', 'East', 'South-East', 'South', 'South-West', 'West', 'North-West'];
+function chainFacing(chain) {
+    let x = 0, y = 0, up = 0, area = 0;
+    for (const m of chainFaces(chain)) {
+        const n = m.result.frame.n, a = m.result.area || (m.result.width * m.result.height) || 1;
+        x += n[0] * a; y += n[1] * a; up += Math.abs(n[2]) * a; area += a;
+    }
+    if (!area) return '';
+    if (Math.hypot(x, y) < 0.15 * area) return up > 0.5 * area ? 'Flat' : 'All-round';      // a flat roof; or faces all the way round
+    const bearing = (Math.atan2(x, y) * 180 / Math.PI + 360) % 360;                           // clockwise from north
+    return COMPASS[Math.round(bearing / 45) % 8];
+}
+function chainIsRoof(chain) {
+    const faces = chainFaces(chain);
+    return faces.length > 0 && faces.filter(m => m.result.pitch !== undefined && m.result.pitch <= 75 && !m.result.faces_down).length * 2 > faces.length;
+}
+function cleanChainName(text) {
+    return String(text || '').replace(/[^A-Za-z0-9 _.,()+-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+// *name* made free: no other chain has it (the next number is added until none does).
+function freeChainName(name, chain, taken) {
+    const used = new Set(state.chains.filter(c => c !== chain).map(c => c.name).concat(taken || []));
+    let out = name, k = 1;
+    while (used.has(out)) out = `${name} ${++k}`;
+    return out;
+}
+function suggestChainName(chain, type, taken) {
+    const what = { panel: 'Panel', plank: 'Plank', seam: 'Standing seam' }[type] || 'Cladding';
+    const name = [chainFacing(chain), what, chainIsRoof(chain) ? 'roofing' : 'cladding'].filter(Boolean).join(' ');
+    return freeChainName(cleanChainName(name), chain, taken);
+}
+function wizTargets() { return pendingChains().length ? pendingChains() : [activeChain()].filter(Boolean); }
+// The names on offer for the chains being built: what was typed, else the suggestion for
+// the cladding now chosen (so going back and changing the type changes it), else, for a
+// chain already named by hand, the name it has.
+function wizNames() {
+    const taken = [], out = [];
+    for (const c of wizTargets()) {
+        const typed = WIZ.draft.names.get(c);
+        const named = c.built && !/^Chain \d+$/.test(c.name) ? c.name : null;
+        const name = typed !== undefined ? typed : (named || suggestChainName(c, WIZ.draft.type, taken));
+        taken.push(name);
+        out.push([c, name]);
+    }
+    return out;
+}
+
 function wizStepIds() {
-    const ids = ['type'];
+    const ids = ['type', 'name'];
     if (WIZ.draft.type !== 'panel') ids.push('orient');
     ids.push('dims', 'battens');
     if (wizNeedsCb()) ids.push('cbattens');
@@ -61,7 +114,7 @@ function openWizard() {
     if (!readyChains().length) return;
     const seam = toggleValue('cladding-type') !== 'panel' && toggleValue('plank-profile') === 'seam';
     WIZ.draft = { type: seam ? 'seam' : (toggleValue('cladding-type') || 'plank'),
-                  orient: toggleValue('plank-orient') || 'horizontal', base: 'foot', dims: {} };
+                  orient: toggleValue('plank-orient') || 'horizontal', base: 'foot', dims: {}, names: new Map() };
     for (const group of Object.keys(WIZ_GROUPS)) for (const [id] of WIZ_GROUPS[group]) WIZ.draft.dims[id] = val(id);
     WIZ.step = 0;
     document.getElementById('chain-wizard').classList.add('open');
@@ -77,6 +130,7 @@ function wizBattenRun() { return WIZ.draft.type === 'plank' && WIZ.draft.orient 
 
 function wizTitle(id) {
     if (id === 'type') return 'Plank, panel or standing seam?';
+    if (id === 'name') return wizTargets().length > 1 ? 'Name the chains' : 'Name the chain';
     if (id === 'orient') return 'Horizontal or vertical?';
     if (id === 'battens') return wizBattenRun() + ' battens';
     if (id === 'cbattens') return 'Counter-battens';
@@ -118,6 +172,14 @@ function wizBody(id) {
         ['plank', 'Plank', 'Boards coursed across the face, lapped or open-jointed'],
         ['panel', 'Panel', 'Sheet panels on open joints, set out from the openings'],
         ['seam', 'Standing seam', 'Metal trays on a deck, joined at standing seams (430 or 530 centres)']]);
+    if (id === 'name') {
+        return '<div class="wiz-dims wiz-names">' + wizNames().map(([c, name], k) =>
+            `<div class="field"><label>${chainSummary(c)} <span class="unit">${chainFacing(c) ? 'faces ' + chainFacing(c).toLowerCase() : ''}</span></label>
+                <input type="text" id="wiz-name-${k}" value="${name}" maxlength="60" spellcheck="false"
+                       oninput="WIZ.draft.names.set(wizTargets()[${k}], this.value)"></div>`).join('') + '</div>'
+            + '<p class="hint">The name is suggested from the way the chain faces (the model\'s +Y is taken as north) and its cladding. '
+            + 'It labels the chain in the list and names the file when the state is saved, so a saved chain says what it is before it is added to a job.</p>';
+    }
     if (id === 'orient') return wizChoice('orient', [
         ['horizontal', 'Horizontal', WIZ.draft.type === 'seam' ? 'Trays run along the elevation' : 'Planks run along the elevation on vertical battens'],
         ['vertical', 'Vertical', WIZ.draft.type === 'seam' ? 'Trays run up the elevation' : 'Planks run up the elevation on horizontal battens over counter-battens']]);
@@ -159,6 +221,12 @@ function wizBuild() {
     selectToggle('plank-orient', d.orient);
     for (const group of [d.type, 'battens'].concat(steps.indexOf('cbattens') >= 0 ? ['cbattens'] : [])) {
         for (const [fid] of WIZ_GROUPS[group]) if (!wizDerived(fid)) document.getElementById(fid).value = d.dims[fid];
+    }
+    // their names: as typed or as offered, tidied, and no two chains alike
+    const taken = [];
+    for (const [c, name] of wizNames()) {
+        c.name = freeChainName(cleanChainName(name) || c.name, c, taken);
+        taken.push(c.name);
     }
     built.forEach(c => c.built = true);
     // The answers are the new chains' own settings (or, rebuilding, the active chain's):

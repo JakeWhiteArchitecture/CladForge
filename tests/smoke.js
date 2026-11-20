@@ -121,6 +121,8 @@ async function main() {
         const after = await eye();
         if (before !== after) cameraMoves.push(`${name}: ${before} -> ${after}`);
     }
+    // Which faces share a chain, whatever the chains are called: [a, a, b] reads 0,0,1.
+    const grouping = names => { const seen = []; return names.map(n => { if (!seen.includes(n)) seen.push(n); return seen.indexOf(n); }).join(); };
     // Picking generates nothing: the chain has to be built through the wizard first.
     async function buildChain(type, orient, useButton, levels) {
         // The button only shows while a chain is unbuilt; Enter reopens the wizard either way.
@@ -136,6 +138,14 @@ async function main() {
                                                           document.getElementById('wiz-step').textContent,
                                                           document.getElementById('wiz-chain').textContent].join(' | ')));
         await page.click(`#wiz-body .wiz-option >> nth=${type === 'panel' ? 1 : 0}`);
+        // Once the cladding is chosen the chain is asked its name, and offered one: the way it
+        // faces and what it is. Next takes what is offered.
+        const naming = await page.evaluate(() => [document.getElementById('wiz-title').textContent,
+            Array.from(document.querySelectorAll('#wiz-body input[type=text]')).map(n => n.value).join(' / ')]);
+        console.log('  wizard name:', naming.join(' | '));
+        if (!/^Name the chain/.test(naming[0]) || !naming[1] || !naming[1].split(' / ').every(n => /(Plank|Panel|Standing seam) (cladding|roofing)( \d+)?$/.test(n)))
+            throw new Error('the wizard did not offer the chain a name: ' + JSON.stringify(naming));
+        await page.click('#wiz-next');
         if (type !== 'panel') await page.click(`#wiz-body .wiz-option >> nth=${orient === 'vertical' ? 1 : 0}`);
         // The remaining steps are all number fields; walk them to Build.
         for (let i = 0; i < 6; i++) {
@@ -173,6 +183,10 @@ async function main() {
     console.log('nothing built yet, preview empty:', await page.evaluate(() => cladGroup.children.length === 0));
     await buildChain('plank', 'horizontal');
     await page.waitForFunction(() => cladGroup.children.length > 0, null, { timeout: 60000 });
+    // The chain took the name it was offered: the south wall's, in planks.
+    const firstName = await page.evaluate(() => [state.chains[0].name, document.querySelector('.chain-head') ? document.querySelector('.chain-head').textContent : ''].join(' | '));
+    console.log('chain name:', firstName);
+    if (!/^South Plank cladding \| South Plank cladding/.test(firstName)) throw new Error('the chain was not named after its face and cladding: ' + firstName);
     const counts = await page.evaluate(() => { const c = {}; cladGroup.children.forEach(g => c[g.name] = g.children.length); return c; });
     console.log('preview groups:', JSON.stringify(counts));
     // The south wall has a window (an interior hole) and a door (a notch in the outline):
@@ -524,7 +538,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     await settle();
     const reachBack = await reach();
     console.log('opening frame:', JSON.stringify({ frameText, face0, reachDefault, reachSet, reachBack }));
-    if (!/50 mm behind the wall face · Chain \d+'s frame setback/.test(frameText) || reachDefault !== face0 + 50
+    if (!/50 mm behind the wall face · .+'s frame setback/.test(frameText) || reachDefault !== face0 + 50
         || reachSet !== face0 + 20 || reachBack !== reachDefault)
         throw new Error('opening frame position wrong: ' + JSON.stringify({ frameText, face0, reachDefault, reachSet, reachBack }));
     // "Every window and door in this chain" reaches every member of the chain and no other chain.
@@ -1079,6 +1093,11 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     const [stateFile] = await Promise.all([page.waitForEvent('download'), page.click('#save-state')]);
     const statePath = path.join(__dirname, 'smoke_out.state.xml');
     await stateFile.saveAs(statePath);
+    // the file is named after the chains in it
+    const stateName = stateFile.suggestedFilename(), chainNames = await page.evaluate(() => state.chains.map(c => c.name));
+    console.log('state file name:', stateName, '| chains:', chainNames.join(', '));
+    if (!/\.state\.xml$/.test(stateName) || stateName.indexOf(chainNames[0]) !== 0)
+        throw new Error('the state file is not named after its chains: ' + stateName + ' / ' + chainNames.join(', '));
     const stateText = fs.readFileSync(statePath, 'utf8');
     await page.evaluate(async () => {
         document.getElementById('panel_w').value = 900;
@@ -1141,6 +1160,19 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || afterDelete.elevations !== beforeAdd.elevations - 1 || addedBack.elevations !== beforeAdd.elevations
         || !addedBack.unique || !addedBack.chainNames || !addedBack.resultNames || !/drawing\.xml: not loaded/.test(addedBack.status))
         throw new Error('adding states did not merge as it should: ' + JSON.stringify({ beforeAdd, addedSame, afterDelete, addedBack }));
+    // A state whose faces are nearly the job's but not the same (the same chain, saved again after
+    // its wall changed): left out, with a warning that says which of the two is the later save.
+    const nudged = stateText.replace(/(<saved[^>]*>)[^<]*(<\/saved>)/, '$12001-01-01T00:00:00.000Z$2');
+    const widened = await page.evaluate(() => state.elevations.map(e => e.result.width));
+    await page.evaluate(() => { for (const e of state.elevations) e.result.width += 40; });
+    await page.setInputFiles('#state-add', { name: 'older.state.xml', mimeType: 'application/xml', buffer: Buffer.from(nudged) });
+    await page.waitForFunction(() => /^Added 1 of 1 state file/.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
+    const nearAdd = await jobNow();
+    await page.evaluate(w => { state.elevations.forEach((e, k) => { e.result.width = w[k]; }); }, widened);
+    console.log('add a near-duplicate:', nearAdd.status.slice(0, 420));
+    if (nearAdd.elevations !== addedBack.elevations || nearAdd.chains !== addedBack.chains || !/WARNING: \d+ face\(s\) left out because the job has nearly the same surfaces/.test(nearAdd.status)
+        || !/Use the latest file/.test(nearAdd.status) || !/is the later save/.test(nearAdd.status))
+        throw new Error('a near-duplicate state was not warned about and left out: ' + JSON.stringify(nearAdd));
     // back to the job as it was saved, for the steps that follow
     await page.setInputFiles('#state-file', statePath);
     await page.waitForFunction(() => /^Loaded /.test(document.getElementById('status-chip').textContent), null, { timeout: 30000 });
@@ -1629,7 +1661,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('grid under lower cladding:', JSON.stringify(dipped));
     if (!(dipped.grid < dipped.low) || dipped.low - dipped.grid > 60 || dipped.back !== floor.grid)
         throw new Error('the grid did not follow the cladding down: ' + JSON.stringify(dipped));
-    if (hipped.chains.join() !== 'Chain 1,Chain 1,Chain 2,Chain 3' || hipped.ridge.map(r => r.join('-')).join() !== '3000-6000,3000-6000'
+    if (grouping(hipped.chains) !== '0,0,1,2' || hipped.ridge.map(r => r.join('-')).join() !== '3000-6000,3000-6000'
         || hipped.hips.join() !== '2,2,2,2' || hipped.ridgeCaps !== 2 || hipped.hipCaps !== 8 || hipped.aprons !== 4 || hipped.verges
         || hipped.ridgeCheck.join() !== '3.00')
         throw new Error('the hipped roof was not joined at its ridge and hips: ' + JSON.stringify(hipped));
@@ -1707,7 +1739,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     });
     const mitredRake = await raking();
     console.log('raking corner:', JSON.stringify(mitredRake), '|', rakeStatus);
-    if (mitredRake.chains !== 'Chain 1,Chain 2' || mitredRake.pitch !== '75,90'
+    if (grouping(mitredRake.chains.split(',')) !== '0,1' || mitredRake.pitch !== '75,90'
         || mitredRake.records !== 'rake,Elevation B,true,3106,1,mitre,true / rake,Elevation A,false,3106,1,mitre,true'
         || !/raking corner with B/.test(mitredRake.cards) || !/a raking corner with Elevation A/.test(rakeStatus)
         || mitredRake.profiles || !/10 mm apart across the mitre/.test(mitredRake.check))
