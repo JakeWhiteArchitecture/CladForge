@@ -1284,6 +1284,9 @@ _json.dumps(_o)`);
         renderChecks(result.checks);
         renderInfo(result.info);
         pruneJoints(result.info);
+        // the cards say which faces' seams follow another's, which a build can link by itself
+        const seamSig = result.info.map(i => i.seam_from && i.seam_from.lines ? i.elevation + '>' + i.seam_from.name : '').join();
+        if (seamSig !== state._seamSig) { state._seamSig = seamSig; renderElevationList(); }
         if (params.trim) scheduleNesting();       // not on slider frames: those are untrimmed
     } catch (err) {
         console.error('preview failed', err);
