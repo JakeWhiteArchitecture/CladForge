@@ -249,8 +249,8 @@ def _section_solid(ifc, mesh):
 
 def _point(ifc, cache, xyz):
     key = tuple(round(float(c), 4) for c in xyz)
-    if key not in cache:
-        cache[key] = ifc.createIfcCartesianPoint(key)
+    if key not in cache:        # one point for corners that coincide, written at full precision
+        cache[key] = ifc.createIfcCartesianPoint(tuple(float(c) for c in xyz))
     return cache[key]
 
 
