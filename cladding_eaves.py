@@ -1,36 +1,44 @@
 """CladForge — the eaves: the level bottom edge of a roof slope clad in standing seam trays
 that run with the fall.
 
-No drawing of the eaves was supplied with the others (ridge, verge, valley), so this is the
-usual standing seam eaves in the same manner as cladding_verge's strip, and every size
-here is assumed: agree them against the supplier's eaves detail. The face's bottom edge is
-taken as the outer face of the roof's edge (the fascia, or the back of the gutter).
+Drawn after the designer's own sketch of it and detail DL-41 (a ventilated standing seam
+wall to roof, no gutter); the sizes are assumed, and the check says so: agree them against
+the supplier's eaves detail. The face's bottom edge is the edge of the roof's own surface
+(the surface that was picked: the outer edge of the model's plywood or slab).
 
-  * The eaves apron: a folded sheet lying on the deck under the trays, EAVES_LAP up the
-    slope from the edge, its nose EAVES_NOSE out beyond it, turned back under, then down:
-    the drop hangs **plumb in front of the edge of the roof's own surface** (the surface
-    that was picked: the outer edge of the model's plywood), EAVES_CLEAR clear of it, and
-    runs down past that edge by EAVES_DROP, with a drip kicked out at its foot. The
-    build-up's end is cut square to the slope, so on a pitch it leans out over the edge:
-    the drop stands as much further out as it takes to pass it (apron_drop).
-  * The trays, and their seams, run out over the apron to EAVES_TRAY beyond the edge, where
-    each is welted round the apron's nose. Their outlines are lengthened, so the cutting
-    list has a tray as long as it is on the roof; the welt turned under is not added. A
-    seam ends there as the chain's bottom seam end says (folded, or flat).
-  * Everything under the trays (deck, battens) runs to the roof's edge. The chain's bottom
-    edge offset does not apply at an eaves.
+  * **The plywood runs on**: the deck under the trays is carried EAVES_NOSE down the slope
+    past the drip's line, and the trays and their seams run to its end. Their outlines are
+    lengthened, so the cutting list has a tray as long as it is on the roof (the turn
+    round the end is not added). The battens and the layers under them stay at the edge.
+  * **The zinc**: a folded sheet under the trays' ends, EAVES_LAP up the plywood, that
+    turns round the plywood's end in a half circle, **comes back under the plywood**, then
+    drops plumb and is hooked back up at its foot: the drip (_eaves_rings).
+  * **The support profile**: what the zinc is dressed over. An angle, one leg fixed up
+    under the plywood and one hanging plumb behind the zinc's drop.
+  * The drip's line is where the plywood's underside stands over the roof's edge (the
+    build-up's end is square to the slope and leans out over it), never less than
+    EAVES_CLEAR out from that edge; its foot is EAVES_DROP below the edge.
+  * **The seams are folded back at 45 degrees** at this eaves, whatever the chain's bottom
+    seam end says.
+
+**An eaves with no overhang**: where the roof comes down to the head of an upright wall that
+is clad too (fabric_extract.eaves_link, kind "eaves" among the two faces' "valleys"), the
+roof runs on over the wall's cladding: the drip's line stands EAVES_OVER beyond the
+outside of that cladding (its seams' tips) and the drop laps it by EAVES_WALL_LAP; and every
+layer of the wall stops level under the roof's plywood (eaves_under, wall_stop).
 
 Whether a chain's slopes get one is its "eaves" setting: on, or none — a bottom edge that
 runs into a wall, a parapet gutter or another roof is not an eaves and has to be switched
 off. Only a level edge at least 300 long is one: a raking bottom edge is a valley.
 
-Not modelled: the gutter and its brackets, the fascia, the continuous clip some systems
-fix under the apron, the tray's welt, the apron's laps and its ends at a verge or a hip."""
+Not modelled: the gutter and its brackets, the fascia, the insect mesh in the gap over a
+wall's cladding, the zinc's laps and its ends at a verge or a hip."""
 
 import math
 
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import orient
+from shapely.ops import unary_union
 
 from cladding_constants import _parse, _prism, chain_params, frame_to_world, frame_v
 from cladding_edges import settings as edge_settings
@@ -39,13 +47,14 @@ from cladding_ridge import _same_frame, _up_slope
 from cladding_valley import valleys_of
 from cladding_verge import ROOF_PITCH, VERGE_TRAY
 
-EAVES_NOSE = 35.0     # mm – the apron's nose, out beyond the roof's edge (assumed)
-EAVES_TRAY = 40.0     # mm – the trays' ends beyond the roof's edge, round the nose (assumed)
-EAVES_LAP = 100.0     # mm – the apron on the deck, up from the edge (assumed)
+EAVES_NOSE = 40.0     # mm – the plywood, on past the drip's line, down the slope (assumed)
+EAVES_TRAY = EAVES_NOSE   # the trays run to the plywood's end, where the zinc turns round it
+EAVES_LAP = 100.0     # mm – the eaves zinc on the plywood under the trays, up from its end (assumed)
+EAVES_SUPPORT_T = 1.5  # mm – the support profile's metal (assumed)
+EAVES_SUPPORT_LEG = 60.0   # mm – its leg under the plywood, up the slope from the drip's line (assumed)
+EAVES_HOOK = 10.0     # mm – the zinc hooked back up behind the support's foot (assumed)
 EAVES_CLEAR = 10.0    # mm – the apron's drop, clear of the edge of the roof's surface, on plan (assumed)
 EAVES_DROP = 50.0     # mm – the drop's foot, below the edge of the roof's surface (assumed)
-EAVES_KICK = 10.0     # mm – the drip kicked out at its foot (assumed)
-EAVES_WELT = 25.0     # mm – the trays' ends turned back under the apron's nose (assumed)
 EAVES_OVER = 20.0     # mm – over a clad wall: the deck's underside out beyond the wall cladding's outside, on plan (assumed)
 EAVES_WALL_LAP = 60.0 # mm – over a clad wall: the drop's foot below the top of the wall's cladding (assumed)
 EAVES_MIN = 300.0     # mm – a level bottom edge shorter than this is not an eaves
@@ -73,17 +82,16 @@ def _edges(info):
     return sorted(out)
 
 
-def apron_drop(y0, t, pitch, below=EAVES_DROP, deck=18.0):
-    """Where the apron's drop hangs: (how far out from the edge of the roof's surface, on
-    plan; how far below that edge its foot is). The apron wraps over the end of the
-    plywood it lies on (*deck* thick, its top *y0* off the face) and the drop falls plumb
-    from under that end, so it is as far out as the plywood's underside is there (the end
-    is cut square to the slope and leans out over the edge), and never less than
-    EAVES_CLEAR; its foot is *below* the edge, and at least 20 mm below where it starts."""
+def apron_drop(soffit, pitch, below=EAVES_DROP):
+    """Where the drip's drop hangs: (how far up the slope from the plywood's end the plumb
+    line of it meets the plywood's underside; how far out from the edge of the roof's
+    surface that is, on plan; how far below that edge its foot is). The plywood runs
+    EAVES_NOSE on past the line. The line is where the plywood's underside (*soffit* off
+    the face) stands over the edge the roof runs to, and never less than EAVES_CLEAR out
+    from that edge; the foot is *below* the edge, and at least 20 mm below the plywood."""
     s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
-    under = y0 - deck - t                                   # just under the plywood's end
-    out = max(t * c + under * s, EAVES_CLEAR + t / 2.0)
-    return out, max(below, 20.0 - (under * c - t * s))
+    out = max(soffit * s, EAVES_CLEAR)
+    return EAVES_NOSE, out, max(below, 20.0 - soffit * c + (out - soffit * s) * s / c)
 
 
 def soffit_depth(p):
@@ -141,32 +149,57 @@ def wall_stop(depth, soffit, top, pitch):
     return min(0.0, soffit / c - depth * t) - top
 
 
-def _apron_ring(y0, t, pitch, below=EAVES_DROP, deck=18.0):
-    """The apron's section: x out from the roof's edge down the slope, y the depth from the
-    face. On the plywood at depth y0, out to the nose and back under it; then it **wraps
-    over the end of the plywood**, down its end face to its underside, and from under
-    there the drop falls plumb (apron_drop) to its foot, where the drip is kicked out.
-    *pitch*: the slope, in degrees from level."""
-    g = 2.5 * t
+def _eaves_rings(top, soffit, t, pitch, below=EAVES_DROP):
+    """The eaves in section, as (the zinc's ring, the support profile's ring): x out from
+    the edge the roof runs to, down the slope, y the depth from the face.
+
+    The plywood (its top *top* off the face, its underside *soffit*) runs EAVES_NOSE on
+    past the drip's line. **The zinc** comes down the plywood's top under the trays, turns
+    round the plywood's end in a half circle, **comes back under the plywood**, then
+    drops plumb and is hooked back under at its foot: the drip. **The support profile** is
+    what it is dressed over: an angle, one leg fixed up under the plywood and one hanging
+    plumb, the zinc lying on the outside of that and hooked round its foot. *pitch*: the
+    slope, in degrees from level."""
     s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
-    out, below = apron_drop(y0, t, pitch, below, deck)
-    at = lambda h, z: (h * c - z * s, h * s + z * c)        # noqa: E731 — (out on plan, up) from the edge, as (x, y)
-    under = y0 - deck - t
-    start = (t * c + under * s, under * c - t * s)          # the foot of the wrap, as (out on plan, up)
-    path = [(-EAVES_LAP, y0), (EAVES_NOSE, y0), (EAVES_NOSE, y0 - g), (t, y0 - g), (t, under)]
-    if out > start[0] + 0.5:
-        path.append(at(out, start[1]))                      # (a shallow roof: out to where the drop clears the edge)
-    path += [at(out, -below), at(out + EAVES_KICK, -below - EAVES_KICK)]
-    return list(LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1]
+    nose, out, below = apron_drop(soffit, pitch, below)
+    down, away = (s, -c), (c, s)                           # plumb down, and level out from the building, as (x, y)
+    ts = EAVES_SUPPORT_T
+    q = ((out - soffit * s) / c, soffit)                   # where the drop's line meets the plywood's underside
+    end = q[0] + nose                                      # the plywood's end
+    fall = soffit * c - q[0] * s + below                   # from there down to the foot
+    # the support: under the plywood from near its end to EAVES_SUPPORT_LEG up the slope past the line, and the leg down
+    leg = [(q[0] + away[0] * ts / 2.0, q[1] - ts / 2.0), (q[0] + away[0] * ts / 2.0 + down[0] * fall, q[1] - ts / 2.0 + down[1] * fall)]
+    flange = [(end - 5.0, soffit - ts / 2.0), (q[0] - EAVES_SUPPORT_LEG, soffit - ts / 2.0)]
+    support = unary_union([LineString(leg).buffer(ts / 2.0, cap_style=2), LineString(flange).buffer(ts / 2.0, cap_style=2)])
+    # the zinc
+    yt, yb = top + t, soffit - ts - t                      # on the plywood, and under the support's flange
+    r, yc = (yt - yb) / 2.0, (yt + yb) / 2.0
+    arc = [(end + r * math.cos(math.radians(a)), yc + r * math.sin(math.radians(a))) for a in range(75, -76, -15)]
+    off = ts + t                                           # the drop: on the outside of the support's leg
+    line = (q[0] + away[0] * off, q[1] + away[1] * off)
+    k = (line[1] - yb) / c                                 # down the line to the level of the run under the plywood
+    under = (line[0] + down[0] * k, yb) if k > 0 else (line[0], yb)
+    foot = (line[0] + down[0] * (fall + off * s / c + 2.0 * t), line[1] + down[1] * (fall + off * s / c + 2.0 * t))
+    hook = (foot[0] - away[0] * (ts + 3.0 * t), foot[1] - away[1] * (ts + 3.0 * t))
+    path = [(end - EAVES_LAP, yt), (end, yt)] + arc + [(end, yb), under, foot, hook, (hook[0] - down[0] * EAVES_HOOK, hook[1] - down[1] * EAVES_HOOK)]
+    zinc = LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0)
+    ring = lambda g: list(g.exterior.coords)[:-1]          # noqa: E731
+    return ring(zinc), ring(support if support.geom_type == "Polygon" else max(support.geoms, key=lambda g: g.area))
 
 
-def _welt_ring(y_tray, y0, t):
-    """The trays' ends welted round the apron's nose, in the apron's section: on out past
-    the nose, turned down round it and back under it for EAVES_WELT. That turn is the drip
-    at the roof's edge. *y_tray*: the middle of the trays' sheet; *y0*: the apron's top."""
-    under = y0 - 2.5 * t - 1.5 * t
-    path = [(EAVES_TRAY - 1.0, y_tray), (EAVES_TRAY + t, y_tray), (EAVES_TRAY + t, under), (EAVES_TRAY - EAVES_WELT, under)]
-    return list(LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1]
+def _fold_back(m, at):
+    """Fold a seam's end back at 45 degrees where it runs out at the eaves: its end slopes
+    from the tray up to its full height over the seam's height (cladding_edges.finish_seams
+    does the same where the chain says folded; at this eaves it is always done). *at*: which
+    of its outline's corners are its end."""
+    if not (m.get("seam_part") and m.get("seam_v")) or not any(at):
+        return
+    rows = (m.get("vshift") or [[[0.0] * 4 for _ in m["profile"]]])[0]
+    if any(abs(rows[i][3]) > 1e-9 for i, on in enumerate(at) if on):
+        return                                             # folded already
+    face = float(m.get("seam_face") or 0.0)
+    rows = [[sh[0], sh[1], sh[2] - face, sh[3] + 1.0] if on else list(sh) for sh, on in zip(rows, at)]
+    m["vshift"] = [rows] + [[[0.0] * 4 for _ in h] for h in (m.get("holes") or [])]
 
 
 def _lower(q, others, v):
@@ -215,15 +248,17 @@ def eaves_parts(meshes, p, infos):
             for a, b in zip(cuts, cuts[1:]):
                 over = next((q for q in joins if abs(q["v"] - v) < 2.0 and q["u0"] <= (a + b) / 2.0 <= q["u1"]), None)
                 run, below = 0.0, EAVES_DROP
+                s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
                 if over:
-                    # the deck's underside out to EAVES_OVER beyond the outside of the wall's cladding (its seams' tips), on plan
-                    s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+                    # the drip's line EAVES_OVER beyond the outside of the wall's cladding (its seams' tips), on plan
                     run = max(0.0, (over["depth"] + over["seam"] + EAVES_OVER - soffit * s) / c)
                     below = EAVES_WALL_LAP - wall_stop(over["depth"] + over["seam"], soffit, over["top"], pitch) - run * s
                 ve = v - run
+                nose, drop_out, below = apron_drop(soffit, pitch, below)
+                end = ve - (drop_out - soffit * s) / c - nose           # the plywood's end, and the trays'
                 for m in mine:
                     kind = m.get("ifc_type")
-                    out = ve - EAVES_TRAY if kind in ("plank", "seam") else ve if kind == "deck" else v
+                    out = end if kind in ("plank", "seam", "deck") else v
                     pts = m["profile"]
                     at = [u0 - reach <= q[0] <= u1 + reach and v - 1.0 <= q[1] <= v + tol for q in pts]
                     mid = [q[0] for q, on in zip(pts, at) if on]
@@ -232,24 +267,23 @@ def eaves_parts(meshes, p, infos):
                     for k, q in enumerate(pts):
                         if at[k]:
                             _lower(q, [pts[x] for x in ((k - 1) % len(pts), (k + 1) % len(pts)) if not at[x]], out)
-                y0, deck_t = back - 1.0, max(1.0, back - 1.0 - soffit)
+                    if kind == "seam":
+                        _fold_back(m, at)                  # at this eaves the seams are always folded back
                 ring = lambda pts: [[round(x, 3), round(y, 3)] for x, y in                   # noqa: E731
                                     list(orient(Polygon([(x, sign * y) for x, y in pts]), 1.0).exterior.coords)[:-1]]
                 place = {"origin": frame_to_world(frame, a, ve, 0.0), "u": toward, "v": across, "n": along}
+                zinc, support = _eaves_rings(back - 1.0 - t, soffit, t, pitch, below)
                 n += 1
-                apron = _prism(ring(_apron_ring(y0, t, pitch, below, deck_t)), 0.0, b - a, place,
-                               "eaves_strip", "%s Eaves Apron %d" % (name, n), name)
-                welt = _prism(ring(_welt_ring(back + t / 2.0, y0, t)), 0.0, b - a, dict(place),
-                              "eaves_strip", "%s Eaves Welt %d" % (name, n), name)
-                welt["eaves_welt"] = True
-                extra.append(welt)
-                out, below = apron_drop(y0, t, pitch, below, deck_t)
-                apron["eaves_info"] = {"length": round(b - a, 1), "lap": EAVES_LAP, "nose": EAVES_NOSE, "drop": round(below, 1),
-                                       "clear": round(out - t / 2.0, 1), "tray": EAVES_TRAY, "thickness": t,
+                apron = _prism(ring(zinc), 0.0, b - a, place, "eaves_strip", "%s Eaves Apron %d" % (name, n), name)
+                prop = _prism(ring(support), 0.0, b - a, dict(place), "eaves_strip", "%s Eaves Support %d" % (name, n), name)
+                prop.update(eaves_support=True, color="#eab308")
+                extra.append(prop)
+                apron["eaves_info"] = {"length": round(b - a, 1), "lap": EAVES_LAP, "nose": nose, "drop": round(below, 1),
+                                       "clear": round(drop_out, 1), "tray": EAVES_TRAY, "thickness": t,
                                        "over": over["with"] if over else None, "run": round(run, 1)}
                 extra.append(apron)
                 info.setdefault("eaves", []).append(dict(apron["eaves_info"], u0=round(a, 1), u1=round(b, 1), v=round(v, 1)))
-                info.setdefault("eaves_strips", []).append([[a, ve - EAVES_NOSE], [b, ve - EAVES_NOSE], [b, ve + EAVES_LAP], [a, ve + EAVES_LAP]])
+                info.setdefault("eaves_strips", []).append([[a, end], [b, end], [b, end + EAVES_LAP], [a, end + EAVES_LAP]])
     return meshes + extra
 
 

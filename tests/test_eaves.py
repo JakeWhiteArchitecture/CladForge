@@ -14,7 +14,7 @@ import ifcopenshell  # noqa: E402
 
 from cladding_checks import check_rules  # noqa: E402
 from cladding_constants import frame_to_world  # noqa: E402
-from cladding_eaves import (EAVES_TRAY, EAVES_NOSE, EAVES_LAP, EAVES_DROP, EAVES_CLEAR, EAVES_KICK, EAVES_OVER, EAVES_WALL_LAP, EAVES_WELT,  # noqa: E402
+from cladding_eaves import (EAVES_TRAY, EAVES_NOSE, EAVES_LAP, EAVES_DROP, EAVES_CLEAR, EAVES_OVER, EAVES_WALL_LAP, EAVES_HOOK, EAVES_SUPPORT_LEG,  # noqa: E402
                             apron_drop, wall_stop, has_eaves)
 from cladding_constants import _parse  # noqa: E402
 from cladding_primitives import ring_at  # noqa: E402
@@ -27,7 +27,7 @@ from fabric_extract import extract_elevation, eaves_link, valley_links  # noqa: 
 
 
 def _aprons(out):
-    return [m for m in out["geometry"] if m["ifc_type"] == "eaves_strip" and not m.get("eaves_welt")]
+    return [m for m in out["geometry"] if m["ifc_type"] == "eaves_strip" and not m.get("eaves_support")]
 
 
 def _bottoms(out, kind, face=None):
@@ -35,14 +35,14 @@ def _bottoms(out, kind, face=None):
                    if m["ifc_type"] == kind and (face is None or m["elevation"] == face) and not m.get("hip_part")})
 
 
-def test_the_trays_run_out_over_an_apron_and_the_layers_under_run_to_the_edge():
+def test_the_plywood_and_the_trays_run_on_and_the_layers_under_run_to_the_edge():
     _params, out = _one(elev={"verge": "none"})
     _p0, plain = _one(elev={"verge": "none", "eaves": "none"})
     (apron,) = _aprons(out)
     assert not _aprons(plain)
     assert _bottoms(plain, "plank")[0] == 10.0 and _bottoms(plain, "deck") == [10.0]       # the bottom edge offset
-    assert _bottoms(out, "plank")[0] == -EAVES_TRAY and _bottoms(out, "deck") == [0.0]
-    assert _bottoms(out, "seam")[0] == -EAVES_TRAY and _bottoms(out, "batten")[0] == 0.0
+    assert _bottoms(out, "plank")[0] == -EAVES_NOSE and _bottoms(out, "deck") == [-EAVES_NOSE]   # the plywood runs on, the trays with it
+    assert _bottoms(out, "seam")[0] == -EAVES_NOSE and _bottoms(out, "batten")[0] == 0.0
     # nothing else moved: the same parts, the same tops
     assert [m["name"] for m in out["geometry"] if m["ifc_type"] != "eaves_strip"] == [m["name"] for m in plain["geometry"]]
     tops = lambda o: [max(q[1] for q in m["profile"]) for m in o["geometry"] if m["ifc_type"] == "plank"]   # noqa: E731
@@ -52,33 +52,67 @@ def test_the_trays_run_out_over_an_apron_and_the_layers_under_run_to_the_edge():
     assert apron["thickness"] == pytest.approx(info["length"])
 
 
-def test_the_apron_lies_on_the_deck_under_the_trays_and_drops_clear_of_the_edge():
+def _in_section(out, part):
+    """A part extruded along the eaves, in section: [(out from the roof's edge on plan, up
+    from it)], and the roof's (cos, sin)."""
+    face = [m for m in out["geometry"] if m["ifc_type"] == "plank"][0]["frame"]
+    pts = [frame_to_world(part["frame"], u, v, s) for s in (0.0, part["thickness"]) for u, v in ring_at(part, 0, s)]
+    local = [[sum((q[i] - face["origin"][i]) * axis[i] for i in range(3)) for axis in (face["u"], face.get("v") or [0, 0, 1], face["n"])]
+             for q in pts]
+    c, s = face["n"][2], (1.0 - face["n"][2] ** 2) ** 0.5
+    return [(-v * c + d * s, v * s + d * c) for _u, v, d in local], (c, s)
+
+
+def test_the_zinc_turns_round_the_end_of_the_plywood_comes_back_under_it_and_drops_into_a_drip():
+    """As sketched: the plywood runs on past the drip's line; the zinc comes down its top,
+    round its end in a half circle and back under it, then drops plumb over a support
+    profile fixed under the plywood, and is hooked back under at the foot."""
     _params, out = _one(elev={"verge": "none"})
     (apron,) = _aprons(out)
-    face = [m for m in out["geometry"] if m["ifc_type"] == "plank"][0]
-    elev_frame = face["frame"]
-    pts = [frame_to_world(apron["frame"], u, v, s) for s in (0.0, apron["thickness"]) for u, v in ring_at(apron, 0, s)]
-    local = [[sum((q[i] - elev_frame["origin"][i]) * axis[i] for i in range(3)) for axis in
-              (elev_frame["u"], elev_frame.get("v") or [0, 0, 1], elev_frame["n"])] for q in pts]
-    vs, ds = [q[1] for q in local], [q[2] for q in local]
-    assert max(vs) == pytest.approx(EAVES_LAP, abs=1.0) and max(ds) <= face["depth"] + 0.01          # on the deck, under the trays
-    nose = min(q[1] for q in local if q[2] > face["depth"] - 3.0)
-    assert nose == pytest.approx(-EAVES_NOSE, abs=1.0) and -EAVES_NOSE < -EAVES_TRAY + 10.0          # the trays' ends lap the nose
-    # The drop hangs plumb in front of the edge of the roof's own surface and runs down past it:
-    # seen in section, out from that edge on plan and up from it.
-    n = elev_frame["n"]
-    c, s = n[2], (1.0 - n[2] ** 2) ** 0.5
-    section = [(-v * c + d * s, v * s + d * c) for _u, v, d in local]
-    assert min(z for _h, z in section) == pytest.approx(-(EAVES_DROP + EAVES_KICK), abs=1.0)         # below the edge, with its drip
-    t = apron["eaves_info"]["thickness"]
+    (support,) = [m for m in out["geometry"] if m.get("eaves_support")]
     deck = next(m for m in out["geometry"] if m["ifc_type"] == "deck")
-    out, below = apron_drop(face["depth"] - 1.0, t, math.degrees(math.acos(c)), deck=face["depth"] - 1.0 - deck["depth"])
-    plumb = [z for h, z in section if abs(h - out) <= t]                                             # the drop's own corners
-    under = deck["depth"] * c                                                                        # the plywood's underside at its end, above the edge
-    assert min(plumb) <= -EAVES_DROP + 1.0 and max(plumb) == pytest.approx(under, abs=3.0), "one plumb line from under the plywood's end to below the edge"
-    assert out - t / 2.0 >= EAVES_CLEAR and below == EAVES_DROP                                      # clear of the edge
-    assert out == pytest.approx(deck["depth"] * s, abs=2.0), "it falls from the plywood's underside, where the apron wraps over its end"
+    zinc, (c, s) = _in_section(out, apron)
+    prop, _cs = _in_section(out, support)
+    top, soffit, t = deck["depth"] + deck["thickness"], deck["depth"], apron["eaves_info"]["thickness"]
+    at = lambda x, y: (x * c + y * s, -x * s + y * c)          # noqa: E731 — down the slope from the edge and off the face, as (out, up)
+    end, end_low = at(EAVES_NOSE, top), at(EAVES_NOSE, soffit)  # the plywood's end: its top corner and its bottom one
+    nose, line, below = apron_drop(soffit, math.degrees(math.acos(c)))
+    assert nose == EAVES_NOSE and line == pytest.approx(soffit * s, abs=0.01) and below == EAVES_DROP
+    # round the end: it stands out past the plywood's end by about half the plywood's thickness, above and below it
+    beyond = [q for q in zinc if q[0] > end[0] + 3.0]
+    assert max(q[0] for q in zinc) == pytest.approx(max(end[0], end_low[0]) + (top - soffit) / 2.0 * c + 2.0, abs=6.0)
+    assert max(q[1] for q in beyond) - min(q[1] for q in beyond) > 0.5 * (top - soffit) * c, "a half circle, top to bottom of the plywood's end"
+    # back under the plywood, to the drop's line
+    local = [(h * c - z * s, h * s + z * c) for h, z in zinc]                # down the slope from the edge; off the face
+    below_ply = [x for x, y in local if soffit - 5.0 < y < soffit - 1.0]
+    assert min(below_ply) < 6.0 and max(below_ply) > EAVES_NOSE - 3.0, "a run of it under the plywood, from its end back to the drop's line"
+    # the drop: plumb, on the outside of the support's leg, to EAVES_DROP below the roof's edge and hooked back up behind it
+    foot = min(q[1] for q in zinc)
+    assert foot == pytest.approx(-EAVES_DROP, abs=4.0)
+    low = [q[0] for q in zinc if q[1] < -10.0]
+    assert max(low) - min(low) < 6.0 and min(low) == pytest.approx(line, abs=4.0)
+    hook = [q for q in zinc if q[1] > foot + EAVES_HOOK - 2.0 and q[1] < foot + EAVES_HOOK + 3.0 and q[0] < line + 1.0]
+    assert hook, "hooked back up behind the support's foot"
+    # the support: a leg up under the plywood, a leg down behind the zinc's drop
+    assert min(q[1] for q in prop) == pytest.approx(-EAVES_DROP, abs=1.0)
+    assert min(q[0] for q in prop) < line - 0.7 * EAVES_SUPPORT_LEG * c and max(q[0] for q in prop) > line + 0.5 * EAVES_NOSE * c
     assert apron["eaves_info"]["drop"] == EAVES_DROP and apron["eaves_info"]["over"] is None
+
+
+def test_the_seams_are_folded_back_at_the_eaves_whatever_the_chain_says():
+    for said in ({}, {"seam_fold": False}, {"seam_bottom": "flat"}):
+        _params, out = _one(elev=dict({"verge": "none"}, **said))
+        seams = [m for m in out["geometry"] if m["ifc_type"] == "seam" and m.get("seam_part") and m.get("seam_v")
+                 and min(q[1] for q in m["profile"]) == -EAVES_NOSE]
+        assert seams
+        for m in seams:
+            rows = m["vshift"][0]
+            ends = [sh for q, sh in zip(m["profile"], rows) if q[1] == -EAVES_NOSE]
+            assert ends and all(sh[3] == pytest.approx(1.0) for sh in ends), "45 degrees: a millimetre back for each millimetre out"
+        _p, plain = _one(elev=dict({"verge": "none", "eaves": "none"}, **said))
+        if said:                # without the eaves the chain's own choice stands
+            assert not any(m.get("vshift") and min(q[1] for q in m["profile"]) < 15.0 and any(abs(sh[3]) > 0 for q, sh in zip(m["profile"], m["vshift"][0]) if q[1] < 15.0)
+                           for m in plain["geometry"] if m["ifc_type"] == "seam" and m.get("seam_part") and m.get("seam_v"))
 
 
 def test_only_a_roof_slope_in_trays_that_run_with_the_fall_has_an_eaves():
@@ -167,6 +201,8 @@ def test_a_roof_on_the_head_of_a_wall_is_an_eaves_with_no_overhang():
     assert eaves_link(wall, mansard) is None, "steeper than a leaning wall may be, it is a corner on a level line"
     hung = face("Hung", [[0, 0, 0], [6000, 0, 0], [6000, -3000, -3000 * t], [0, -3000, -3000 * t]], (0, -s, c))
     assert eaves_link(wall, hung) is None, "a roof that falls away from the foot of a wall is an abutment"
+    mono = face("Mono", [[0, 0, 2700], [6000, 0, 2700], [6000, 3000, 2700 - 3000 * t], [0, 3000, 2700 - 3000 * t]], (0, s, c))
+    assert eaves_link(wall, mono) is None, "a roof that falls away behind the head of a wall: a monopitch's head, not its eaves"
     assert [k and k["kind"] for k in valley_links(wall, [over, face("Roof", [[0, 0, 2700], [6000, 0, 2700], [6000, 3000, 2700 + 3000 * t],
                                                                               [0, 3000, 2700 + 3000 * t]], (0, -s, c))])] == [None, "eaves"]
 
@@ -179,14 +215,15 @@ def test_the_roof_runs_on_over_the_wall_cladding_and_the_wall_stops_under_it(pit
     t, c = math.tan(math.radians(pitch)), math.cos(math.radians(pitch))
     seams = [h for h, _z in _section(out, "Wall", "seam")]
     depth = max(seams + [info["Wall"]["total_depth"]])            # the outside of the wall's cladding (its seams' tips), out from the wall
-    # the roof's plywood: its underside's end EAVES_OVER beyond the outside of the wall's cladding, on plan
+    # the roof's plywood runs on: EAVES_NOSE down the slope past the drip's line, which is EAVES_OVER
+    # beyond the outside of the wall's cladding on plan
     deck = _section(out, "Roof", "deck")
     end = min(deck, key=lambda q: q[1])                           # its lowest corner: the underside at its end
-    assert end[0] == pytest.approx(depth + EAVES_OVER, abs=0.5)
+    assert end[0] == pytest.approx(depth + EAVES_OVER + EAVES_NOSE * c, abs=0.5)
     soffit = lambda h: end[1] + (end[0] - h) * t                  # noqa: E731 — the height of its underside, h out from the wall
-    # the trays run on round the apron's nose, and the battens stay at the roof's own edge
+    # the trays run to the plywood's end, and the battens stay at the roof's own edge
     trays = _section(out, "Roof", "plank")
-    assert max(h for h, _z in trays) > max(h for h, _z in deck) + 0.8 * EAVES_TRAY * c
+    assert max(h for h, _z in trays) == pytest.approx(max(h for h, _z in deck), abs=3.0)
     assert min(z for _h, z in _section(out, "Roof", "batten")) == pytest.approx(2700.0, abs=0.5)
     # every layer of the wall stops at one level: the top offset under that plywood where it is lowest over
     # the wall's build-up, at the outside of the cladding (or under the line the two meet on, if that is lower)
@@ -202,19 +239,15 @@ def test_the_roof_runs_on_over_the_wall_cladding_and_the_wall_stops_under_it(pit
     assert under["with"] == "Roof" and under["stop"] == pytest.approx(stop - 2700.0, abs=0.3) and under["gap"] == 10.0
     assert under["stop"] == pytest.approx(wall_stop(depth, (soffit(0.0) - 2700.0) * c, 10.0, pitch), abs=0.3)
     # the drip: plumb, in front of the wall's cladding, its foot EAVES_WALL_LAP below the top of that cladding
-    apron = _section(out, "Roof", "eaves_strip", lambda m: not m.get("eaves_welt"))
+    apron = _section(out, "Roof", "eaves_strip", lambda m: not m.get("eaves_support"))
     foot = min(z for _h, z in apron)
-    assert foot == pytest.approx(stop - EAVES_WALL_LAP - EAVES_KICK, abs=1.0)
-    drop = [h for h, z in apron if abs(z - (foot + EAVES_KICK)) < 1.0]              # the drop's foot, above its drip
-    assert min(drop) > depth + EAVES_OVER - 1.0, "clear of the wall's cladding, seams and all"
-    # the apron wraps over the end of the plywood: it is on that end's face, from its top corner to its underside
-    top_corner = max((q for q in deck if q[0] > end[0]), key=lambda q: q[0])
-    on_end = lambda q: abs((q[0] - end[0]) * (top_corner[1] - end[1]) - (q[1] - end[1]) * (top_corner[0] - end[0])) \
-        / math.dist(end, top_corner) < 1.5 and end[1] - 2.0 < q[1] < top_corner[1] + 2.0                   # noqa: E731
-    assert len([q for q in apron if on_end(q)]) >= 4
-    # and the trays' ends are welted round its nose: turned back under it
-    welt = _section(out, "Roof", "eaves_strip", lambda m: m.get("eaves_welt"))
-    assert max(h for h, _z in welt) >= max(h for h, _z in trays) - 0.5 and max(h for h, _z in welt) - min(h for h, _z in welt) > 0.8 * EAVES_WELT * c
+    assert foot == pytest.approx(stop - EAVES_WALL_LAP, abs=4.0)
+    drop = [h for h, z in apron if z < stop - 10.0 and h < depth + EAVES_OVER + 10.0]      # the drop, where it laps the wall's cladding
+    assert drop and min(drop) > depth + EAVES_OVER - 4.0, "plumb, clear of the wall's cladding, seams and all (its hook turns back behind)"
+    # the zinc turns round the plywood's end and comes back under it; the support profile hangs behind the drop
+    assert max(h for h, _z in apron) > end[0] + 5.0
+    prop = _section(out, "Roof", "eaves_strip", lambda m: m.get("eaves_support"))
+    assert min(z for _h, z in prop) == pytest.approx(stop - EAVES_WALL_LAP, abs=1.5)
     (eaves,) = info["Roof"]["eaves"]
     assert eaves["over"] == "Wall" and eaves["run"] > 0.0
 

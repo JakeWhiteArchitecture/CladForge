@@ -1000,9 +1000,8 @@ def _roof_link(a, b, kind):
     if kind == "rake" and front_a * front_b <= 0:
         return None                                   # one in front of the other, one behind: they do not turn a corner
     if kind == "eaves":
-        low, high = (ca, cb) if abs(na[2]) < abs(nb[2]) else (cb, ca)
-        if front_a >= 0 or front_b >= 0 or abs(line[2]) > HIP_SLOPE or high[2] <= low[2]:
-            return None                               # the roof comes down to the head of the wall, on a level line, turning outward
+        if front_a >= 0 or front_b >= 0 or abs(line[2]) > HIP_SLOPE:
+            return None                               # on a level line, turning outward
     external = front_a < 0
     # A point on both planes: from a's centre, straight down a's own slope to b's plane.
     down = _cross(na, line)
@@ -1035,6 +1034,9 @@ def _roof_link(a, b, kind):
         out["external"] = external
     if kind == "eaves":
         out["a"]["roof"], out["b"]["roof"] = abs(na[2]) > abs(nb[2]), abs(nb[2]) > abs(na[2])
+        roof = cb if out["b"]["roof"] else ca
+        if roof[2] <= base[2] + 1.0:
+            return None                               # the roof falls away from the head of the wall: a monopitch's head, not its eaves
     return out
 
 

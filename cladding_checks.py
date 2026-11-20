@@ -217,13 +217,13 @@ def check_rules(params, infos=None):
         eaves = i.get("eaves") or []
         if eaves:
             over = sorted({e["over"] for e in eaves if e.get("over")})
-            add("Eaves", "pass", "%s: an eaves apron %.2f m long under the trays, which run out %.0f mm beyond the roof's edge "
-                "over it, its drip hung plumb in front of the edge%s. Its sizes are assumed: agree them against the supplier's eaves "
-                "detail. Switch it off (Edges, Eaves apron) where the slope runs into a wall or a gutter behind a parapet"
-                % (i["elevation"], sum(e["length"] for e in eaves) / 1000.0, eaves[0]["tray"],
-                   "; over %s, which it comes down to with no overhang, the plywood and trays run on %.0f mm past the roof's edge, "
-                   "clear of the wall's cladding, and the drip laps it" % (" and ".join(over), max(e.get("run") or 0.0 for e in eaves))
-                   if over else ""), len(eaves))
+            add("Eaves", "pass", "%s: an eaves %.2f m long. The plywood and the trays run on %.0f mm past the drip's line; the zinc turns "
+                "round the plywood's end, comes back under it and drops plumb over a support profile, hooked under at its foot, %.0f mm "
+                "below the roof's edge; the seams are folded back at 45 degrees%s. Its sizes are assumed: agree them against the supplier's "
+                "eaves detail. Switch it off (Edges, Eaves apron) where the slope runs into a wall or a gutter behind a parapet"
+                % (i["elevation"], sum(e["length"] for e in eaves) / 1000.0, eaves[0]["nose"], min(e["drop"] for e in eaves),
+                   "; over %s, which it comes down to with no overhang, the roof runs on %.0f mm so the drip stands clear of the wall's "
+                   "cladding and laps it" % (" and ".join(over), max(e.get("run") or 0.0 for e in eaves)) if over else ""), len(eaves))
         for u in i.get("eaves_under") or []:
             add("Eaves", "pass", "%s: under the eaves of %s (no overhang) for %.2f m. Every layer stops level, %.0f mm below the line the two "
                 "meet on: the %.0f mm top offset under the roof's plywood where that is lowest, at the outside of this wall's cladding. "
