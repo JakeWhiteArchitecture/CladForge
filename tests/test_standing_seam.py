@@ -227,13 +227,18 @@ def test_trimmed_and_exported(wall, tmp_path, end):
     assert _of(out, "seam") and _of(out, "plank")
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     kinds = {(e.is_a(), e.ObjectType) for e in ifc.by_type("IfcElement")}
-    assert ("IfcCovering", "Standing seam tray") in kinds and ("IfcCovering", "Standing seam") in kinds
+    # a tray, the folds of its seams and its ends are one element: no seam is an element of its own
+    assert ("IfcCovering", "Standing seam tray") in kinds and ("IfcCovering", "Standing seam") not in kinds
     assert ("IfcPlate", "Deck boarding") in kinds and ("IfcCovering", "Breather membrane") not in kinds
     assert "CLADDING" in meshes_to_dxf_string(out["geometry"], params, out["info"])
-    seams = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "Standing seam"]
-    assert len(seams) == len(_of(out, "seam"))
-    if end == "folded":     # the sloped ends go out as closed breps
-        assert any(r.RepresentationType == "Brep" for e in seams for r in e.Representation.Representations)
+    trays = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "Standing seam tray"]
+    assert len(trays) == len(_of(out, "plank"))
+    solids = sum(len(r.Items) for e in trays for r in e.Representation.Representations)
+    assert solids == len(_of(out, "plank")) + len(_of(out, "seam"))           # every fold is there, in its tray
+    assert all(len(e.Representation.Representations) == 1 for e in trays)
+    if end == "folded":     # the sloped ends go out as closed breps, beside the swept solids
+        assert any(i.is_a("IfcFacetedBrep") for e in trays for r in e.Representation.Representations for i in r.Items)
+        assert any(r.RepresentationType == "SolidModel" for e in trays for r in e.Representation.Representations)
 
 
 def test_the_deck_is_what_spans_the_battens():

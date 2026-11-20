@@ -87,7 +87,13 @@ def test_every_part_is_where_the_build_put_it(upper, lower, kw):
     for mesh in out["geometry"]:
         if names.count(mesh["name"]) > 1 or mesh.get("section_ring"):
             continue                                    # told apart by name; a profiled plank is not its board
-        want, got = _built_box(mesh), boxes[mesh["name"]]
+        if mesh["name"] not in boxes:
+            assert mesh["ifc_type"] == "seam"           # a tray's seam: in the tray's element
+            continue
+        parts = [_built_box(mesh)] + [_built_box(m) for m in out["geometry"] if mesh["ifc_type"] == "plank"
+                                      and m["name"].startswith(mesh["name"] + " ") and m["name"] not in boxes]
+        want = [min(b[k] for b in parts) for k in range(3)] + [max(b[k] for b in parts) for k in range(3, 6)]
+        got = boxes[mesh["name"]]
         assert got == pytest.approx(want, abs=0.6), mesh["name"]
         checked += 1
     assert checked > 40
