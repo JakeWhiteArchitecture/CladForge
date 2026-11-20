@@ -138,3 +138,20 @@ def test_a_file_written_without_a_level_is_the_full_build_and_says_nothing():
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     assert not [p for p in ifc.by_type("IfcPropertySingleValue") if p.Name == "LevelOfDevelopment"]
     assert at_lod(out["geometry"], out["masses"], None) == out["geometry"] == at_lod(out["geometry"], out["masses"], 350)
+
+
+def test_the_masses_of_a_hipped_roof_are_built_on_a_grid_and_follow_the_hip():
+    """Trays cut to a hip nearly meet along it. Their union is taken on a 0.01 mm grid, which
+    always nodes: a floating-point union of them can fail in GEOS, and in the browser that
+    is the end of the engine, not an error."""
+    from test_hip import _build as _hipped
+    _link, _params, out = _hipped(elev={"eaves": "on"}, **SEAM)
+    assert sorted(m["elevation"] for m in out["masses"]) == ["Roof A", "Roof C"]
+    for mass in out["masses"]:
+        trays = [m for m in out["geometry"] if m["elevation"] == mass["elevation"] and m["ifc_type"] == "plank"
+                 and m["frame"]["n"] == mass["frame"]["n"]]
+        union = unary_union([Polygon(_far(m)).buffer(0) for m in trays])
+        whole = Polygon(_far(mass), [_far(mass, k + 1) for k in range(len(mass["holes"]))])
+        assert whole.bounds == pytest.approx(union.bounds, abs=0.02)
+        assert whole.symmetric_difference(union.buffer(2.0).buffer(-2.0)).area < 1e-3 * whole.area
+        assert all(abs(c * 100.0 - round(c * 100.0)) < 1e-6 for q in mass["profile"] for c in q)   # on the grid

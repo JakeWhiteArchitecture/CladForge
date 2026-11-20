@@ -15,9 +15,11 @@ Every mesh the engine builds is tagged with the lowest level it appears at ("lod
 300; tag), so the app and the exporters choose with one rule (at_lod). The cutting list,
 the checks and the setting-out always come from the full build, whatever is shown."""
 
+import shapely
 from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
-from shapely.ops import unary_union
+
+from cladding_booleans import ROBUST_GRID
 
 from cladding_constants import _parse, _prism
 from cladding_primitives import ring_at
@@ -81,9 +83,17 @@ def _skin(e, pieces, gap):
             shapes.append(g if g.is_valid else g.buffer(0))
         except Exception:   # noqa: BLE001 — a degenerate outline adds nothing to the mass
             continue
+    shapes = [g for g in shapes if not g.is_empty and g.geom_type in ("Polygon", "MultiPolygon")]
+    if not shapes:
+        return []
+    # On a 0.01 mm grid, which always nodes: boards cut to a hip or a valley nearly meet, and
+    # a floating-point union of those can fail in GEOS, which in the browser is not an
+    # error but the end of the engine (cladding_booleans, fabric_extract._union).
+    whole = shapely.union_all(shapes, grid_size=ROBUST_GRID)
+    if whole.is_empty:
+        return []
     close = gap / 2.0 + 1.0                                   # across a joint, and back: the outer edges stay put
-    whole = unary_union([g.buffer(close, join_style=2, mitre_limit=5.0) for g in shapes if not g.is_empty])
-    whole = whole.buffer(-close, join_style=2, mitre_limit=5.0)
+    whole = whole.buffer(close, join_style=2, mitre_limit=5.0).buffer(-close, join_style=2, mitre_limit=5.0)
     corner = {}
     for m in pieces:                                          # each end's boards carry that end's mitre: the mass has both
         corner.update(m.get("corner") or {})
