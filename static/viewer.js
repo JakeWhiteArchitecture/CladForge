@@ -303,8 +303,25 @@ function buildScene(raw, context, warnings) {
         allMeshes.push(th);
         meshMeta.push({ mesh: th, expressID: r.expressID, type: r.type, name: r.name, storey: r.storey });
     }
+    placeGrid();
     fitCameraTo(modelGroup);
     return new Set(meshMeta.filter(m => m.storey).map(m => m.storey.name)).size;
+}
+
+// The floor grid lies under everything drawn: GRID_CLEAR below the lowest point of the host
+// model and of the cladding, whichever is lower (an eaves apron, a cap's foot or the cladding
+// of a wall's base can hang below the model, and the grid used to cut through them at the
+// model's own lowest point). It is centred under the model, or under the cladding when a
+// saved state is open without its model, on whole grid squares so its lines stay put.
+const GRID_CLEAR = 50, GRID_STEP = 1000;
+function placeGrid() {
+    if (!gridHelper) return;
+    const boxOf = g => (g && g.children.length ? new THREE.Box3().setFromObject(g) : new THREE.Box3());
+    const model = boxOf(modelGroup), clad = boxOf(cladGroup);
+    const all = model.clone().union(clad);
+    if (all.isEmpty()) { gridHelper.position.set(0, 0, 0); return; }
+    const c = (model.isEmpty() ? clad : model).getCenter(new THREE.Vector3());
+    gridHelper.position.set(Math.round(c.x / GRID_STEP) * GRID_STEP, all.min.y - GRID_CLEAR, Math.round(c.z / GRID_STEP) * GRID_STEP);
 }
 
 async function loadIFC(file, onStatus, force) {
@@ -690,6 +707,7 @@ function renderGeometry(meshes) {
         }
     }
     for (const key of Object.keys(byLayer)) byLayer[key].visible = layerVisible[key] !== false;
+    placeGrid();         // the cladding may reach lower than the model does
     filter2D();          // flat, only the elevation being looked at is drawn
 }
 

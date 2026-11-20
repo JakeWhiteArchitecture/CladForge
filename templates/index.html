@@ -153,6 +153,8 @@
                     <select id="edge-verge" onchange="onEdgeField('verge', this.value)"><option value="both" selected>Both sides</option><option value="start">Left only (of the chain's first face)</option><option value="end">Right only</option><option value="none">None</option></select></div>
                 <div class="field"><label>Eaves apron <span class="unit">roof slopes: the level bottom edge, the trays run out over an apron. Switch off where the slope runs into a wall or a gutter behind a parapet</span></label>
                     <select id="edge-eaves" onchange="onEdgeField('eaves', this.value)"><option value="on" selected>On</option><option value="none">None</option></select></div>
+                <div class="field"><label>Hip and ridge cap ends <span class="unit">an end that meets no other cap: run on and cut back to the roof's own edge (30 mm past the metal at the eaves), or cut square</span></label>
+                    <select id="edge-capEnds" onchange="onEdgeField('capEnds', this.value)"><option value="edge" selected>Cut to the roof edge</option><option value="square">Square</option></select></div>
                 </div>
                 <p class="hint">Offsets pull the battens, counter-battens and boards back from the top, bottom and free-end edges. Chain corners and window or door jambs take no offset; where boards are mitred the mitre gap opens between them. In the 2D view the edges are drawn in these colours: click one to type its value. Every value applies to the whole chain.</p>
             </div>

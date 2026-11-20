@@ -193,7 +193,7 @@ def check_rules(params, infos=None):
                 continue
             add("Hip", "pass", what + (", the trays turned up 15 mm along their raking ends and the seams %.0f mm apart along "
                                        "it (%.0f at most)" % (spacing, limit) if spacing is not None and not wide else "")
-                + ". The decompression strips, the ridge clips and the cap's ends are not drawn", h["length"])
+                + ". The decompression strips and the ridge clips are not drawn", h["length"])
             if wide:
                 add("Hip", "warn", apart, spacing)
     # An eaves: its sizes are assumed, no drawing of one having been supplied.

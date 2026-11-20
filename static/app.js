@@ -10,7 +10,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // seam running out upward: the head, under a sill) and bottom ends (the base, over a head) each
 // folded or flat.
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', eaves: 'on' };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', eaves: 'on', capEnds: 'edge' };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -86,6 +86,7 @@ function syncEdgeFields() {
     }
     document.getElementById('edge-verge').value = VERGES.includes(ed.verge) ? ed.verge : 'both';
     document.getElementById('edge-eaves').value = ed.eaves === 'none' ? 'none' : 'on';
+    document.getElementById('edge-capEnds').value = ed.capEnds === 'square' ? 'square' : 'edge';
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
     document.getElementById('edge-chain').textContent = e ? 'for ' + e.chain.name : 'for the active chain';
 }
@@ -97,6 +98,7 @@ function setEdge(e, key, value) {
     else if (key === 'seamTop' || key === 'seamBottom') e.chain.edges[key] = value === 'flat' ? 'flat' : 'folded';
     else if (key === 'verge') e.chain.edges.verge = VERGES.includes(value) ? value : 'both';
     else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
+    else if (key === 'capEnds') e.chain.edges.capEnds = value === 'square' ? 'square' : 'edge';
     else {
         const v = parseFloat(value);
         if (!isFinite(v)) return false;
@@ -355,7 +357,7 @@ function samePlane(hit, e) {
 }
 
 async function pyLink(a, b) {
-    const slim = r => JSON.stringify({ frame: r.frame, width: r.width, height: r.height });
+    const slim = r => JSON.stringify({ frame: r.frame, width: r.width, height: r.height, polygons: r.polygons });   // the outline: a hipped slope's ridge is shorter than the face
     pyodide.globals.set('_link_a', slim(a)); pyodide.globals.set('_link_b', slim(b));
     const out = await enginePy(`
 import json as _json
@@ -908,6 +910,7 @@ function elevationRecords() {
                                                    seam_fold: chain.edges.fold !== 'off',
                                                    verge: VERGES.includes(chain.edges.verge) ? chain.edges.verge : 'both',
                                                    eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
+                                                   cap_ends: chain.edges.capEnds === 'square' ? 'square' : 'edge',
                                                    seam_top: chain.edges.seamTop === 'flat' ? 'flat' : 'folded',
                                                    seam_bottom: chain.edges.seamBottom === 'flat' ? 'flat' : 'folded',
                                                    opening_details: e.openingDetails || {} }));

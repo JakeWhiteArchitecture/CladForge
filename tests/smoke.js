@@ -1542,7 +1542,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
 
     // A third model: a hipped corner, two roof slopes falling away from each other. They too
     // stay in their own chains and are joined by the hip they share: cut to it under a hip
-    // cap, which one of them carries. Each has an eaves apron along its level bottom edge.
+    // cap, a leg of it laid by each. Each has an eaves apron along its level bottom edge.
     await page.setInputFiles('#ifc-file', path.join(__dirname, 'hip_roof.ifc'));
     await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
                                && state.elevations.length === 1 && !state.elevations[0].picks.length
@@ -1571,14 +1571,52 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('hip:', JSON.stringify(hip), '|', hipStatus);
     if (hip.error || !hip.chains || hip.records[0].join() !== 'hip,Elevation B,true,4583' || hip.records[1].join() !== 'hip,Elevation A,false,4583'
         || !/a hip with Elevation A/.test(hipStatus) || !/hip with B/.test(hip.cards[0]) || !/hip with A/.test(hip.cards[1])
-        || hip.caps.length !== 1 || hip.gutters || hip.upstands < 8 || hip.aprons.length !== 2 || hip.checks !== 3)
+        || hip.caps.join() !== 'Elevation A Hip Cap B,Elevation B Hip Cap A' || hip.gutters || hip.upstands < 8 || hip.aprons.length !== 2 || hip.checks !== 3)
         throw new Error('the two roof slopes were not joined at their hip: ' + JSON.stringify(hip));
     // The eaves is the chain's to switch off: the active chain's apron goes, the other's stays.
     await page.evaluate(() => { const s = document.getElementById('edge-eaves'); s.value = 'none'; s.onchange(); });
     await settle();
     const noEaves = await roofParts();
     console.log('eaves off on the active chain:', JSON.stringify(noEaves.aprons));
-    if (noEaves.aprons.length !== 1 || noEaves.caps.length !== 1) throw new Error('the eaves apron did not follow its chain setting: ' + JSON.stringify(noEaves));
+    if (noEaves.aprons.length !== 1 || noEaves.caps.length !== 2) throw new Error('the eaves apron did not follow its chain setting: ' + JSON.stringify(noEaves));
+
+    // A fourth model: a whole hipped roof. The two long slopes join at a ridge only as long
+    // as they share (not the length of their eaves), each hip end meets both at a hip, and
+    // where the hips run into the ridge the caps are mitred: every cap is a leg on each slope.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'hipped_roof.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 4 && allMeshes.length === 4
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    const slopes = [['Roof South', [0.05, 0.87, 0.5]], ['Roof North', [0.05, 0.87, -0.5]], ['Roof West', [-0.5, 0.87, 0.05]], ['Roof East', [0.5, 0.87, 0.05]]];
+    for (let i = 0; i < slopes.length; i++) {
+        await lookAt(slopes[i][0], slopes[i][1]);
+        await picked(i + 1);
+        await seamRoof();
+        await settle();
+    }
+    const hipped = await page.evaluate(() => {
+        const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
+        return { chains: state.elevations.map(e => e.chain.name), ridge: state.elevations.slice(0, 2).map(e => e.ridge && [e.ridge.u0, e.ridge.u1]),
+                 hips: state.elevations.map(e => valleyRecords(e).filter(v => v.kind === 'hip').length),
+                 ridgeCaps: names.filter(n => /Ridge Cap/.test(n)).length, hipCaps: names.filter(n => /Hip Cap/.test(n)).length,
+                 aprons: names.filter(n => /Eaves Apron/.test(n)).length, verges: names.filter(n => /Verge/.test(n)).length,
+                 ridgeCheck: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)).map(t => (t.match(/cap ([\d.]+) m long/) || [])[1]) };
+    });
+    console.log('hipped roof:', JSON.stringify(hipped));
+    // The floor grid lies below the lowest point of everything drawn: here the caps' feet and
+    // the eaves aprons hang below the model.
+    const floor = await page.evaluate(() => {
+        const low = g => new THREE.Box3().setFromObject(g).min.y;
+        return { grid: gridHelper.position.y, model: low(modelGroup), clad: low(cladGroup) };
+    });
+    console.log('grid:', JSON.stringify(floor));
+    if (!(floor.clad < floor.model) || !(floor.grid < floor.clad) || floor.clad - floor.grid > 60)
+        throw new Error('the grid is not just below the lowest geometry: ' + JSON.stringify(floor));
+    if (hipped.chains.join() !== 'Chain 1,Chain 1,Chain 2,Chain 3' || hipped.ridge.map(r => r.join('-')).join() !== '3000-6000,3000-6000'
+        || hipped.hips.join() !== '2,2,2,2' || hipped.ridgeCaps !== 2 || hipped.hipCaps !== 8 || hipped.aprons !== 4 || hipped.verges
+        || hipped.ridgeCheck.join() !== '3.00')
+        throw new Error('the hipped roof was not joined at its ridge and hips: ' + JSON.stringify(hipped));
 
     console.log('SMOKE OK');
     await browser.close();
