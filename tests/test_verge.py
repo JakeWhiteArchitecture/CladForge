@@ -189,6 +189,12 @@ def test_the_verge_with_cladding_is_a_seam_at_the_edge_and_a_flashing_down_over_
         assert min(x for x, _d in strip) == pytest.approx(0.5, abs=0.05) and max(x for x, _d in strip) < VERGE_FACE + t
         assert min(d for _x, d in strip) >= foot and max(d for _x, d in strip) <= deck_top
         assert flashing["thickness"] == 3000.0 and clip["thickness"] == 3000.0     # the slope long
+        # the last tray's own edge, turned up inside the flashing: from the tray to just under the seam's top
+        (up,) = [m for m in _strips_named(out, "Verge Upstand") if m["name"].endswith("L" if sign < 0 else "R")]
+        leaf = _section(a, up, edge, sign)
+        assert max(x for x, _d in leaf) == pytest.approx(0.0, abs=0.01) and min(x for x, _d in leaf) == pytest.approx(-t, abs=0.01)
+        assert min(d for _x, d in leaf) == pytest.approx(back, abs=0.01) and seam_top - 2.0 * t <= max(d for _x, d in leaf) < seam_top
+        assert up["of"] in {m["name"] for m in trays}
     assert tray_top < seam_top
 
 
@@ -226,5 +232,6 @@ def test_the_verge_with_cladding_exports():
     params, out = _one(elev={"verge_type": "cladding"})
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     names = sorted(e.Name for e in ifc.by_type("IfcCovering") if "Verge" in (e.Name or ""))
-    assert names == ["Roof A Verge Clip L", "Roof A Verge Clip R", "Roof A Verge Flashing L", "Roof A Verge Flashing R"]
+    assert names == ["Roof A Verge Clip L", "Roof A Verge Clip R", "Roof A Verge Flashing L", "Roof A Verge Flashing R",
+                     "Roof A Verge Upstand L", "Roof A Verge Upstand R"]
     assert len(out["info"][0]["verge_strips"]) == 2 and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])

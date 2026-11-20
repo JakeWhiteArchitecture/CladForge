@@ -21,7 +21,9 @@ none — a side that runs into a wall is not a verge and has to be switched off.
 The alternative, where the roof's edge stands over a clad wall, is VMZINC's "Verge with
 cladding" (VMZ-SN-MA-ZI-05), the chain's "verge_type" set to "cladding":
 
-  * The last tray stops at the roof's edge and is turned up there: the edge is a seam.
+  * The last tray stops at the roof's edge and is turned up there: the edge is a seam
+    (the tray's upstand, the seam's inner leaf, is a part of its own, marked as the
+    tray's: "of").
   * The verge flashing is the seam's outer leaf: welted over the tray's upstand, then
     straight down the face of the edge, past the plywood and the ventilation gap under it,
     to cover the head of the wall's cladding by VERGE_COVER (60, dimensioned). Its foot
@@ -105,10 +107,11 @@ def _strip_ring(y0, t):
 
 
 def _flashing_rings(y0, top, drop, t):
-    """ZI-05's two sheets in section (x out from the roof's edge, y the depth from the
+    """ZI-05's sheets in section (x out from the roof's edge, y the depth from the
     face): the flashing, turned down inside the seam at *top*, over it, down the face to
     *drop* below the deck's top *y0* and hemmed inward; and the continuous strip behind
-    it, down the edge's face, its foot kicked out into that hem."""
+    it, down the edge's face, its foot kicked out into that hem; and the last tray's own
+    edge turned up inside the flashing, the seam's inner leaf."""
     g = 2.5 * t
     x = VERGE_FACE + t
     foot = y0 - drop
@@ -116,8 +119,9 @@ def _flashing_rings(y0, top, drop, t):
                            (x - g, foot), (x - g, foot + VERGE_HEM)])
     e = t / 2.0 + 0.5
     clip = LineString([(e, y0 - 2.0), (e, foot + VERGE_HEM + 12.0), (x - g / 2.0, foot + VERGE_HEM), (x - g / 2.0, foot + t)])
+    upstand = LineString([(-t / 2.0, y0 + 1.0), (-t / 2.0, top - t)])      # the tray's own edge, turned up inside the flashing
     ring = lambda path: list(path.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1]   # noqa: E731
-    return ring(flashing), ring(clip)
+    return ring(flashing), ring(clip), ring(upstand)
 
 
 def verge_parts(meshes, p, infos):
@@ -164,9 +168,14 @@ def verge_parts(meshes, p, infos):
             letter = "L" if side == "l" else "R"
             seam = min((abs(x - u) for x in lines if abs(x - u) > EDGE_TOL), default=None)
             if kind == "cladding":
-                flashing, clip = _flashing_rings(back - 1.0, back + float(p["seam_h"]), drop, t)
+                flashing, clip, upstand = _flashing_rings(back - 1.0, back + float(p["seam_h"]), drop, t)
                 strip = _prism(tidy(flashing), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Flashing %s" % (name, letter), name)
                 extra.append(_prism(tidy(clip), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Clip %s" % (name, letter), name))
+                edge = [m for m in trays if any(abs(q[0] - u) <= EDGE_TOL for q in m["profile"])]
+                up = _prism(tidy(upstand), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Upstand %s" % (name, letter), name)
+                if edge:                               # the tray's own sheet: its colour, and marked as its
+                    up.update(of=edge[0]["name"], color=edge[0].get("color", up["color"]))
+                extra.append(up)
                 strip["verge_info"] = {"side": side, "type": kind, "length": round(v1 - v0, 1), "lap": 0.0, "nose": VERGE_FACE,
                                        "drop": round(drop, 1), "clear": VERGE_FACE, "cover": VERGE_COVER, "thickness": t,
                                        "last_seam": None, "last_tray": None if seam is None else round(seam, 1)}
