@@ -279,7 +279,9 @@ def test_a_pitched_face_exports_to_ifc_on_its_slope():
     assert ifc.schema.startswith("IFC4X3")
     products = [e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]
     up_path = meshes_to_ifc(up["geometry"], _p, up["info"])
-    assert len(products) == len([e for e in ifcopenshell.open(up_path).by_type("IfcElement") if not e.is_a("IfcElementAssembly")])
+    # (less an upright wall's window sill and head, cladding_window: a slope's openings are rooflights)
+    assert len(products) == len([e for e in ifcopenshell.open(up_path).by_type("IfcElement") if not e.is_a("IfcElementAssembly")
+                                 and e.ObjectType not in ("Window flashing", "Sill board")])
     # every extrusion runs along the slope's own axes: none along world Z alone unless the upright one's does
     n = out["geometry"][0]["frame"]["n"]
     assert abs(n[2] - math.sin(math.radians(deg))) < 1e-6

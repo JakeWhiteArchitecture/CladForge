@@ -247,7 +247,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         for ring in info.get("window_strips") or []:      # a sill capping's drop and a head strip's drip, as they show
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
-        for ring in info.get("eaves_strips") or []:        # an eaves apron (a hip cap's legs are drawn as they are)
+        for ring in info.get("eaves_strips") or []:        # an eaves drip (a hip cap's legs are drawn as they are)
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         for d in [d for d in dims if d["elevation"] == name]:
             _draw_dim_line(dxf, (d["p1"][0] + ox, d["p1"][1]), (d["p2"][0] + ox, d["p2"][1]),
