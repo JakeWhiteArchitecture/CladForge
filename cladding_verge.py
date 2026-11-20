@@ -32,7 +32,9 @@ cladding" (VMZ-SN-MA-ZI-05), the chain's "verge_type" set to "cladding":
     to cover the head of the wall's cladding by VERGE_COVER (60, dimensioned). Its foot
     is hemmed inward. Each sheet of the seam is marked as its owner's, the tray's or the
     flashing's ("of").
-  * The continuous folded strip is fixed down the face of the edge behind the flashing,
+  * The continuous folded strip goes **up and over the plywood**, VERGE_CLIP_LAP in from
+    the roof's edge on its top under the last tray, so it is fixed down through the
+    plywood into the batten there; then down the face of the edge behind the flashing,
     its foot kicked out into the flashing's hem to hold it.
 
 Only the 60 is dimensioned on that sheet; the gap under the plywood and the flashing's
@@ -60,6 +62,7 @@ VERGE_COVER = 60.0    # mm – ZI-05: the flashing over the head of the wall's c
 VERGE_GAP = 25.0      # mm – ZI-05: the ventilation gap under the roof's plywood (scaled)
 VERGE_FACE = 5.0      # mm – ZI-05: the flashing, clear of the edge's face (scaled)
 VERGE_LOCK = 10.0     # mm – ZI-05: the flashing turned down inside the seam (scaled)
+VERGE_CLIP_LAP = 40.0  # mm – ZI-05: the folded strip on the plywood's top, in from the roof's edge: over the batten there (scaled)
 VERGE_TYPES = ("g3", "cladding")
 ROOF_PITCH = 75.0     # deg – steeper than this a face is a wall, and has no verge
 EDGE_TOL = 12.0       # mm – a tray edge this close to the roof's edge is the edge
@@ -176,18 +179,21 @@ def verge_seam_out():
     return VERGE_FACE - SEAM_AIR
 
 
-def _flashing_rings(y0, top, drop, t):
-    """ZI-05's two sheets below the seam, in section (x out from the roof's edge, y the
-    depth from the face): the flashing, straight down from the foot of its upstand in the
-    seam (at *top*, the trays' face) to *drop* below the deck's top *y0*, hemmed inward;
-    and the continuous strip behind it, down the edge's face, its foot kicked out into
-    that hem."""
+def _flashing_rings(y0, top, drop, t, lap=None):
+    """ZI-05's two sheets below the seam, in section (x out from the plywood's edge, y
+    the depth from the face): the flashing, straight down from the foot of its upstand in
+    the seam (at *top*, the trays' face) to *drop* below the deck's top *y0*, hemmed
+    inward; and the continuous strip behind it: **up and over the plywood**, *lap* back on
+    its top under the last tray, so it is fixed down through the plywood into the batten
+    at the roof's edge, then down the edge's face, its foot kicked out into that hem."""
     g = 2.5 * t
     x = VERGE_FACE + t / 2.0                 # in line with its upstand in the seam above
     foot = y0 - drop
     flashing = LineString([(x, top), (x, foot), (x - g, foot), (x - g, foot + VERGE_HEM)])
     e = t / 2.0 + 0.5
-    clip = LineString([(e, y0 - 2.0), (e, foot + VERGE_HEM + 12.0), (x - g / 2.0, foot + VERGE_HEM), (x - g / 2.0, foot + t)])
+    on = y0 - 1.0 + t / 2.0                  # on the plywood's top, in the 2 mm the trays stand off it
+    clip = LineString([(-(VERGE_CLIP_LAP if lap is None else lap), on), (e, on), (e, foot + VERGE_HEM + 12.0),
+                       (x - g / 2.0, foot + VERGE_HEM), (x - g / 2.0, foot + t)])
     ring = lambda path: list(path.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1]   # noqa: E731
     return ring(flashing), ring(clip)
 
@@ -261,7 +267,7 @@ def verge_parts(meshes, p, infos):
             seam = min((abs(x - u) for x in lines if abs(x - u) > EDGE_TOL), default=None)
             if kind == "cladding":
                 face = back + t                        # the trays' face: where a seam's sheets start
-                flashing, clip = _flashing_rings(back - 1.0, face, drop, t)
+                flashing, clip = _flashing_rings(back - 1.0, face, drop, t, over + VERGE_CLIP_LAP)   # over the oversail, onto the roof
                 strip = _prism(tidy(flashing), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Flashing %s" % (name, letter), name)
                 extra.append(_prism(tidy(clip), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Clip %s" % (name, letter), name))
                 edge = [m for m in trays if any(abs(q[0] - u) <= EDGE_TOL for q in m["profile"])]

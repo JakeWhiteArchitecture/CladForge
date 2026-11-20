@@ -164,7 +164,7 @@ def test_the_verge_with_cladding_is_a_true_seam_at_the_edge_and_a_flashing_down_
     """The edge is a standing seam, the same closed double lock as between two trays: the
     last tray turns up the undercloak on the roof's side, the flashing is the overcloak on
     the outside and runs straight down from it to cover the head of the wall's cladding."""
-    from cladding_verge import VERGE_COVER, VERGE_GAP, VERGE_FACE, verge_type, verge_seam_out
+    from cladding_verge import VERGE_CLIP_LAP, VERGE_COVER, VERGE_GAP, VERGE_FACE, verge_type, verge_seam_out
     from cladding_constants import SEAM_AIR
     params, out = _one(elev={"verge_type": "cladding"})
     a = params["elevations"][0]
@@ -214,10 +214,16 @@ def test_the_verge_with_cladding_is_a_true_seam_at_the_edge_and_a_flashing_down_
         assert foot == pytest.approx(back - 1.0 - deck["thickness"] - VERGE_GAP - VERGE_COVER, abs=t)
         assert foot < deck["depth"] - VERGE_GAP - VERGE_COVER + 3.0              # below the plywood by the gap and the cover
         assert flashing["verge_info"]["drop"] == deck["thickness"] + VERGE_GAP + VERGE_COVER and flashing["verge_info"]["cover"] == 60.0
-        # the continuous strip behind it: against the edge's face, from the deck down into the flashing's hem
+        # the continuous strip behind it: up and over the plywood, 40 in on its top under the tray (so it is fixed
+        # down through the plywood into the batten at the edge), down the edge's face and into the flashing's hem
         strip = _section(a, clip, edge, sign)
-        assert min(x for x, _d in strip) == pytest.approx(0.5, abs=0.05) and max(x for x, _d in strip) < VERGE_FACE + t
-        assert min(d for _x, d in strip) >= foot and max(d for _x, d in strip) <= deck_top
+        assert min(x for x, _d in strip) == pytest.approx(-VERGE_CLIP_LAP, abs=0.05) and max(x for x, _d in strip) < VERGE_FACE + t
+        on_top = [d for x, d in strip if x < -5.0]
+        assert min(on_top) == pytest.approx(deck_top, abs=0.05) and max(on_top) == pytest.approx(deck_top + t, abs=0.05) and max(on_top) < back
+        batten = min((m for m in out["geometry"] if m["ifc_type"] == "batten"), key=lambda m: abs(sum(q[0] for q in m["profile"]) / len(m["profile"]) - edge))
+        mid = sign * (sum(q[0] for q in batten["profile"]) / len(batten["profile"]) - edge)
+        assert min(x for x, _d in strip) < mid < 0.0                              # it reaches over the batten at the roof's edge
+        assert min(d for _x, d in strip) >= foot and max(d for _x, d in strip) <= back
         assert flashing["thickness"] == 3000.0 and clip["thickness"] == 3000.0     # the slope long
 
 
