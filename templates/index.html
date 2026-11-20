@@ -45,7 +45,7 @@
                     <button class="btn btn-secondary btn-sm" id="show-all" onclick="onShowAll()" disabled>Show all</button>
                 </div>
                 <div id="hidden-list" class="hidden-list"></div>
-                <p class="hint">Click a wall face to add its coplanar patch to the active elevation; click again to remove it. A leaning wall, a roof slope or a flat roof is picked the same way and is set out on its own plane, in a chain of its own. Click a face round a corner and it becomes the next elevation in the chain, with the coursing carried round. Faces that don't meet the chain start a new one. Openings punched by the importer become holes.</p>
+                <p class="hint">Click a wall face to add its coplanar patch to the active elevation; click again to remove it. A leaning wall, a roof slope or a flat roof is picked the same way and is set out on its own plane. Click the slope the other side of a ridge and the two become one chain, with a ridge cap. Two slopes that meet in a valley are joined by it, each in its own chain, with a valley gutter. Click a face round a corner and it becomes the next elevation in the chain, with the coursing carried round. Faces that don't meet the chain start a new one. Openings punched by the importer become holes.</p>
                 <p class="hint">Stuck or misbehaving? Run <b>cladforge()</b> in the browser console for the engine state and a log of every extraction.</p>
                 <p class="hint">Picking generates nothing on its own. When the chain is complete, press <b>Enter</b> or use <b>Make chain</b> at the top right of the view to choose the cladding and build it. After that the whole panel edits live.</p>
                 <label class="chk"><input type="checkbox" id="penetrations" checked onchange="state.elevations.forEach(runExtraction)"> Subtract penetrations crossing the face</label>
@@ -149,6 +149,8 @@
                     <div class="field"><label>Bottom ends <span class="unit">the base, over heads</span></label>
                         <select id="edge-seamBottom" onchange="onEdgeField('seamBottom', this.value)"><option value="folded" selected>Folded</option><option value="flat">Flat</option></select></div>
                 </div>
+                <div class="field"><label>Verge strip <span class="unit">roof slopes: the free side edges, the last tray welted over a strip. Switch off a side that runs into a wall</span></label>
+                    <select id="edge-verge" onchange="onEdgeField('verge', this.value)"><option value="both" selected>Both sides</option><option value="start">Left only (of the chain's first face)</option><option value="end">Right only</option><option value="none">None</option></select></div>
                 </div>
                 <p class="hint">Offsets pull the battens, counter-battens and boards back from the top, bottom and free-end edges. Chain corners and window or door jambs take no offset; where boards are mitred the mitre gap opens between them. In the 2D view the edges are drawn in these colours: click one to type its value. Every value applies to the whole chain.</p>
             </div>

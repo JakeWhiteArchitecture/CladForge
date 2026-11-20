@@ -1450,7 +1450,35 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || slope.alone !== 1 || !/pitched 31\.4°/.test(slope.card) || !slope.parts || Math.abs(slope.tilt - 0.853) > 0.005
         || !slope.check.some(t => /run up the slope/.test(t)))
         throw new Error('roof slope not picked and built on its own plane: ' + JSON.stringify(slope));
-    await page.evaluate(async () => { setActive(state.elevations.length - 1); deleteElevation(); await settled(); });
+    // The slope the other side of the ridge joins the first: one chain, set out from one
+    // line so the seams carry over the ridge, with a ridge cap and fillers under it.
+    await lookAt('Wing roof north', [0.2, 0.85, -0.6]);
+    await page.waitForFunction(n => state.elevations.length > n + 1 && state.elevations.every(e => !e._running && (e.result || e.error)),
+                               facesBefore, { timeout: 120000 });
+    await settle();
+    const ridge = await page.evaluate(() => {
+        const [a, b] = state.elevations.slice(-2);
+        const parts = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh);
+        const named = (e, re) => parts.filter(m => m.userData.elevation === e.name && re.test(m.userData.name || ''));
+        // where each slope's seams stand along the ridge, in the model's own x (the ridge runs along it)
+        const seams = e => [...new Set(named(e, /Seam overcloak$/).map(m => Math.round(new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3()).x / 20)))].sort((p, q) => p - q).map(x => x * 20);
+        return { error: a.error || b.error, chain: a.chain === b.chain, members: a.chain.members.length, turned: a.rev !== b.rev,
+                 status: document.getElementById('status-chip').textContent,
+                 cards: [...document.querySelectorAll('.elev-meta')].slice(-2).map(c => c.textContent.replace(/^.*openings?/, '')),
+                 caps: named(a, /Ridge Cap/).length + named(b, /Ridge Cap/).length,
+                 fillers: [named(a, /Ridge Filler/).length, named(b, /Ridge Filler/).length],
+                 upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Strip/).length + named(b, /Verge Strip/).length,
+                 seams: [seams(a), seams(b)],
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)) };
+    });
+    console.log('ridge:', JSON.stringify(ridge));
+    if (ridge.error || !ridge.chain || ridge.members !== 2 || !ridge.turned || !/at a ridge with/.test(ridge.status)
+        || !/ridge with/.test(ridge.cards[0]) || !/carries the cap/.test(ridge.cards.join()) || ridge.caps !== 1
+        || ridge.fillers[0] < 4 || ridge.fillers[0] !== ridge.fillers[1] || ridge.seams[0].length < 4
+        || ridge.seams[0].length !== ridge.seams[1].length || ridge.seams[0].some((x, k) => Math.abs(x - ridge.seams[1][k]) > 20)
+        || ridge.check.length !== 1 || ridge.upstands < 4 || ridge.verges !== 4)
+        throw new Error('the two roof slopes did not join at a ridge: ' + JSON.stringify(ridge));
+    await page.evaluate(async () => { for (let k = 0; k < 2; k++) { setActive(state.elevations.length - 1); deleteElevation(); await settled(); } });
 
     await page.evaluate(() => hideElement(allMeshes[0]));           // a new model starts with none hidden
 
@@ -1462,6 +1490,41 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     const hiddenAfterImport = await page.evaluate(() => hiddenElements().length + ' / ' + document.getElementById('hidden-count').textContent);
     console.log('hidden after re-import:', hiddenAfterImport);
     if (hiddenAfterImport !== '0 / None hidden') throw new Error('hidden elements survived a new model: ' + hiddenAfterImport);
+
+    // A second model: two roof slopes falling towards each other. They stay in their own
+    // chains, are joined by the valley they share, and one of them carries its gutter.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'valley_roof.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    const seamRoof = () => page.evaluate(() => { openWizard(); WIZ.draft.type = 'seam'; WIZ.draft.orient = 'vertical'; wizBuild(); dismissLevels(); });
+    const picked = n => page.waitForFunction(n => state.elevations.length === n && state.elevations.every(e => !e._running && e.picks.length && (e.result || e.error)),
+                                             n, { timeout: 120000 });
+    await lookAt('Roof A', [0.05, 0.87, 0.5]);
+    await picked(1);
+    await seamRoof();
+    await settle();
+    await lookAt('Roof C', [-0.5, 0.87, 0.05]);
+    await picked(2);
+    const valleyStatus = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    await seamRoof();
+    await settle();
+    const valley = await page.evaluate(() => {
+        const [a, c] = state.elevations;
+        const parts = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh);
+        return { error: a.error || c.error, chains: a.chain !== c.chain, pitch: [a.result.pitch, c.result.pitch],
+                 records: [valleyRecords(a), valleyRecords(c)].map(v => v.map(x => [x.with, x.master, Math.round(x.length)])),
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')),
+                 gutters: parts.filter(m => /Valley Gutter/.test(m.userData.name || '')).map(m => m.userData.name),
+                 trays: parts.filter(m => / Tray /.test(m.userData.name || '') && !/Seam|Upstand/.test(m.userData.name)).length,
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a valley/.test(t)) };
+    });
+    console.log('valley:', JSON.stringify(valley), '|', valleyStatus);
+    if (valley.error || !valley.chains || valley.records[0].join() !== 'Elevation B,true,4583' || valley.records[1].join() !== 'Elevation A,false,4583'
+        || !/a valley with Elevation A/.test(valleyStatus) || !/valley with B/.test(valley.cards[0]) || !/valley with A/.test(valley.cards[1])
+        || valley.gutters.join() !== 'Elevation A Valley Gutter' || valley.trays < 8 || valley.check.length !== 1 || !/200 mm clear/.test(valley.check[0]))
+        throw new Error('the two roof slopes were not joined at their valley: ' + JSON.stringify(valley));
 
     console.log('SMOKE OK');
     await browser.close();

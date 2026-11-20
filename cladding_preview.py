@@ -15,6 +15,9 @@ from cladding_booleans import apply_boolean_ops, clip_elevation
 from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
 from cladding_edges import mitre_to_linings, finish_seams
 from cladding_checks import check_rules as _check_rules
+from cladding_ridge import ridge_ends, ridge_parts
+from cladding_verge import verge_parts
+from cladding_valley import valley_cut, valley_parts
 
 
 def _build_all(p):
@@ -106,10 +109,15 @@ def _preview_one(params):
     meshes, dims, infos = _build_all(p)
     if p["trim"]:
         meshes = apply_boolean_ops(meshes, p)
+    meshes = valley_cut(meshes, p)       # the cladding stands back from a valley, before its seams are finished
     # Boards are mitred to the reveal linings on the finished outline, so the edges of
     # holes left by trimming are mitred as well as the ends that land on a jamb.
     meshes = mitre_to_linings(meshes, p, infos)
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
+    meshes = ridge_ends(meshes, p, infos)    # two slopes meeting at a ridge: cut to it, the vent slot left
+    meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
+    meshes = verge_parts(meshes, p, infos)   # a roof slope's free side edges: the last tray out over a verge strip
+    meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too

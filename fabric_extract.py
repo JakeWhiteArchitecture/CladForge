@@ -716,6 +716,139 @@ def _merge_abutments(found, umin, vmin, width):
 
 # ── corners ──────────────────────────────────────────────────────────────
 
+RIDGE_MIN = 300.0         # mm – two slopes share at least this much ridge, or they are not a pair
+
+
+def _top_run(elev):
+    """(u0, u1) of the face's top edge: the stretch of its outline within 5 mm of its top.
+    A hipped slope is a trapezium, so its ridge is shorter than the face is wide."""
+    top = float(elev["height"])
+    us = [q[0] for pg in elev.get("polygons") or [] for q in pg["exterior"] if q[1] >= top - 5.0]
+    return (min(us), max(us)) if len(us) >= 2 else (0.0, float(elev["width"]))
+
+
+def ridge_link(a, b):
+    """Do pitched elevations a and b meet at a ridge? None if not, else {"kind": "ridge",
+    "v_a", "v_b": the ridge line in each face's own v, "u_a": (u0, u1) and "u_b": the
+    stretch of it they share, in each face's u, "u_b0": b's u where a's is 0 (b's u runs
+    against a's, so u_b = u_b0 - u_a), "k": tan of half the angle between the normals,
+    the slope dv/ddepth of the plane that bisects the ridge, "angle"}.
+
+    A ridge is level, lies along the top of both faces, and the roof falls away from it on
+    both sides. Planes that meet on a sloping line (a hip, a valley), a change of pitch
+    (the top of one slope meeting the foot of the next) and a roof meeting a wall are not
+    ridges and are not joined."""
+    fa, fb = a["frame"], b["frame"]
+    na, nb = fa["n"], fb["n"]
+    va, vb = fa.get("v") or (0.0, 0.0, 1.0), fb.get("v") or (0.0, 0.0, 1.0)
+    if abs(na[2]) < 1e-6 or abs(nb[2]) < 1e-6 or na[2] < 0 or nb[2] < 0:
+        return None                                   # a wall, or a face that looks down
+    if _dot(fa["u"], fb["u"]) > -0.9998:
+        return None                                   # not back to back along one level line
+    rise_a, rise_b = _dot(nb, va), _dot(na, vb)
+    if rise_a < 1e-3 or rise_b < 1e-3:
+        return None                                   # parallel, or the two fall towards each other (a valley)
+    v_a = _dot(nb, _sub(fb["origin"], fa["origin"])) / rise_a
+    v_b = _dot(na, _sub(fa["origin"], fb["origin"])) / rise_b
+    if abs(v_a - float(a["height"])) > CORNER_TOL or abs(v_b - float(b["height"])) > CORNER_TOL:
+        return None                                   # the line is not along the top of both
+    at = [fa["origin"][i] + va[i] * v_a for i in range(3)]          # on the ridge, at a's u = 0
+    u_b0 = _dot(fb["u"], _sub(at, fb["origin"]))
+    (a0, a1), (b0, b1) = _top_run(a), _top_run(b)
+    lo, hi = max(a0, u_b0 - b1), min(a1, u_b0 - b0)
+    if hi - lo < RIDGE_MIN:
+        return None
+    beta = math.acos(max(-1.0, min(1.0, _dot(na, nb))))
+    return {"kind": "ridge", "v_a": round(v_a, 1), "v_b": round(v_b, 1), "u_b0": round(u_b0, 1),
+            "u_a": [round(lo, 1), round(hi, 1)], "u_b": [round(u_b0 - hi, 1), round(u_b0 - lo, 1)],
+            "k": round(math.tan(beta / 2.0), 4), "angle": round(math.degrees(beta), 1), "external": True}
+
+
+VALLEY_ON = 25.0          # mm – an outline edge this close to the other slope's plane lies along the valley
+VALLEY_MIN = 300.0        # mm – two slopes share at least this much valley, or it is not one
+
+
+def _centre(elev):
+    """A point well inside the face, in its own (u, v): the centroid of its largest patch."""
+    best = max((Polygon(pg["exterior"]) for pg in elev.get("polygons") or []), key=lambda g: g.area, default=None)
+    return (best.centroid.x, best.centroid.y) if best is not None else (float(elev["width"]) / 2, float(elev["height"]) / 2)
+
+
+def _at(frame, u, v):
+    U, V, o = frame["u"], frame.get("v") or (0.0, 0.0, 1.0), frame["origin"]
+    return tuple(o[i] + U[i] * u + V[i] * v for i in range(3))
+
+
+def _along_plane(elev, other, line, base):
+    """The stretch of *elev*'s outline that lies in *other*'s plane, as (t0, t1) along
+    *line* from *base*; None where no edge of it does."""
+    fo = other["frame"]
+    ts = []
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        for q, r in zip(ring, ring[1:] + ring[:1]):
+            P, Q = _at(elev["frame"], q[0], q[1]), _at(elev["frame"], r[0], r[1])
+            if abs(_dot(fo["n"], _sub(P, fo["origin"]))) <= VALLEY_ON and abs(_dot(fo["n"], _sub(Q, fo["origin"]))) <= VALLEY_ON:
+                ts += [_dot(_sub(P, base), line), _dot(_sub(Q, base), line)]
+    return (min(ts), max(ts)) if ts else None
+
+
+def valley_link(a, b):
+    """Do pitched elevations a and b meet at a valley? None if not, else {"kind": "valley",
+    "a": {"p1", "p2": the valley line in a's own (u, v), "inside": a point inside a,
+    "other_up": the direction up b's slope square to the line, "other_n": b's normal},
+    "b": the same for b, "k": tan of half the angle between the normals, "angle",
+    "length"}.
+
+    A valley is where two slopes fall towards each other: each face lies in front of the
+    other's plane, and each has an edge of its outline along the line the planes meet on,
+    level or sloping. The faces have to be modelled meeting on that line: one roof run
+    through another has no such edge and is not joined."""
+    fa, fb = a["frame"], b["frame"]
+    na, nb = tuple(fa["n"]), tuple(fb["n"])
+    if na[2] < 1e-6 or nb[2] < 1e-6:
+        return None                                   # a wall, or a face that looks down
+    line = _cross(na, nb)
+    size = math.sqrt(_dot(line, line))
+    if size < 0.05:
+        return None                                   # parallel
+    line = tuple(c / size for c in line)
+    ca, cb = _at(fa, *_centre(a)), _at(fb, *_centre(b))
+    if _dot(nb, _sub(ca, fb["origin"])) <= 0 or _dot(na, _sub(cb, fa["origin"])) <= 0:
+        return None                                   # one lies behind the other: a ridge or a hip
+    # A point on both planes: from a's centre, straight down a's own slope to b's plane.
+    down = _cross(na, line)
+    step = _dot(nb, down)
+    if abs(step) < 1e-9:
+        return None
+    base = tuple(ca[i] - down[i] * _dot(nb, _sub(ca, fb["origin"])) / step for i in range(3))
+    ra, rb = _along_plane(a, b, line, base), _along_plane(b, a, line, base)
+    if not ra or not rb:
+        return None
+    t0, t1 = max(ra[0], rb[0]), min(ra[1], rb[1])
+    if t1 - t0 < VALLEY_MIN:
+        return None
+    ends = [tuple(base[i] + line[i] * t for i in range(3)) for t in (t0, t1)]
+    beta = math.acos(max(-1.0, min(1.0, _dot(na, nb))))
+
+    def side(e, centre, other, n_other):
+        f = e["frame"]
+        local = lambda P: [round(_dot(_sub(P, f["origin"]), f["u"]), 2),                       # noqa: E731
+                           round(_dot(_sub(P, f["origin"]), f.get("v") or (0.0, 0.0, 1.0)), 2)]
+        up = _cross(tuple(other["frame"]["n"]), line)                 # in the other face, square to the line
+        if _dot(up, _sub(centre, base)) < 0:
+            up = tuple(-c for c in up)
+        return {"p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e)],
+                "other_up": [round(c, 9) for c in up], "other_n": [round(c, 9) for c in n_other]}
+    return {"kind": "valley", "a": side(a, cb, b, nb), "b": side(b, ca, a, na),
+            "k": round(math.tan(beta / 2.0), 4), "angle": round(math.degrees(beta), 1), "length": round(t1 - t0, 1)}
+
+
+def valley_links(a, others):
+    """valley_link(a, each of *others*), in order: None where the two do not meet at one."""
+    return [valley_link(a, b) for b in others]
+
+
 def chain_link(a, b):
     """Do elevations a and b meet at a vertical corner? None if not, else
     {"end_a": "left"|"right", "end_b", "corner_u_a", "corner_u_b", "angle",
@@ -726,7 +859,7 @@ def chain_link(a, b):
     fa, fb = a["frame"], b["frame"]
     na, nb = fa["n"], fb["n"]
     if abs(na[2]) > 1e-6 or abs(nb[2]) > 1e-6:
-        return None                                   # a leaning or pitched face: it stands on its own
+        return ridge_link(a, b)                       # pitched faces meet at a ridge, or not at all
     cross = na[0] * nb[1] - na[1] * nb[0]
     if abs(cross) < 0.05:
         return None                                   # parallel or coplanar
