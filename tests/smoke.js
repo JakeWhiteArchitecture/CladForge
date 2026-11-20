@@ -1613,6 +1613,18 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     const lowest = Math.min(floor.model, floor.clad);
     if (!(floor.grid < lowest) || lowest - floor.grid > 60)
         throw new Error('the grid is not just below the lowest geometry: ' + JSON.stringify(floor));
+    // and it follows the cladding down when that reaches lower than the model, and back up after
+    const dipped = await page.evaluate(() => {
+        const probe = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10));
+        probe.position.y = gridHelper.position.y - 500;
+        cladGroup.add(probe); placeGrid();
+        const out = { grid: gridHelper.position.y, low: new THREE.Box3().setFromObject(probe).min.y };
+        cladGroup.remove(probe); placeGrid();
+        return Object.assign(out, { back: gridHelper.position.y });
+    });
+    console.log('grid under lower cladding:', JSON.stringify(dipped));
+    if (!(dipped.grid < dipped.low) || dipped.low - dipped.grid > 60 || dipped.back !== floor.grid)
+        throw new Error('the grid did not follow the cladding down: ' + JSON.stringify(dipped));
     if (hipped.chains.join() !== 'Chain 1,Chain 1,Chain 2,Chain 3' || hipped.ridge.map(r => r.join('-')).join() !== '3000-6000,3000-6000'
         || hipped.hips.join() !== '2,2,2,2' || hipped.ridgeCaps !== 2 || hipped.hipCaps !== 8 || hipped.aprons !== 4 || hipped.verges
         || hipped.ridgeCheck.join() !== '3.00')
