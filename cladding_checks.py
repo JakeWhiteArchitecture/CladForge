@@ -216,10 +216,19 @@ def check_rules(params, infos=None):
     for i in infos:
         eaves = i.get("eaves") or []
         if eaves:
+            over = sorted({e["over"] for e in eaves if e.get("over")})
             add("Eaves", "pass", "%s: an eaves apron %.2f m long under the trays, which run out %.0f mm beyond the roof's edge "
-                "over it. No eaves drawing was supplied, so its sizes are assumed: agree them against the supplier's eaves "
+                "over it, its drip hung plumb in front of the edge%s. Its sizes are assumed: agree them against the supplier's eaves "
                 "detail. Switch it off (Edges, Eaves apron) where the slope runs into a wall or a gutter behind a parapet"
-                % (i["elevation"], sum(e["length"] for e in eaves) / 1000.0, eaves[0]["tray"]), len(eaves))
+                % (i["elevation"], sum(e["length"] for e in eaves) / 1000.0, eaves[0]["tray"],
+                   "; over %s, which it comes down to with no overhang, the plywood and trays run on %.0f mm past the roof's edge, "
+                   "clear of the wall's cladding, and the drip laps it" % (" and ".join(over), max(e.get("run") or 0.0 for e in eaves))
+                   if over else ""), len(eaves))
+        for u in i.get("eaves_under") or []:
+            add("Eaves", "pass", "%s: under the eaves of %s (no overhang) for %.2f m. Every layer stops level, %.0f mm below the line the two "
+                "meet on: the %.0f mm top offset under the roof's plywood where that is lowest, at the outside of this wall's cladding. "
+                "The gap is the wall cavity's vent: an insect mesh closes it (not drawn)"
+                % (i["elevation"], u["with"], u["length"] / 1000.0, -u["stop"], u["gap"]), u["length"])
     # A verge's last seam stands 150 to 370 mm in from the tray's edge.
     for i in infos:
         verges = i.get("verges") or []

@@ -7,8 +7,12 @@ here is assumed: agree them against the supplier's eaves detail. The face's bott
 taken as the outer face of the roof's edge (the fascia, or the back of the gutter).
 
   * The eaves apron: a folded sheet lying on the deck under the trays, EAVES_LAP up the
-    slope from the edge, its nose EAVES_NOSE out beyond it, turned back under, then down
-    EAVES_CLEAR clear of the edge's face for EAVES_DROP, with a drip kicked out at its foot.
+    slope from the edge, its nose EAVES_NOSE out beyond it, turned back under, then down:
+    the drop hangs **plumb in front of the edge of the roof's own surface** (the surface
+    that was picked: the outer edge of the model's plywood), EAVES_CLEAR clear of it, and
+    runs down past that edge by EAVES_DROP, with a drip kicked out at its foot. The
+    build-up's end is cut square to the slope, so on a pitch it leans out over the edge:
+    the drop stands as much further out as it takes to pass it (apron_drop).
   * The trays, and their seams, run out over the apron to EAVES_TRAY beyond the edge, where
     each is welted round the apron's nose. Their outlines are lengthened, so the cutting
     list has a tray as long as it is on the roof; the welt turned under is not added. A
@@ -23,20 +27,26 @@ off. Only a level edge at least 300 long is one: a raking bottom edge is a valle
 Not modelled: the gutter and its brackets, the fascia, the continuous clip some systems
 fix under the apron, the tray's welt, the apron's laps and its ends at a verge or a hip."""
 
+import math
+
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import orient
 
-from cladding_constants import _prism, frame_to_world, frame_v
+from cladding_constants import _parse, _prism, chain_params, frame_to_world, frame_v
 from cladding_edges import settings as edge_settings
+from cladding_primitives import buildup_depth
 from cladding_ridge import _same_frame, _up_slope
+from cladding_valley import valleys_of
 from cladding_verge import ROOF_PITCH, VERGE_TRAY
 
 EAVES_NOSE = 35.0     # mm – the apron's nose, out beyond the roof's edge (assumed)
 EAVES_TRAY = 40.0     # mm – the trays' ends beyond the roof's edge, round the nose (assumed)
 EAVES_LAP = 100.0     # mm – the apron on the deck, up from the edge (assumed)
-EAVES_CLEAR = 10.0    # mm – the apron's drop, clear of the edge's face (assumed)
-EAVES_DROP = 50.0     # mm – the drop, down from the deck (assumed)
+EAVES_CLEAR = 10.0    # mm – the apron's drop, clear of the edge of the roof's surface, on plan (assumed)
+EAVES_DROP = 50.0     # mm – the drop's foot, below the edge of the roof's surface (assumed)
 EAVES_KICK = 10.0     # mm – the drip kicked out at its foot (assumed)
+EAVES_OVER = 20.0     # mm – over a clad wall: the deck's underside out beyond the wall cladding's outside, on plan (assumed)
+EAVES_WALL_LAP = 60.0 # mm – over a clad wall: the drop's foot below the top of the wall's cladding (assumed)
 EAVES_MIN = 300.0     # mm – a level bottom edge shorter than this is not an eaves
 EDGE_TOL = 12.0       # mm – an end this close to where the bottom offset left it is an end at the eaves
 OWN = ("ridge_cap", "ridge_filler", "verge_strip", "valley_gutter", "eaves_strip")
@@ -62,13 +72,79 @@ def _edges(info):
     return sorted(out)
 
 
-def _apron_ring(y0, t):
-    """The apron's section: x out from the roof's edge, y the depth from the face. On the
-    deck at depth y0, out to the nose, back under it, down the drop, the drip kicked out."""
+def apron_drop(y0, t, pitch, below=EAVES_DROP):
+    """Where the apron's drop hangs: (how far out from the edge of the roof's surface, on
+    plan; how far below that edge its foot is). Plumb, EAVES_CLEAR in front of the edge, or
+    as much further as it takes to pass the end of the build-up, which is cut square to
+    the slope and so leans out over the edge; and down to *below* the edge."""
+    lean = y0 * math.sin(math.radians(pitch))
+    return max(EAVES_CLEAR, lean + 1.5 * t) + t / 2.0, max(20.0, below)
+
+
+def soffit_depth(p):
+    """How far off its face a build-up's soffit is: the underside of what sails over a wall
+    below. A standing seam roof's deck (its plywood), on the battens; otherwise the back of
+    the boards. The battens under it run with the fall and the cavity between them is open."""
+    board = p["panel_t"] if p["cladding_type"] == "panel" else p["plank_t"]
+    return buildup_depth(p) - board - ((p["deck_t"] + 2.0) if p.get("seam") else 0.0)
+
+
+def join_eaves(params):
+    """Before anything is built: tell each face at an eaves on a wall (fabric_extract.
+    eaves_link, kind "eaves" among its "valleys") what it needs to know of the other, which
+    may be in another chain with other settings: "other_depth" its build-up's depth,
+    "other_soffit" (soffit_depth), "other_top" its top edge offset, "other_trays" whether
+    it is trays run with the fall."""
+    by = {e.get("name"): e for e in params.get("elevations") or []}
+    for e in params.get("elevations") or []:
+        for v in e.get("valleys") or []:
+            other = by.get(v.get("with")) if v.get("kind") == "eaves" else None
+            if other is None:
+                continue
+            po = _parse(dict(chain_params(params, other), elevations=[]))
+            v.update(other_depth=round(buildup_depth(po), 3), other_soffit=round(soffit_depth(po), 3),
+                     other_top=edge_settings(other)["top"], other_trays=_up_slope(po))
+
+
+def _joins(elev, roof):
+    """The face's eaves on a wall, as cladding_valley.valleys_of gives its junctions, each
+    with what join_eaves noted: those where it is the roof (*roof* True) or the wall. The
+    line is level: "v" its height on the face, "u0", "u1" its ends."""
+    raw = {v.get("with"): v for v in elev.get("valleys") or [] if v.get("kind") == "eaves"}
+    out = []
+    for j in valleys_of(elev, "eaves"):
+        v = raw.get(j["with"]) or {}
+        if bool(v.get("roof")) != roof or "other_depth" not in v or abs(j["p1"][1] - j["p2"][1]) > 2.0:
+            continue
+        u0, u1 = sorted((j["p1"][0], j["p2"][0]))
+        out.append(dict(j, u0=u0, u1=u1, v=(j["p1"][1] + j["p2"][1]) / 2.0, depth=float(v["other_depth"]),
+                        soffit=float(v["other_soffit"]), top=float(v["other_top"]), trays=bool(v.get("other_trays"))))
+    return out
+
+
+def wall_stop(depth, soffit, top, pitch):
+    """Where a wall's cladding stops under a roof that comes down to its head, as a height
+    from the line the two meet on (negative: below it). *top* (the wall's top edge offset:
+    the ventilation gap) below the roof's soffit **at the outside surface of the wall's
+    cladding**, *depth* out from the wall, where a soffit that falls outward is lowest:
+    every layer of the wall is cut back level to that. Never above the line itself, where
+    the roof's own layers end."""
+    t, c = math.tan(math.radians(pitch)), math.cos(math.radians(pitch))
+    return min(0.0, soffit / c - depth * t) - top
+
+
+def _apron_ring(y0, t, pitch, below=EAVES_DROP):
+    """The apron's section: x out from the roof's edge down the slope, y the depth from the
+    face. On the deck at depth y0, out to the nose, back under it, then the drop: plumb,
+    in front of the edge of the roof's own surface and down past it (apron_drop), the drip
+    kicked out at its foot. *pitch*: the slope, in degrees from level."""
     g = 2.5 * t
-    x = EAVES_CLEAR + t
-    path = LineString([(-EAVES_LAP, y0), (EAVES_NOSE, y0), (EAVES_NOSE, y0 - g), (x, y0 - g),
-                       (x, y0 - EAVES_DROP), (x + EAVES_KICK, y0 - EAVES_DROP - EAVES_KICK)])
+    s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+    out, below = apron_drop(y0, t, pitch, below)
+    at = lambda h, z: (h * c - z * s, h * s + z * c)        # noqa: E731 — (out on plan, up) from the edge, as (x, y)
+    x_a = (out - (y0 - g) * s) / c                          # where the hem under the nose meets the plumb line
+    path = LineString([(-EAVES_LAP, y0), (EAVES_NOSE, y0), (EAVES_NOSE, y0 - g), (min(x_a, EAVES_NOSE - t), y0 - g),
+                       at(out, -below), at(out + EAVES_KICK, -below - EAVES_KICK)])
     return list(path.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1]
 
 
@@ -106,21 +182,78 @@ def eaves_parts(meshes, p, infos):
         across = [along[1] * toward[2] - along[2] * toward[1], along[2] * toward[0] - along[0] * toward[2],
                   along[0] * toward[1] - along[1] * toward[0]]
         sign = 1.0 if sum(a * b for a, b in zip(across, N)) > 0 else -1.0     # which way the section's y runs
-        section = orient(Polygon([(x, sign * y) for x, y in _apron_ring(back - 1.0, t)]), 1.0)
-        section = [[round(x, 3), round(y, 3)] for x, y in list(section.exterior.coords)[:-1]]
-        for n, (u0, u1, v) in enumerate(_edges(info)):
-            for m in mine:
-                out = v - EAVES_TRAY if m.get("ifc_type") in ("plank", "seam") else v
-                pts = m["profile"]
-                at = [u0 - reach <= q[0] <= u1 + reach and v - 1.0 <= q[1] <= v + tol for q in pts]
-                for i, q in enumerate(pts):
-                    if at[i]:
-                        _lower(q, [pts[j] for j in ((i - 1) % len(pts), (i + 1) % len(pts)) if not at[j]], out)
-            apron = _prism([list(q) for q in section], 0.0, u1 - u0, {"origin": frame_to_world(frame, u0, v, 0.0), "u": toward, "v": across, "n": along},
-                           "eaves_strip", "%s Eaves Apron %d" % (name, n + 1), name)
-            apron["eaves_info"] = {"length": round(u1 - u0, 1), "lap": EAVES_LAP, "nose": EAVES_NOSE, "drop": EAVES_DROP,
-                                   "clear": EAVES_CLEAR, "tray": EAVES_TRAY, "thickness": t}
-            extra.append(apron)
-            info.setdefault("eaves", []).append(dict(apron["eaves_info"], u0=round(u0, 1), u1=round(u1, 1), v=round(v, 1)))
-            info.setdefault("eaves_strips", []).append([[u0, v - EAVES_NOSE], [u1, v - EAVES_NOSE], [u1, v + EAVES_LAP], [u0, v + EAVES_LAP]])
+        pitch = min(float(elev.get("pitch") or 0.0), 80.0)
+        decks = [float(m["depth"]) for m in mine if m.get("ifc_type") == "deck"]
+        soffit = min(decks) if decks else back
+        joins = _joins(elev, True)
+        n = 0
+        for u0, u1, v in _edges(info):
+            # Where the edge is the head of a clad wall the roof comes down to (no overhang),
+            # the roof runs on over the wall's cladding; the rest of it is an edge in the open.
+            cuts = sorted({u0, u1} | {u for q in joins if abs(q["v"] - v) < 2.0 for u in (q["u0"], q["u1"]) if u0 + 1.0 < u < u1 - 1.0})
+            for a, b in zip(cuts, cuts[1:]):
+                over = next((q for q in joins if abs(q["v"] - v) < 2.0 and q["u0"] <= (a + b) / 2.0 <= q["u1"]), None)
+                run, below = 0.0, EAVES_DROP
+                if over:
+                    # the deck's underside out to EAVES_OVER beyond the outside of the wall's cladding, on plan
+                    s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+                    run = max(0.0, (over["depth"] + EAVES_OVER - soffit * s) / c)
+                    below = EAVES_WALL_LAP - wall_stop(over["depth"], soffit, over["top"], pitch) - run * s
+                ve = v - run
+                for m in mine:
+                    kind = m.get("ifc_type")
+                    out = ve - EAVES_TRAY if kind in ("plank", "seam") else ve if kind == "deck" else v
+                    pts = m["profile"]
+                    at = [u0 - reach <= q[0] <= u1 + reach and v - 1.0 <= q[1] <= v + tol for q in pts]
+                    mid = [q[0] for q, on in zip(pts, at) if on]
+                    if not mid or not (a - (reach if a == u0 else 0.0) <= sum(mid) / len(mid) <= b + (reach if b == u1 else 0.0)):
+                        continue
+                    for k, q in enumerate(pts):
+                        if at[k]:
+                            _lower(q, [pts[x] for x in ((k - 1) % len(pts), (k + 1) % len(pts)) if not at[x]], out)
+                section = orient(Polygon([(x, sign * y) for x, y in _apron_ring(back - 1.0, t, pitch, below)]), 1.0)
+                section = [[round(x, 3), round(y, 3)] for x, y in list(section.exterior.coords)[:-1]]
+                n += 1
+                apron = _prism([list(q) for q in section], 0.0, b - a, {"origin": frame_to_world(frame, a, ve, 0.0), "u": toward, "v": across, "n": along},
+                               "eaves_strip", "%s Eaves Apron %d" % (name, n), name)
+                out, below = apron_drop(back - 1.0, t, pitch, below)
+                apron["eaves_info"] = {"length": round(b - a, 1), "lap": EAVES_LAP, "nose": EAVES_NOSE, "drop": round(below, 1),
+                                       "clear": round(out - t / 2.0, 1), "tray": EAVES_TRAY, "thickness": t,
+                                       "over": over["with"] if over else None, "run": round(run, 1)}
+                extra.append(apron)
+                info.setdefault("eaves", []).append(dict(apron["eaves_info"], u0=round(a, 1), u1=round(b, 1), v=round(v, 1)))
+                info.setdefault("eaves_strips", []).append([[a, ve - EAVES_NOSE], [b, ve - EAVES_NOSE], [b, ve + EAVES_LAP], [a, ve + EAVES_LAP]])
     return meshes + extra
+
+
+def eaves_under(meshes, p, infos):
+    """A wall a roof comes down to the head of, with no overhang: stop every layer of the
+    wall under the roof's soffit (wall_stop), level. Records it on the face's info
+    ("eaves_under"). A part that would be left with nothing is left out."""
+    info_by = {i["elevation"]: i for i in infos}
+    gone = set()
+    for elev in p.get("elevations", []):
+        name, frame, info = elev.get("name"), elev.get("frame"), info_by.get(elev.get("name"))
+        joins = _joins(elev, False) if info is not None else []
+        if not joins:
+            continue
+        depth, top = float(info.get("total_depth") or 0.0), edge_settings(elev)["top"]
+        mine = [m for m in meshes if m.get("elevation") == name and _same_frame(m["frame"], frame)]
+        for j in joins:
+            nz = max(0.05, min(1.0, abs(j["other_n"][2])))
+            pitch = math.degrees(math.acos(nz))
+            stop = j["v"] + wall_stop(depth, j["soffit"], top, pitch)
+            for m in mine:
+                pts = m["profile"]
+                at = [j["u0"] - 60.0 <= q[0] <= j["u1"] + 60.0 and q[1] > stop + 0.01 for q in pts]
+                if not any(at):
+                    continue
+                if min(q[1] for q in pts) >= stop - 1.0:
+                    gone.add(id(m))                    # all of it stands above where the wall stops
+                    continue
+                for q, on in zip(pts, at):
+                    if on:
+                        q[1] = round(stop, 3)
+            info.setdefault("eaves_under", []).append({"with": j["with"], "length": round(j["length"], 1), "stop": round(stop - j["v"], 1),
+                                                        "gap": top, "pitch": round(pitch, 1)})
+    return [m for m in meshes if id(m) not in gone]
