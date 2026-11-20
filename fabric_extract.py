@@ -871,6 +871,121 @@ def valley_links(a, others):
     return [valley_link(a, b) or hip_link(a, b) for b in others]
 
 
+HEAL_MAX = 500.0          # mm – an edge this far or less from the line two faces would meet on nearly touches it
+HEAL_ON = 2.0             # mm – and this close, it is on it already
+HEAL_MIN = 300.0          # mm – the two have to run along at least this much of the line together
+
+
+def _joined(a, b):
+    """Are the two joined as they stand: at a corner or a ridge, a valley or a hip?"""
+    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b))
+
+
+def _reach(elev, other, line, base):
+    """How *elev* stands to the line its plane meets *other*'s on. (strips, (t0, t1)):
+    for each edge of its outline that runs along the line within HEAL_MAX of it, short of
+    it, the quad between that edge and the line, in the world; and the stretch of the line
+    it covers, edges already on the line included. (None, None) where it has no such edge,
+    or where it crosses the line (it would have to be cut back, not healed)."""
+    f, fo = elev["frame"], other["frame"]
+    n, no = tuple(f["n"]), tuple(fo["n"])
+    w = _cross(n, line)                               # in the face, square to the line
+    rate = _dot(no, w)
+    if abs(rate) < 1e-6:
+        return None, None
+    off = lambda P: -_dot(no, _sub(P, fo["origin"])) / rate          # noqa: E731 — how far along w to the line
+    strips, ts = [], []
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        try:
+            shape = Polygon(ring)
+        except Exception:   # noqa: BLE001
+            continue
+        m = len(ring)
+        wu, wv = _dot(w, f["u"]), _dot(w, f.get("v") or (0.0, 0.0, 1.0))
+
+        def carried(at, before, gap):
+            """The corner *at* carried on to the line along the edge that comes into it from
+            *before* (so an eaves or a top edge runs straight on), or square to the line
+            where that edge runs too nearly along it."""
+            du, dv = at[0] - before[0], at[1] - before[1]
+            toward = du * wu + dv * wv
+            if toward * gap > 1e-9:
+                k = gap / toward
+                if math.hypot(du, dv) * k <= 4.0 * abs(gap):
+                    return _at(f, at[0] + du * k, at[1] + dv * k)
+            return _at(f, at[0] + wu * gap, at[1] + wv * gap)
+        for i, (q, r) in enumerate(zip(ring, ring[1:] + ring[:1])):
+            P, Q = _at(f, q[0], q[1]), _at(f, r[0], r[1])
+            a, b = off(P), off(Q)
+            length = math.dist(P, Q)
+            if length < 50.0 or max(abs(a), abs(b)) > HEAL_MAX:
+                continue
+            on = max(abs(a), abs(b)) <= HEAL_ON
+            if not on:
+                if abs(a - b) > max(10.0, 0.15 * length) or a * b < 0:
+                    continue                          # not along the line, or across it
+                # the strip has to lie outside the face: a step from the edge towards the line leaves it
+                mid = ((q[0] + r[0]) / 2.0, (q[1] + r[1]) / 2.0)
+                step = 1.0 if a + b > 0 else -1.0
+                if shape.contains(Point(mid[0] + step * wu * 2.0, mid[1] + step * wv * 2.0)):
+                    continue
+                P2, Q2 = carried(q, ring[i - 1], a), carried(r, ring[(i + 2) % m], b)
+                strips.append({"quad": [list(P), list(Q), list(Q2), list(P2)], "gap": max(abs(a), abs(b))})
+            ts += [_dot(_sub(P, base), line), _dot(_sub(Q, base), line)]
+        # the whole face on both sides of the line: it runs through the other plane
+        vs = [off(_at(f, q[0], q[1])) for q in ring]
+        if min(vs) < -HEAL_ON and max(vs) > HEAL_ON:
+            return None, None
+    return (strips, (min(ts), max(ts))) if ts else (None, None)
+
+
+def heal_link(a, b):
+    """Do faces a and b nearly meet, so that extending one or both to the line their planes
+    meet on would join them? None if not (they are joined already, are parallel, are too
+    far apart, or cross), else {"a": the quads to add to a, in the world (none where it is
+    on the line already), "b": the same for b, "gap": the widest strip, "length": the
+    stretch of the line both would cover, "kind": what they would meet at once healed:
+    "corner" (two walls), "ridge", "hip" or "valley" (two roof slopes), or "edge" (a wall
+    and a pitched face: brought together, but no junction is detailed between them yet)}."""
+    fa, fb = a["frame"], b["frame"]
+    na, nb = tuple(fa["n"]), tuple(fb["n"])
+    line = _cross(na, nb)
+    size = math.sqrt(_dot(line, line))
+    if size < 0.05 or _joined(a, b):
+        return None
+    line = tuple(c / size for c in line)
+    ca = _at(fa, *_centre(a))
+    down = _cross(na, line)
+    step = _dot(nb, down)
+    if abs(step) < 1e-9:
+        return None
+    base = tuple(ca[i] - down[i] * _dot(nb, _sub(ca, fb["origin"])) / step for i in range(3))
+    (sa, ra), (sb, rb) = _reach(a, b, line, base), _reach(b, a, line, base)
+    if ra is None or rb is None or not (sa or sb):
+        return None
+    t0, t1 = max(ra[0], rb[0]), min(ra[1], rb[1])
+    if t1 - t0 < HEAL_MIN:
+        return None
+    wall_a, wall_b = abs(na[2]) < 1e-6, abs(nb[2]) < 1e-6
+    if wall_a and wall_b:
+        kind = "corner"
+    elif wall_a or wall_b or na[2] < 0 or nb[2] < 0:
+        kind = "edge"
+    else:
+        cb = _at(fb, *_centre(b))
+        front = _dot(nb, _sub(ca, fb["origin"])) > 0 and _dot(na, _sub(cb, fa["origin"])) > 0
+        kind = "valley" if front else ("ridge" if abs(line[2]) < HIP_SLOPE else "hip")
+    quads = lambda strips: [[[round(c, 2) for c in p] for p in s["quad"]] for s in strips or []]      # noqa: E731
+    return {"kind": kind, "a": quads(sa), "b": quads(sb), "length": round(t1 - t0, 1),
+            "gap": round(max(s["gap"] for s in (sa or []) + (sb or [])), 1)}
+
+
+def heal_links(a, others):
+    """heal_link(a, each of *others*), in order: None where the two do not nearly meet."""
+    return [heal_link(a, b) for b in others]
+
+
 def chain_link(a, b):
     """Do elevations a and b meet at a vertical corner? None if not, else
     {"end_a": "left"|"right", "end_b", "corner_u_a", "corner_u_b", "angle",
