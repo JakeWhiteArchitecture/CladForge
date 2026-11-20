@@ -236,8 +236,23 @@ def check_rules(params, infos=None):
                     hv["gap"] / 2.0, hv["width"], hv["drop"], "over the top of that wall's cladding" if hv["over"] else "over the roof's edge",
                     "" if hv["standard"] else ". That is wider than the G3 piece is made (185 mm): the wall's build-up is deep, and a purpose-made "
                     "head flashing is needed"), hv["length"])
+        sf = i.get("seam_from")
+        if sf and sf["lines"]:
+            add("Seam link", "pass", "%s: its seams follow those of %s (%d of them fall on it%s); beyond them they carry on at tray centres"
+                % (i["elevation"], sf["name"], sf["lines"], ", linked by the mitred abutment" if sf.get("implied") else ""), sf["lines"])
+        elif sf:
+            add("Seam link", "warn", "%s: its seams were to follow those of %s, but %s: it is set out on its own"
+                % (i["elevation"], sf["name"], sf.get("why") or "they could not be carried over"), 0)
         ab = i.get("abut")
-        if ab and ab["kind"] == "g3":
+        if ab and ab["kind"] == "mitre":
+            add("Wall abutment", "pass" if ab["seams"] else "warn",
+                "%s: a mitred head-wall abutment %.2f m long with %s (an internal corner of %.0f°). The whole build-up turns the corner: "
+                "every layer, the plywood and the battens with the %d trays and %d seams, is cut on the mitre from the line the two faces "
+                "meet on to the corner of their claddings, the zinc to be welded to the wall's. This is not a supplier's standard detail: "
+                "agree it, and how the roof's and the wall's cavities are vented past it, with the installer"
+                % (i["elevation"], ab["length"] / 1000.0, ab["over"], ab["angle"], ab["trays"], ab["seams"]),
+                ab["length"])
+        elif ab and ab["kind"] == "g3":
             where = ("%s, whose layers stop %.0f mm above the line the two meet on, %.0f mm under the flashing's top" % (ab["over"], ab["stop"], ABUT_LAP)
                      if ab["over"] else "a wall that is not picked%s: its top is turned into a chase, wedged and sealed (not drawn)"
                      % (" (%s)" % ab["wall"] if ab.get("wall") else ""))
@@ -259,7 +274,15 @@ def check_rules(params, infos=None):
                    max(0.0, ab["room"]), "" if ab["room"] >= ABUT_VENT else " (under %.0f mm: the wall's cavity is too shallow for this detail; "
                    "deepen its battens)" % ABUT_VENT), ab["length"])
         for o in i.get("abut_over") or []:
-            if o["kind"] == "below":
+            if o["kind"] == "mitre":
+                lined = o.get("followed")
+                add("Wall abutment", "pass" if lined else "warn",
+                    "%s: over the roof %s for %.2f m, mitred. Every layer comes down to the mitre, the %d trays and %d seams to the corner "
+                    "%.0f mm above the line the two faces meet on%s"
+                    % (i["elevation"], o["with"], o["length"] / 1000.0, o["trays"], o["seams"], o["stop"],
+                       "" if lined else ". Its seams are not linked to the roof's, so they may not meet: link them "
+                       "(Edges, Seams follow)"), o["length"])
+            elif o["kind"] == "below":
                 add("Wall abutment", "pass" if o.get("edge") else "warn",
                     "%s: over the roof %s for %.2f m. Every layer stops level, %.0f mm above the line the two meet on, so the trays lap the "
                     "roof's upstand by %.0f mm%s. The splash zone over that roof is not applied: the zinc comes down to it"

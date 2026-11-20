@@ -293,3 +293,123 @@ def test_a_splash_zone_over_the_roof_is_kept_under_boards_and_dropped_under_stan
     seam = with_abutment(dict(SEAM))
     stop = seam["info"][0]["abut_over"][0]["stop"]
     assert stop < 150.0 and min(z for _x, z in _section(seam, _kind("plank", "Wall"))) == pytest.approx(stop, abs=0.5)
+
+
+# ── mitred, and the seam link ─────────────────────────────────────────────
+
+def _lines(out, face):
+    """A face's seam lines, in the world: along x."""
+    info = next(i for i in out["info"] if i["elevation"] == face)
+    frame = next(m["frame"] for m in out["geometry"] if m["elevation"] == face and m["ifc_type"] == "plank")
+    return sorted(round(frame_to_world(frame, u, 0.0, 0.0)[0], 1) for u in info["seam_lines"])
+
+
+@pytest.mark.parametrize("pitch", [5.0, 15.0, 30.0])
+def test_mitred_the_trays_and_seams_of_roof_and_wall_meet_on_the_plane_that_bisects_the_corner(pitch):
+    _link, params, out = _build(pitch, wall=dict(SEAM), abutment="mitre")
+    info = {i["elevation"]: i for i in out["info"]}
+    s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+    ab, over = info["Roof"]["abut"], info["Wall"]["abut_over"][0]
+    assert ab["kind"] == over["kind"] == "mitre" and ab["trays"] == over["trays"] > 5 and ab["seams"] == over["seams"] == ab["trays"] - 1
+    # the corner: where the two claddings' outer faces meet
+    out_w, out_r = info["Wall"]["total_depth"], info["Roof"]["total_depth"]
+    corner = (out_w, out_r / c - out_w * s / c)
+    assert over["stop"] == pytest.approx(corner[1], abs=0.1)
+    size = math.hypot(*corner)
+    side = lambda q: (q[0] * corner[1] - q[1] * corner[0]) / size      # noqa: E731 — off the mitre (the line to the corner), the roof's side positive
+    for kind in ("plank", "seam", "deck", "batten"):                     # the whole build-up, plywood and battens too
+        roof = [side(q) for q in _section(out, _kind(kind))]
+        wall = [side(q) for q in _section(out, _kind(kind, "Wall"))]
+        assert min(roof) == pytest.approx(0.0, abs=0.05) and max(wall) == pytest.approx(0.0, abs=0.05), kind
+    # the plywood of both runs into the corner of the two faces
+    assert min(math.hypot(*q) for q in _section(out, _kind("deck"))) == pytest.approx(min(math.hypot(*q) for q in _section(out, _kind("deck", "Wall"))), abs=30.0)
+    assert set(ab["layers"]) >= {"plank", "seam", "deck", "batten"}
+    # their outer faces run to the corner itself
+    assert min(math.dist(q, corner) for q in _section(out, _kind("plank"))) < 0.05
+    assert min(math.dist(q, corner) for q in _section(out, _kind("plank", "Wall"))) < 0.05
+    # the seams line up: the wall's follow the roof's, linked by the abutment itself
+    assert _lines(out, "Wall") == _lines(out, "Roof")
+    assert info["Wall"]["seam_from"] == {"name": "Roof", "lines": ab["seams"], "implied": True} and over["followed"] is True
+    # nothing else is added
+    assert not [m for m in out["geometry"] if "Abutment" in m["name"] or m["name"].endswith("Ridge Upstand") or m["ifc_type"] in ("ridge_cap", "ridge_filler")]
+    rows = [r for r in check_rules(params, out["info"]) if r["name"].endswith("Wall abutment")]
+    assert len(rows) == 2 and all(r["status"] == "pass" for r in rows) and "a mitred head-wall abutment 6.00 m long with Wall" in rows[1]["message"] + rows[0]["message"]
+    (linked,) = [r for r in check_rules(params, out["info"]) if r["name"].endswith("Seam link")]
+    assert linked["status"] == "pass" and "Wall: its seams follow those of Roof" in linked["message"] and "mitred abutment" in linked["message"]
+    ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
+    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
+
+
+def test_mitred_is_for_upright_standing_seam_above_and_falls_back_otherwise():
+    _l, _p, out = _build(wall=dict(SEAM, plank_orient="horizontal"), abutment="mitre")
+    assert out["info"][1]["abut"]["kind"] == "below", "trays that run along the wall cannot be mitred to the roof's"
+    _l, _p, out = _build(wall=dict(PANEL), abutment="mitre")
+    assert out["info"][1]["abut"]["kind"] == "g3"
+    _l, _p, out = _build(wall=dict(SEAM))
+    assert out["info"][1]["abut"]["kind"] == "below" and "seam_from" not in out["info"][0], "not unless the chain asks for it"
+
+
+def test_a_face_s_seams_can_follow_another_s_whichever_way_round():
+    _l, _p, plain = _build(wall=dict(SEAM, seam_centres=430), wide=1200.0, through=True)
+    own_wall, own_roof = _lines(plain, "Wall"), _lines(plain, "Roof")
+    assert not set(own_wall) & set(own_roof), "set out on their own they do not line up"
+
+    def linked(follower, source, **kw):
+        w, r = _pair(through=True, wide=1200.0)
+        link = abut_link(w, r)
+        rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+        roof = dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none", eaves="none", **kw)
+        wall = dict(w, offset=0, chain="Chain 1", settings=dict(SEAM, seam_centres=430), valleys=[rec("a", "Roof")])
+        {"Wall": wall, "Roof": roof}[follower]["seam_from"] = source
+        params = {"elevations": [wall, roof], "trim": True, "splash": 0}
+        return params, generate_preview(params)
+    # the wall follows the roof: the roof's lines where the roof is, and on at its own tray centres beyond
+    params, out = linked("Wall", "Roof")
+    wall = _lines(out, "Wall")
+    assert _lines(out, "Roof") == own_roof and set(own_roof) <= set(wall)
+    beyond = [x for x in wall if x < own_roof[0] or x > own_roof[-1]]
+    assert beyond and min(beyond) == pytest.approx(own_roof[0] - 430.0 * round((own_roof[0] - min(beyond)) / 430.0), abs=0.1)
+    assert all(b - a <= 530.0 + 0.1 for a, b in zip(wall, wall[1:]))
+    info = {i["elevation"]: i for i in out["info"]}
+    assert info["Wall"]["seam_from"] == {"name": "Roof", "lines": len(own_roof), "implied": False} and "seam_from" not in info["Roof"]
+    (row,) = [r for r in check_rules(params, out["info"]) if r["name"].endswith("Seam link")]
+    assert row["status"] == "pass" and "Wall: its seams follow those of Roof (%d of them" % len(own_roof) in row["message"]
+    # the roof follows the wall
+    _p, out = linked("Roof", "Wall")
+    roof = _lines(out, "Roof")
+    assert _lines(out, "Wall") == own_wall and roof == [x for x in own_wall if 1.0 < x < 5999.0]
+    # and mitred with the roof following the wall, the wall is left to its own setting-out
+    _p, out = linked("Roof", "Wall", abutment="mitre")
+    info = {i["elevation"]: i for i in out["info"]}
+    assert info["Roof"]["abut"]["kind"] == "mitre" and info["Roof"]["abut"]["follows"] == "Wall" and "seam_from" not in info["Wall"]
+    assert _lines(out, "Wall") == own_wall and info["Wall"]["abut_over"][0]["followed"] is True
+    assert set(_lines(out, "Roof")) <= set(own_wall)
+
+
+def test_a_link_that_cannot_be_made_is_said_and_the_face_is_set_out_on_its_own():
+    _l, _p, plain = _build(wall=dict(SEAM))
+    w, r = _pair()
+    side = _face("Side", [[0, -3000, 0], [0, 0, 0], [0, 0, 3000], [0, -3000, 3000]], (-1, 0, 0))
+    roof = dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[], verge="none", eaves="none", seam_from="Side")
+    params = {"elevations": [roof, dict(side, offset=0, chain="Chain 3", settings=dict(SEAM), valleys=[])], "trim": True, "splash": 0}
+    out = generate_preview(params)
+    info = out["info"][0]
+    assert info["seam_from"]["lines"] == 0 and "do not run the same way" in info["seam_from"]["why"]
+    assert _lines(out, "Roof") == _lines(plain, "Roof")
+    (row,) = [x for x in check_rules(params, out["info"]) if x["name"].endswith("Seam link")]
+    assert row["status"] == "warn" and "set out on its own" in row["message"]
+    # a face named that is not there, or itself: no link at all
+    out = generate_preview({"elevations": [dict(roof, seam_from="Nowhere")], "trim": True, "splash": 0})
+    assert "seam_from" not in out["info"][0]
+    out = generate_preview({"elevations": [dict(roof, seam_from="Roof")], "trim": True, "splash": 0})
+    assert "seam_from" not in out["info"][0]
+
+
+def test_followed_columns_keep_the_lines_given_and_carry_on_at_tray_centres():
+    from cladding_geometry import followed_columns
+    cols = followed_columns([], {"lines": [1000.0, 1500.0, 2000.0]}, 500.0, (0.0, 3300.0), (0.0, 0.0), ((0.0, 500.0), (0.0, 500.0)))
+    assert [a for a, _b in cols[1:]] == [500.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0] and cols[0] == (0.0, 500.0) and cols[-1] == (3000.0, 3500.0)
+    # an end the trays are set out to (a verge, a corner): the closing tray shares with the one beside it where both seams are its own
+    cols = followed_columns([], {"lines": [1000.0, 1500.0]}, 500.0, (0.0, 2550.0), (0.0, 40.0), ((0.0, 500.0), (150.0, 370.0)))
+    assert cols[-1][1] == 2590.0 and [round(b - a, 1) for a, b in cols[-2:]] == [295.0, 295.0]
+    assert followed_columns([], {"lines": [5000.0]}, 500.0, (0.0, 3000.0), (0.0, 0.0), ((0.0, 500.0), (0.0, 500.0))) is None

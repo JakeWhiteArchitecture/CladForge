@@ -30,10 +30,20 @@ standing seam too.
     stands on the wall's plywood at the foot of its trays. The roof's cavity vents up
     behind the upstand into the wall's.
 
+**Mitred** (no standard sheet: the designer's own detail): the wall above is standing seam
+in upright trays, and the whole build-up turns the corner as at a mitred chain corner. Every
+layer of both faces (the plywood deck and the battens as well as the trays and their seams)
+is cut on one plane, the mitre: through the line the two faces meet on and the corner the
+two claddings' outer faces meet in. They meet on it with no gap, the zinc to be welded. The
+seams have to line up, so the wall's seams follow the roof's (cladding_preview.link_seams)
+unless one of the two is already linked to the other. The top and bottom edge offsets do not
+apply there.
+
 Whether a chain's slopes get one is its "abutment" setting: "auto" (the default: where the
 top edge runs up to a picked wall, or to a wall of the model that stands above the roof),
 "g3" (the G3 flashing on every level top edge that is not a ridge), "below" (the turned-up
-trays wherever the wall above is standing seam) or "none". An abutment takes the place of
+trays wherever the wall above is standing seam), "mitre" (mitred, where the wall above is
+standing seam in upright trays) or "none". An abutment takes the place of
 a head verge on the same edge, and the chain's top edge offset does not apply under it.
 
 Not modelled: the ridge and sheet clips, the insect mesh, the fixing wedge and the mastic,
@@ -50,12 +60,13 @@ from cladding_constants import _parse, _prism, _rect, chain_params, frame_to_wor
 from cladding_edges import settings as edge_settings
 from cladding_eaves import _joins
 from cladding_head import HEAD_COVER, HEAD_MIN, _top_edges
-from cladding_primitives import buildup_depth
-from cladding_ridge import (RIDGE_GAP, RIDGE_HEM, RIDGE_LEG, RIDGE_REST, FILLER_EDGE, FILLER_GAP, FILLER_W, _fillers, _same_frame,
-                            _slot, _up_slope)
+from cladding_primitives import buildup_depth, clip_bounds_v
+from cladding_ridge import (RIDGE_GAP, RIDGE_HEM, RIDGE_LEG, RIDGE_REST, RIDGE_TOL, FILLER_EDGE, FILLER_GAP, FILLER_W, _fillers,
+                            _same_frame, _slot, _up_slope)
 from cladding_verge import ROOF_PITCH
 
-ABUT_TYPES = ("auto", "g3", "below", "none")
+ABUT_TYPES = ("auto", "g3", "below", "mitre", "none")
+ABUT_FOOT_TOL = 12.0  # mm – a wall part's foot this close over where the wall stops is at the abutment
 ABUT_UP = 60.0        # mm – G3: the flashing up the wall, above its corner (the detail's 60 mm)
 ABUT_CHASE = 15.0     # mm – its top turned into a wall that is not picked: the chase (scaled)
 ABUT_LAP = 25.0       # mm – a picked wall's layers stop this far below the top of the flashing (assumed)
@@ -76,7 +87,7 @@ ABUT_NEAR = 150.0     # mm – an abutment line of the wall's this close to the 
 
 def abut_setting(elev):
     said = (elev or {}).get("abutment")
-    return said if said in ("g3", "below", "none") else "auto"
+    return said if said in ("g3", "below", "mitre", "none") else "auto"
 
 
 def abuts_of(elev, p):
@@ -105,10 +116,11 @@ def abuts_of(elev, p):
         elif wall is not None:
             u0, u1 = max(u0, float(wall["u0"])), min(u1, float(wall["u1"]))
         seam = bool(over and over["seam"] > 0)                 # the wall above is standing seam
-        kind = "below" if seam and said in ("auto", "below") else "g3"
+        upright = bool(over and over["trays"])                 # in trays that run up it
+        kind = "mitre" if said == "mitre" and seam and upright else "below" if seam and said in ("auto", "below", "mitre") else "g3"
         out.append({"u0": u0, "u1": u1, "v": v, "kind": kind, "over": over["with"] if over else None,
                     "wall": (wall or {}).get("name") or None, "pitch": float(pitch), "asked": said, "seam_wall": seam,
-                    "cavity": (over["soffit"] if over else 0.0),
+                    "cavity": (over["soffit"] if over else 0.0), "depth": (over["depth"] if over else 0.0),
                     "base": float((raw.get(over["with"]) or {}).get("other_base") or 0.0) if over else 0.0})
     return out
 
@@ -151,6 +163,21 @@ def _section(h, face, seam_h, t):
     return out
 
 
+def _mitre(h, face):
+    """The mitre in section, from the line the roof's plane meets the wall's face on: x out
+    from the wall, y up. The plane runs from that line to the corner the two claddings'
+    outer faces meet in, the wall's h["depth"] out from it and the roof's *face* off the
+    roof. {"corner": that corner's height, "kw": how far the cut rises for each mm further
+    out from the wall (a wall part at depth s is cut at kw·s above the line), "kr": how far
+    it comes back down the slope for each mm further off the roof (a roof part at depth s
+    is cut kr·s down the slope from its top edge)}."""
+    s, c = math.sin(math.radians(h["pitch"])), math.cos(math.radians(h["pitch"]))
+    out = max(float(h["depth"]), 1.0)
+    corner = face / c - out * s / c
+    kw = corner / out
+    return {"corner": corner, "kw": kw, "kr": (c - kw * s) / (s + kw * c), "s": s, "c": c}
+
+
 def join_abuts(params):
     """Before anything is built, after cladding_eaves.join_eaves: tell the wall above each
     head-wall abutment how the roof below is finished against it, whatever chain that roof
@@ -173,10 +200,18 @@ def join_abuts(params):
             rec = next((v for v in (wall or {}).get("valleys") or [] if v.get("kind") == "abut" and v.get("with") == e.get("name")), None)
             if rec is None:
                 continue
-            sec = _section(h, buildup_depth(p), float(p["seam_h"]), float(p["seam_t"]))
-            rec.update(abut_kind=h["kind"], abut_stop=round(sec["stop"], 3), abut_t=float(p["seam_t"]))
+            if h["kind"] == "mitre":
+                mit = _mitre(h, buildup_depth(p))
+                rec.update(abut_kind="mitre", abut_stop=round(mit["corner"], 3), abut_kw=mit["kw"], abut_cut=0.0)
+                # the seams have to line up: the wall's follow the roof's, unless the two are linked already
+                if e.get("seam_from") != wall.get("name") and by.get(wall.get("seam_from")) in (None, wall):
+                    wall.update(seam_from=e.get("name"), seam_from_implied=True)
+                rec["abut_linked"] = e.get("seam_from") == wall.get("name") or wall.get("seam_from") == e.get("name")
+            else:
+                sec = _section(h, buildup_depth(p), float(p["seam_h"]), float(p["seam_t"]))
+                rec.update(abut_kind=h["kind"], abut_stop=round(sec["stop"], 3), abut_t=float(p["seam_t"]))
             _stand_over(wall, rec)
-            if h["kind"] == "below":
+            if h["kind"] in ("below", "mitre"):
                 for ab in wall.get("abutments") or []:
                     line = ab.get("line") or [[ab.get("u0"), ab.get("v")], [ab.get("u1"), ab.get("v")]]
                     try:
@@ -192,7 +227,7 @@ def _stand_over(wall, rec):
     offset every layer of it stops where join_abuts said: whether its outline stood on the
     line the two meet on or ran on down behind the roof, what is built is the wall above."""
     u0, u1 = sorted((float(rec["p1"][0]), float(rec["p2"][0])))
-    cut = _line_v(rec) + float(rec["abut_stop"]) - edge_settings(wall)["bottom"]
+    cut = _line_v(rec) + float(rec.get("abut_cut", rec["abut_stop"])) - edge_settings(wall)["bottom"]
     box = Polygon([(u0, -1e7), (u1, -1e7), (u1, cut), (u0, cut)])
     polys = []
     for pg in wall.get("polygons") or []:
@@ -218,10 +253,15 @@ def abut_ridges(p):
     cladding_ridge.ridge_of) in place of any head verge's, so its layers are brought to
     the wall as at a ridge. One a face: its longest."""
     for elev in p.get("elevations", []):
+        elev.pop("abut_mitre", None)
         hs = abuts_of(elev, p)
         if not hs:
             continue
         h = max(hs, key=lambda q: q["u1"] - q["u0"])
+        if h["kind"] == "mitre":                 # no half ridge: the trays run on to the corner
+            elev.pop("head_ridge", None)
+            elev["abut_mitre"] = h
+            continue
         elev["head_ridge"] = {"with": None, "v": h["v"] + _plane(h, float(p["seam_t"])), "u0": h["u0"], "u1": h["u1"],
                               "k": math.tan(math.radians(h["pitch"])), "master": True, "abut": h}
 
@@ -274,6 +314,52 @@ def _saddles(p, elev, r, meshes, face, name):
     return out, len(lines)
 
 
+def _cut_to(m, at, v_at, row_of):
+    """Move the chosen vertices of a part's outline to a cut that leans with depth: to
+    *v_at* (the cut at the part's mid-depth), with the shift per vertex ("vshift": v += c +
+    d·s) *row_of* gives from the vertex's old row, whose own lean (a fold, a ridge's cut)
+    it replaces."""
+    rows = (m.get("vshift") or [[]])[0] or [[0.0] * 4 for _ in m["profile"]]
+    out = []
+    for q, sh, on in zip(m["profile"], rows, at):
+        if on:
+            q[1] = round(v_at, 3)
+            out.append(row_of(sh))
+        else:
+            out.append(list(sh))
+    m["vshift"] = [out] + [[[0.0] * 4 for _ in hole] for hole in (m.get("holes") or [])]
+
+
+def _mitre_roof(meshes, p, elev, h, info):
+    """The roof's side of a mitred abutment: every layer runs up to the mitre and is cut on
+    it, the trays and their seams to the corner their outer faces make with the wall's."""
+    name, frame = elev.get("name"), elev["frame"]
+    face = float(info.get("total_depth") or 0.0)
+    mit = _mitre(h, face)
+    top = clip_bounds_v(elev)[1]
+    kr = mit["kr"]
+    trays, lines, layers = 0, set(), set()
+    for m in meshes:
+        if m.get("elevation") != name or not _same_frame(m["frame"], frame) or m.get("ridge_part"):
+            continue
+        at = [q[1] >= top - RIDGE_TOL and h["u0"] - 1.0 <= q[0] <= h["u1"] + 1.0 for q in m["profile"]]
+        if not any(at):
+            continue
+        mid = float(m["depth"]) + float(m["thickness"]) / 2.0
+        _cut_to(m, at, h["v"] - kr * mid, lambda sh: [sh[0], sh[1], kr * mid, -kr])
+        m["abut_mitre"] = True
+        layers.add(m.get("ifc_type"))
+        if m.get("ifc_type") == "plank":
+            trays += 1
+        elif m.get("ifc_type") == "seam" and m.get("seam_line") is not None:
+            lines.add(round(float(m["seam_line"]), 1))
+    info["abut"] = {"kind": "mitre", "length": round(h["u1"] - h["u0"], 1), "over": h["over"], "wall": None, "asked": h["asked"],
+                    "u0": round(h["u0"], 1), "u1": round(h["u1"], 1), "v": round(h["v"], 1), "trays": trays, "seams": len(lines),
+                    "angle": round(90.0 + h["pitch"], 1), "stop": round(mit["corner"], 1), "seam_wall": True,
+                    "layers": sorted(k for k in layers if k),
+                    "follows": (elev.get("seam_lines") or {}).get("from") if (elev.get("seam_lines") or {}).get("lines") else None}
+
+
 def abut_parts(meshes, p, infos):
     """The roof's side of each head-wall abutment: the G3 flashing and its decompression
     strips, or the trays' turned-up ends, the plywood behind them and the saddle pieces.
@@ -283,6 +369,9 @@ def abut_parts(meshes, p, infos):
     for elev in p.get("elevations", []):
         r = elev.get("head_ridge")
         info = info_by.get(elev.get("name"))
+        if info is not None and elev.get("abut_mitre"):
+            _mitre_roof(meshes, p, elev, elev["abut_mitre"], info)
+            continue
         if not r or "abut" not in r or info is None:
             continue
         h, name, frame = r["abut"], elev.get("name"), elev["frame"]
@@ -361,6 +450,9 @@ def abut_over(meshes, p, infos):
             if rec is None:
                 continue
             stop = j["v"] + float(rec["abut_stop"])
+            if rec["abut_kind"] == "mitre":
+                info.setdefault("abut_over", []).append(_mitre_wall(mine, j, rec, stop, float(info.get("total_depth") or 0.0)))
+                continue
             for m in mine:
                 pts = m["profile"]
                 at = [j["u0"] - 1.0 <= q[0] <= j["u1"] + 1.0 and j["v"] - 60.0 <= q[1] < stop - 0.01 for q in pts]
@@ -380,6 +472,26 @@ def abut_over(meshes, p, infos):
                     over["edge"] = ABUT_EDGE
             info.setdefault("abut_over", []).append(over)
     return [m for m in meshes if id(m) not in gone] + extra
+
+
+def _mitre_wall(mine, j, rec, stop, face):
+    """The wall's side of a mitred abutment: every layer comes down to the mitre and is cut
+    on it, its trays and their seams to the corner."""
+    kw = float(rec["abut_kw"])
+    trays, lines = 0, set()
+    for m in mine:
+        at = [j["u0"] - 1.0 <= q[0] <= j["u1"] + 1.0 and j["v"] - 80.0 <= q[1] <= j["v"] + 30.0 for q in m["profile"]]
+        if not any(at):
+            continue
+        mid = float(m["depth"]) + float(m["thickness"]) / 2.0
+        _cut_to(m, at, j["v"] + kw * mid, lambda sh: [sh[0], sh[1], -kw * mid, kw])
+        m["abut_mitre"] = True
+        if m.get("ifc_type") == "plank":
+            trays += 1
+        elif m.get("ifc_type") == "seam" and m.get("seam_line") is not None:
+            lines.add(round(float(m["seam_line"]), 1))
+    return {"with": j["with"], "kind": "mitre", "length": round(j["length"], 1), "stop": round(float(rec["abut_stop"]), 1),
+            "trays": trays, "seams": len(lines), "followed": bool(rec.get("abut_linked"))}
 
 
 def _edge_flashing(frame, j, stop, deck, name):

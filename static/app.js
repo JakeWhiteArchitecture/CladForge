@@ -9,7 +9,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // Standing seam ends, per chain too: folded at 45° or not at all, and if so the top ends (a
 // seam running out upward: the head, under a sill) and bottom ends (the base, over a head) each
 // folded or flat.
-const ABUTS = ['auto', 'g3', 'below', 'none'];   // a roof run up to a wall that stands on above it: by what that wall is clad in, the G3 flashing, the trays turned up under its cladding, or nothing
+const ABUTS = ['auto', 'g3', 'below', 'mitre', 'none'];   // a roof run up to a wall that stands on above it: by what that wall is clad in, the G3 flashing, the trays turned up under its cladding, or nothing
 const HEADS = ['auto', 'g3', 'none'];       // a monopitch's head verge: over a picked wall, on every level top edge, or not at all
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
                         fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', eaves: 'on', head: 'auto', abutment: 'auto', capEnds: 'edge' };
@@ -44,12 +44,54 @@ function newElevation(chain) {
     return e;
 }
 
+// A face's standing seams can follow another face's (e.seamFrom): a wall over a roof, a roof
+// under a wall. Set from the Edges panel's list, or with the pipette: press it, then click
+// the face to take the seams from.
+function seamSources(e) {
+    return state.elevations.filter(m => m !== e && m.result && m.result.ok && m.chain.built);
+}
+function linkSeams(e, from) {
+    if (!e) return;
+    e.seamFrom = from && from !== e ? from : null;
+    if (e.seamFrom && e.seamFrom.seamFrom === e) e.seamFrom.seamFrom = null;      // one follows the other, not each the other
+    renderElevationList();
+    syncEdgeFields();
+    setStatus(e.seamFrom ? `${e.name}: its seams follow ${e.seamFrom.name}'s` : `${e.name}: its seams are set out on their own`, 'ready');
+    updatePreview();
+}
+function setSeamFrom(name) {
+    linkSeams(state.elevations[state.active], state.elevations.find(m => m.name === name) || null);
+}
+function startPipette() {
+    const e = state.elevations[state.active];
+    if (state.pipette || !e) { endPipette(); return; }
+    state.pipette = e;
+    document.getElementById('seam-pipette').classList.add('active');
+    setStatus(`Pipette: click the clad face whose seams ${e.name} should follow · Esc to cancel`, 'busy');
+}
+function endPipette() {
+    state.pipette = null;
+    document.getElementById('seam-pipette').classList.remove('active');
+}
+function pipetteClick(event) {
+    const target = state.pipette, hit = pickAt(event);
+    const owner = hit && state.elevations.find(m => m.result && m.result.ok && samePlane(hit, m));
+    if (!owner || owner === target || !state.elevations.includes(target)) {
+        setStatus(`Pipette: click a face that is already clad, other than ${target.name} · Esc to cancel`, 'busy');
+        return;
+    }
+    endPipette();
+    linkSeams(target, owner);
+}
+
 function deleteElevation() {
     if (state.active < 0) return;
     closeEditWidget();
     const e = state.elevations.splice(state.active, 1)[0];
     e.highlights.forEach(h => highlightGroup.remove(h));
     for (const m of state.elevations) if (m.valleys) m.valleys = m.valleys.filter(v => v.partner !== e);
+    for (const m of state.elevations) if (m.seamFrom === e) m.seamFrom = null;
+    if (state.pipette === e) endPipette();
     if (e.chain.datumFrom === e) e.chain.datumFrom = null;     // back to the lowest start
     e.chain.members = e.chain.members.filter(m => m !== e);
     if (!e.chain.members.length) state.chains = state.chains.filter(c => c !== e.chain);
@@ -91,6 +133,10 @@ function syncEdgeFields() {
     document.getElementById('edge-eaves').value = ed.eaves === 'none' ? 'none' : 'on';
     document.getElementById('edge-head').value = HEADS.includes(ed.head) ? ed.head : 'auto';
     document.getElementById('edge-abutment').value = ABUTS.includes(ed.abutment) ? ed.abutment : 'auto';
+    const from = document.getElementById('edge-seamFrom');
+    from.innerHTML = '<option value="">Its own setting-out</option>'
+        + (e ? seamSources(e) : []).map(m => `<option value="${m.name}">${m.name}${m.chain.members.length > 1 ? ' (' + m.chain.name + ')' : ''}</option>`).join('');
+    from.value = e && e.seamFrom && seamSources(e).includes(e.seamFrom) ? e.seamFrom.name : '';
     document.getElementById('edge-capEnds').value = ed.capEnds === 'square' ? 'square' : 'edge';
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
     document.getElementById('edge-chain').textContent = e ? 'for ' + e.chain.name : 'for the active chain';
@@ -189,6 +235,7 @@ function elevationCard(e, i) {
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + ROOF_JOINS.map(kind => { const with_ = ok ? valleyRecords(e).filter(v => v.kind === kind).map(v => v.with.replace('Elevation ', '')) : [];
                                            return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind === 'eaves' ? 'eaves (no overhang)' : kind === 'head' ? 'head verge' : kind === 'abut' ? 'head-wall abutment' : kind} with ${with_.join(', ')}` : ''; }).join('')
+        + (ok && seamFollows(e) ? ` · seams follow ${seamFollows(e).replace('Elevation ', '')}` : '')
         + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
@@ -440,6 +487,14 @@ function rakeDetail(master, other) {
     const a = of(master), b = of(other);
     const alike = ['cladding_type', 'plank_profile', 'panel_t', 'plank_t'].every(k => String(a[k]) === String(b[k]));
     return { detail: [a.corner, b.corner].includes('profile') ? 'profile' : (a.corner || 'mitre'), match: alike };
+}
+
+// The face this one's seams follow, by name: as set (the list, the pipette), or as the last
+// build linked them by itself (a mitred wall abutment).
+function seamFollows(e) {
+    if (e.seamFrom && state.elevations.includes(e.seamFrom)) return e.seamFrom.name;
+    const info = ((window._lastPreview || {}).info || []).find(i => i.elevation === e.name);
+    return info && info.seam_from && info.seam_from.lines ? info.seam_from.name : null;
 }
 
 function valleyRecords(e) {
@@ -737,6 +792,7 @@ function onShowAll() {
 function onViewportClick(event) {
     if (event.target !== renderer.domElement || !allMeshes.length || state._dragged) return;
     if (inCuttingRun()) return;                // the run is a view: nothing is picked or edited
+    if (state.pipette) { pipetteClick(event); return; }
     const dim = pickDim(event);
     if (dim && !state.levels) { openCourseDialog(dim); return; }
     // While the level picker is open every click is a height, wherever it lands.
@@ -885,7 +941,7 @@ _json.dumps(_ex(_pl))`);
                 + (met('rake') ? ` · a raking corner with ${met('rake')}: mitred, or under a corner profile where the job's corner is Profile` : '')
                 + (met('eaves') ? ` · an eaves with ${met('eaves')}, no overhang: the roof runs on over the wall's cladding with a drip, and the wall stops under it` : '')
                 + (met('head') ? ` · a head verge with ${met('head')}: the monopitch's top runs on over the wall, under a G3 cap that turns down over the wall's cladding` : '')
-                + (met('abut') ? ` · a head-wall abutment with ${met('abut')}: the roof runs up to the wall, under a G3 flashing turned up it, or (a standing seam wall) its trays turned up behind the wall's cladding` : '');
+                + (met('abut') ? ` · a head-wall abutment with ${met('abut')}: the roof runs up to the wall, under a G3 flashing turned up it, or (a standing seam wall) its trays turned up behind the wall's cladding, or mitred to it where the chain says so` : '');
             const near = heals.length ? ` · nearly meets ${heals.map(h => (h.a === e ? h.b : h.a).name).join(' and ')}: tick the red strip to heal the junction` : '';
             setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley + near, 'ready');
             // The view stays where it was put: picking a face must not move the camera.
@@ -1042,6 +1098,8 @@ function elevationRecords() {
                                                    panel_joints: e.panelJoints || null,
                                                    post_states: e.postStates || null, stagger_joints: e.staggerJoints || null,
                                                    ridge: ridgeRecord(e), valleys: valleyRecords(e),
+                                                   seam_from: e.seamFrom && state.elevations.includes(e.seamFrom) && e.seamFrom.result && e.seamFrom.result.ok
+                                                       ? e.seamFrom.name : null,
                                                    settings: chain.settings || null,
                                                    course_datum_from: chain.datumFrom ? chain.datumFrom.name : null,
                                                    edge_top: chain.edges.top, edge_side: chain.edges.side,
@@ -1333,6 +1391,7 @@ function snapshotState() {
         clipHi: e.clipHi === undefined ? null : e.clipHi, cover: e.cover || null,
         panelRows: e.panelRows || null, panelJoints: e.panelJoints || null, postStates: e.postStates || null, staggerJoints: e.staggerJoints || null,
         openingDetails: e.openingDetails || {}, ridge: ridgeRecord(e), valleys: valleyRecords(e),
+        seamFrom: e.seamFrom && state.elevations.includes(e.seamFrom) ? e.seamFrom.name : null,
         manual: e.manual || [], disabled: e.disabled || {},
         // the faces it was picked from, for reference: the surface below is what loads
         picks: e.picks.length ? e.picks.map(q => ({ element: (q.mesh && q.mesh.userData.name) || null, faces: q.faces.length,
@@ -1541,6 +1600,7 @@ function restoreState(st, add) {
     for (const c of st.chains || []) for (const m of c.members || []) {
         const e = byName[m.name];
         if (e) e.valleys = (m.valleys || []).filter(v => byName[v.with]).map(v => Object.assign({}, v, { partner: byName[v.with] }));
+        if (e) e.seamFrom = (m.seamFrom && byName[m.seamFrom] !== e && byName[m.seamFrom]) || null;
     }
     state.seq = Math.max(add ? state.seq : 0, st.seq || 0, state.chains.length);
     // A state saved before chains had their own settings: each chain takes the job's.
@@ -2092,6 +2152,7 @@ function initApp() {
             return;
         }
         if (e.key !== 'Escape' || document.getElementById('chain-wizard').classList.contains('open')) return;
+        if (state.pipette) { endPipette(); setStatus('Pipette cancelled', 'ready'); return; }
         if (document.getElementById('course-dialog').classList.contains('open')) { closeCourseDialog(); return; }
         if (state.levels) { dismissLevels(); return; }
         // Escape unwinds one thing at a time: the edit widget first, then the flat view.

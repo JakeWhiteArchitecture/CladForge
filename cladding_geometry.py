@@ -1026,7 +1026,34 @@ def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=No
     return [(a, b) for a, b in zip(stops, stops[1:]) if b - a > 1.0]
 
 
-def _tray_seams(p, meshes, frame, name, face, laid, holes):
+def followed_columns(cols, link, cover, ends, reach, limits):
+    """The tray columns of a face whose seams follow another face's (elev["seam_lines"],
+    set by cladding_preview.link_seams: {"lines": that face's seam lines in this face's u,
+    "span": where its trays start and end}). Its lines are kept where they fall on this
+    face; beyond them the seams carry on at *cover* centres out to this face's ends, where
+    a closing tray too narrow for its end shares its width with the one beside it (only
+    where both its seams are this face's own). None where none of the lines falls on it."""
+    lo, hi = ends
+    left = lo - reach[0] if reach[0] else lo
+    right = hi + reach[1] if reach[1] else hi
+    given = sorted({round(float(u), 2) for u in link.get("lines") or [] if left + 1.0 < float(u) < right - 1.0})
+    if not given:
+        return None
+    inner = list(given)
+    while inner[0] - cover > left + 1e-6:
+        inner.insert(0, inner[0] - cover)
+    while inner[-1] + cover < right - 1e-6:
+        inner.append(inner[-1] + cover)
+    own = lambda u: u not in given                                         # noqa: E731
+    if reach[0] and inner[0] - left < limits[0][0] - 1e-6 and own(inner[0]) and len(inner) > 1:
+        inner[0] = (left + inner[1]) / 2.0
+    if reach[1] and right - inner[-1] < limits[1][0] - 1e-6 and own(inner[-1]) and len(inner) > 1:
+        inner[-1] = (right + inner[-2]) / 2.0
+    stops = [left if reach[0] else inner[0] - cover] + inner + [right if reach[1] else inner[-1] + cover]
+    return [(a, b) for a, b in zip(stops, stops[1:]) if b - a > 1.0]
+
+
+def _tray_seams(p, meshes, frame, name, face, laid, holes, mirror=False):
     """The seams between vertical tray columns, *laid* left to right as (u, runs, trays),
     each tray (s, e, label). A seam runs where the trays either side of its line meet. On a
     reveal corner (a jamb, set out from the openings) it carries straight on up past the
@@ -1043,7 +1070,7 @@ def _tray_seams(p, meshes, frame, name, face, laid, holes):
         if not jamb:
             for s, e, label in trays:
                 for a2, b2 in _shared(s, e, left):
-                    _seam(p, meshes, frame, label, name, face, True, u, a2, b2)
+                    _seam(p, meshes, frame, label, name, face, True, u, a2, b2, mirror=mirror)
             continue
         line, mirror = u + jamb * off, jamb < 0
         # trimmed in height only, by the face beside it: its reveal side stands in the opening
@@ -1077,6 +1104,17 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
     jambs = [u for o in openings(elev) for u in (o[0], o[1])] if p["set_out_from_openings"] else []
     reach, limits = _tray_reach(p, elev, depth)
     cols = seam_columns(W, cover, offset, jambs, clip_bounds(elev), reach, limits)
+    link = elev.get("seam_lines") or {}
+    follow = followed_columns(cols, link, cover, clip_bounds(elev), reach, limits) if link.get("lines") else None
+    if follow:                                   # its seams are another face's, carried on to it
+        cols, jambs = follow, []
+        info["seam_from"] = {"name": link.get("from"), "lines": len([u for u in link["lines"] if cols[0][0] < u < cols[-1][1]]),
+                             "implied": bool(link.get("implied"))}
+    elif link:
+        info["seam_from"] = {"name": link.get("from"), "lines": 0, "implied": bool(link.get("implied")),
+                             "why": link.get("why") or "none of its seams fall on this face"}
+    info["seam_lines"] = [round(c[0], 3) for c in cols[1:]]
+    info["seam_span"] = [round(cols[0][0], 3), round(cols[-1][1], 3)] if cols else []
     from_openings = bool(jambs) and len(cols) > 0 and (abs(cols[0][0]) < 1e-6 or reach[0]) and (abs(cols[-1][1] - W) < 1e-6 or reach[1])
     beside, laid = [], []        # the joints of the column to the left; every column's runs and trays
     for j, (u, u1) in enumerate(cols):
@@ -1094,7 +1132,8 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
                 trays.append((s, e, label))
         beside = mine
         laid.append((u, runs, trays))
-    _tray_seams(p, meshes, frame, name, depth + p["plank_t"], laid, openings(elev) if from_openings else [])
+    _tray_seams(p, meshes, frame, name, depth + p["plank_t"], laid, openings(elev) if from_openings else [],
+                mirror=bool(follow and link.get("mirror")))
     left_cut = cols[0][1] if cols and cols[0][0] < 0 else 0.0
     right_cut = (W - cols[-1][0]) if cols and cols[-1][1] > W else 0.0
     info.update(n_courses=len(cols), cover=cover, batten_centres=p["batten_centres"],

@@ -8,7 +8,7 @@ sharing settings is built on its own, so one chain's choices never change anothe
 
 import json
 
-from cladding_constants import _parse, chain_params, v_to_z
+from cladding_constants import _parse, chain_params, frame_to_world, v_to_z
 from cladding_profiles import profile_planks
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
@@ -90,12 +90,48 @@ def check_rules(params, infos=None):
     return out
 
 
+def link_seams(params):
+    """Before the build proper: carry each linked face's seam lines over from the face it
+    follows ("seam_from": that face's name, set with the pipette, or implied by a mitred
+    head-wall abutment), as "seam_lines" in its own u. The lines are read off a plain build
+    of the face followed, so they are whatever its own setting-out gives: its openings, its
+    chain's offset, its corners and verges. Only between faces whose seams run the same
+    way (their u axes parallel). A face followed may itself follow another: up to three deep."""
+    elevs = params.get("elevations") or []
+    by = {e.get("name"): e for e in elevs}
+    for e in elevs:
+        e.pop("seam_lines", None)
+    linked = [e for e in elevs if by.get(e.get("seam_from")) not in (None, e)]
+    for _ in range(3 if linked else 0):
+        infos = {}
+        for sub, _elevs in setting_groups(params):
+            for i in _build_all(_parse(sub))[2]:
+                infos[i["elevation"]] = i
+        changed = False
+        for e in linked:
+            src = by[e["seam_from"]]
+            got = infos.get(src.get("name")) or {}
+            Us, Uf, o = src["frame"]["u"], e["frame"]["u"], e["frame"]["origin"]
+            way = sum(a * b for a, b in zip(Us, Uf))
+            if abs(way) < 0.99 or not got.get("seam_lines"):
+                lines = {"from": src.get("name"), "lines": [], "why": "its seams do not run the same way" if abs(way) < 0.99 else "it has no seams"}
+            else:
+                to = lambda u: round(sum((w - c) * a for w, c, a in zip(frame_to_world(src["frame"], u, 0.0, 0.0), o, Uf)), 2)   # noqa: E731
+                lines = {"from": src.get("name"), "lines": sorted(to(u) for u in got["seam_lines"]),
+                         "span": sorted(to(u) for u in got["seam_span"]), "mirror": way < 0, "implied": bool(e.get("seam_from_implied"))}
+            if lines != e.get("seam_lines"):
+                e["seam_lines"], changed = lines, True
+        if not changed:
+            break
+
+
 def build_all_groups(params):
     """(meshes, dims, infos) for every face, each group with its chain's settings, untrimmed:
     the exporters' quick source of dimensions and setting-out info."""
     meshes, dims, infos = [], [], []
     join_eaves(params)
     join_abuts(params)
+    link_seams(params)
     for sub, _elevs in setting_groups(params):
         m, d, i = _build_all(_parse(sub))
         meshes, dims, infos = meshes + m, dims + d, infos + i
@@ -106,6 +142,7 @@ def generate_preview(params):
     meshes, dims, infos = [], [], []
     join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
     join_abuts(params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
+    link_seams(params)       # faces whose seams follow another's are given its seam lines
     for sub, _elevs in setting_groups(params):
         m, d, i = _preview_one(sub)
         meshes, dims, infos = meshes + m, dims + d, infos + i

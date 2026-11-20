@@ -1859,7 +1859,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         const roof = info('Elevation A').abut || {}, wall = (info('Elevation B').abut_over || [])[0] || {};
         return { records: state.elevations.map(e => valleyRecords(e).map(v => [v.kind, v.with, v.roof].join())).join(' / '),
                  walls: (state.elevations[0].result.walls_above || []).map(w => w.name).join(),
-                 roof: [roof.kind, roof.over, roof.wall, roof.chase].join(), wall: [wall.kind, wall.with, wall.edge].join(),
+                 roof: [roof.kind, roof.over, roof.wall, roof.chase].join(), wall: [wall.kind, wall.with, wall.edge].join(), stop: wall.stop,
                  flashings: g.filter(m => /Abutment Flashing/.test(m.name)).length, fillers: g.filter(m => m.ifc_type === 'ridge_filler').length,
                  upstands: g.filter(m => /Abutment Upstand/.test(m.name)).length, saddles: new Set(g.filter(m => m.abut_saddle).map(m => m.abut_saddle)).size,
                  edges: g.filter(m => m.abut_edge).length, backing: g.filter(m => /Abutment Backing/.test(m.name)).length,
@@ -1881,7 +1881,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (below.records !== 'abut,Elevation B,true / abut,Elevation A,false' || !/head-wall abutment with Elevation A/.test(abutStatus)
         || below.roof !== 'below,Elevation B,,' || below.wall !== 'below,Elevation A,40' || below.flashings || below.fillers
         || below.upstands < 6 || below.saddles !== below.upstands - 1 || below.edges !== 1 || below.backing !== 1
-        || below.low < 2750 || below.low > 2850 || below.check !== 2)
+        || !(below.stop > 60 && below.stop < 300) || Math.abs(below.low - 2700 - below.stop) > 1 || below.check !== 2)
         throw new Error('the roof\'s trays were not turned up under the standing seam wall: ' + JSON.stringify(below));
     await page.evaluate(() => setActive(0));
     await page.selectOption('#edge-abutment', 'g3');
@@ -1889,6 +1889,42 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     const forced = await abutment();
     if (forced.roof !== 'g3,Elevation B,,false' || forced.flashings !== 1 || forced.upstands || forced.edges || forced.wall !== 'g3,Elevation A,')
         throw new Error('the abutment did not follow its chain setting: ' + JSON.stringify(forced));
+    // Mitred: the trays and seams of both cut on the bisecting plane, and the wall's seams follow the roof's.
+    await page.selectOption('#edge-abutment', 'mitre');
+    await settle();
+    const mitreState = () => page.evaluate(() => {
+        const info = name => window._lastPreview.info.find(i => i.elevation === name) || {};
+        const g = window._lastPreview.geometry, a = info('Elevation A'), b = info('Elevation B');
+        const world = (name, info_) => { const m = g.find(q => q.elevation === name && q.ifc_type === 'plank');
+            return (info_.seam_lines || []).map(u => Math.round(m.frame.origin[0] + m.frame.u[0] * u)).sort((x, y) => x - y).join(); };
+        return { roof: (a.abut || {}).kind, wall: ((b.abut_over || [])[0] || {}).kind, cut: g.filter(m => m.abut_mitre).length,
+                 follows: [(a.seam_from || {}).name || '', (b.seam_from || {}).name || ''].join('/'),
+                 same: world('Elevation A', a) === world('Elevation B', b), parts: g.filter(m => /Abutment/.test(m.name)).length,
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => /seams follow/.test(x.textContent)).join(),
+                 seamFrom: state.elevations.map(e => e.seamFrom ? e.seamFrom.name : '').join('/'),
+                 list: document.getElementById('edge-seamFrom').value, pipette: !!state.pipette };
+    });
+    const abutMitred = await mitreState();
+    console.log('abutment, mitred:', JSON.stringify(abutMitred));
+    if (abutMitred.roof !== 'mitre' || abutMitred.wall !== 'mitre' || abutMitred.cut < 20 || abutMitred.parts || abutMitred.follows !== '/Elevation A' || !abutMitred.same
+        || abutMitred.cards !== 'false,true')
+        throw new Error('the roof and the wall were not mitred with their seams lined up: ' + JSON.stringify(abutMitred));
+    // The pipette: on the roof, press it and click the wall: now the roof follows the wall instead.
+    await page.evaluate(() => { setActive(0); startPipette(); });
+    if (!(await page.evaluate(() => state.pipette === state.elevations[0] && document.getElementById('seam-pipette').classList.contains('active'))))
+        throw new Error('the pipette did not start');
+    await lookAt('Wall', [0.05, -1, 0.1]);
+    await settle();
+    const piped = await mitreState();
+    console.log('pipette:', JSON.stringify(piped));
+    if (piped.seamFrom !== 'Elevation B/' || piped.pipette || piped.list !== 'Elevation B' || piped.follows !== 'Elevation B/' || !piped.same || piped.cards !== 'true,false')
+        throw new Error('the pipette did not link the roof\'s seams to the wall\'s: ' + JSON.stringify(piped));
+    await page.evaluate(() => startPipette());
+    await page.keyboard.press('Escape');
+    if (await page.evaluate(() => !!state.pipette)) throw new Error('Esc did not cancel the pipette');
+    await page.selectOption('#edge-seamFrom', '');
+    await settle();
+    if ((await mitreState()).follows !== '/Elevation A') throw new Error('clearing the link did not hand it back to the abutment');
     await page.selectOption('#edge-abutment', 'none');
     await settle();
     const noAbut = await abutment();
