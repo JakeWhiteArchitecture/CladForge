@@ -522,6 +522,14 @@ def meshes_to_ifc(meshes, params, infos=None):
                 label = "Standing seam tray"
             elif mesh.get("eaves_support"):
                 label = "Eaves support profile"
+            elif mesh.get("abut_info") and mesh.get("ifc_type") == "ridge_cap":
+                label = "Head-wall abutment flashing"
+            elif mesh.get("abut_saddle"):
+                label = "Saddle piece"
+            elif mesh.get("abut_edge"):
+                label = "Edge flashing"
+            elif mesh.get("ifc_type") == "deck" and "Abutment Backing" in (mesh.get("name") or ""):
+                label = "Discontinuous plywood"
             elif mesh.get("ifc_type") == "plank" and pe.get("section"):
                 label = "Cladding plank (%s)" % pe["section"]["name"]
             if mesh.get("ifc_type") == "panel" and pe["panels_as_walls"]:

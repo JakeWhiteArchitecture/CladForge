@@ -9,9 +9,10 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // Standing seam ends, per chain too: folded at 45° or not at all, and if so the top ends (a
 // seam running out upward: the head, under a sill) and bottom ends (the base, over a head) each
 // folded or flat.
+const ABUTS = ['auto', 'g3', 'below', 'none'];   // a roof run up to a wall that stands on above it: by what that wall is clad in, the G3 flashing, the trays turned up under its cladding, or nothing
 const HEADS = ['auto', 'g3', 'none'];       // a monopitch's head verge: over a picked wall, on every level top edge, or not at all
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', eaves: 'on', head: 'auto', capEnds: 'edge' };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', eaves: 'on', head: 'auto', abutment: 'auto', capEnds: 'edge' };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -89,6 +90,7 @@ function syncEdgeFields() {
     document.getElementById('edge-verge').value = VERGES.includes(ed.verge) ? ed.verge : 'both';
     document.getElementById('edge-eaves').value = ed.eaves === 'none' ? 'none' : 'on';
     document.getElementById('edge-head').value = HEADS.includes(ed.head) ? ed.head : 'auto';
+    document.getElementById('edge-abutment').value = ABUTS.includes(ed.abutment) ? ed.abutment : 'auto';
     document.getElementById('edge-capEnds').value = ed.capEnds === 'square' ? 'square' : 'edge';
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
     document.getElementById('edge-chain').textContent = e ? 'for ' + e.chain.name : 'for the active chain';
@@ -102,6 +104,7 @@ function setEdge(e, key, value) {
     else if (key === 'verge') e.chain.edges.verge = VERGES.includes(value) ? value : 'both';
     else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
     else if (key === 'head') e.chain.edges.head = HEADS.includes(value) ? value : 'auto';
+    else if (key === 'abutment') e.chain.edges.abutment = ABUTS.includes(value) ? value : 'auto';
     else if (key === 'capEnds') e.chain.edges.capEnds = value === 'square' ? 'square' : 'edge';
     else {
         const v = parseFloat(value);
@@ -185,7 +188,7 @@ function elevationCard(e, i) {
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + ROOF_JOINS.map(kind => { const with_ = ok ? valleyRecords(e).filter(v => v.kind === kind).map(v => v.with.replace('Elevation ', '')) : [];
-                                           return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind === 'eaves' ? 'eaves (no overhang)' : kind === 'head' ? 'head verge' : kind} with ${with_.join(', ')}` : ''; }).join('')
+                                           return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind === 'eaves' ? 'eaves (no overhang)' : kind === 'head' ? 'head verge' : kind === 'abut' ? 'head-wall abutment' : kind} with ${with_.join(', ')}` : ''; }).join('')
         + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
@@ -397,7 +400,7 @@ function ridgeRecord(e) {
 // face that was there first masters the valley: it carries the gutter.
 const isRoofSlope = m => !!(m.result && m.result.ok && m.result.pitch !== undefined && m.result.pitch < 89 && !m.result.faces_down);
 const isPitched = m => !!(m.result && m.result.ok && m.result.pitch !== undefined && (m.result.pitch < 89 || m.result.faces_down));
-const ROOF_JOINS = ['valley', 'hip', 'rake', 'eaves', 'head'];
+const ROOF_JOINS = ['valley', 'hip', 'rake', 'eaves', 'head', 'abut'];
 async function linkValleys(e) {
     for (const m of state.elevations) if (m.valleys) m.valleys = m.valleys.filter(v => v.partner !== e);
     e.valleys = [];
@@ -881,7 +884,8 @@ _json.dumps(_ex(_pl))`);
                 + (met('hip') ? ` · a hip with ${met('hip')}: the cladding is cut to it, under a hip cap` : '')
                 + (met('rake') ? ` · a raking corner with ${met('rake')}: mitred, or under a corner profile where the job's corner is Profile` : '')
                 + (met('eaves') ? ` · an eaves with ${met('eaves')}, no overhang: the roof runs on over the wall's cladding with a drip, and the wall stops under it` : '')
-                + (met('head') ? ` · a head verge with ${met('head')}: the monopitch's top runs on over the wall, under a G3 cap that turns down over the wall's cladding` : '');
+                + (met('head') ? ` · a head verge with ${met('head')}: the monopitch's top runs on over the wall, under a G3 cap that turns down over the wall's cladding` : '')
+                + (met('abut') ? ` · a head-wall abutment with ${met('abut')}: the roof runs up to the wall, under a G3 flashing turned up it, or (a standing seam wall) its trays turned up behind the wall's cladding` : '');
             const near = heals.length ? ` · nearly meets ${heals.map(h => (h.a === e ? h.b : h.a).name).join(' and ')}: tick the red strip to heal the junction` : '';
             setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley + near, 'ready');
             // The view stays where it was put: picking a face must not move the camera.
@@ -1049,6 +1053,7 @@ function elevationRecords() {
                                                    verge: VERGES.includes(chain.edges.verge) ? chain.edges.verge : 'both',
                                                    eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
                                                    head: HEADS.includes(chain.edges.head) ? chain.edges.head : 'auto',
+                                                   abutment: ABUTS.includes(chain.edges.abutment) ? chain.edges.abutment : 'auto',
                                                    cap_ends: chain.edges.capEnds === 'square' ? 'square' : 'edge',
                                                    seam_top: chain.edges.seamTop === 'flat' ? 'flat' : 'folded',
                                                    seam_bottom: chain.edges.seamBottom === 'flat' ? 'flat' : 'folded',
@@ -2020,7 +2025,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_head', 'cladding_rake', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_head', 'cladding_abut', 'cladding_rake', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

@@ -7,6 +7,7 @@ from cladding_constants import (_parse, PLANK_SPAN_TABLE, DECK_SPAN, MIN_CAVITY,
 from cladding_primitives import ROW_MIN
 from cladding_corners import PANEL_SIZES as PROFILE_SIZES, TRIM_SIZE, TRIM_LEG, FLANGE_P
 from cladding_verge import VERGE_SEAM
+from cladding_abut import ABUT_COVER, ABUT_LAP, ABUT_VENT
 from cladding_valley import VALLEY_MIN_PITCH
 
 MIN_CLOSING_CUT = 100.0   # mm – narrower closing pieces are hard to fix and look wrong
@@ -235,6 +236,41 @@ def check_rules(params, infos=None):
                     hv["gap"] / 2.0, hv["width"], hv["drop"], "over the top of that wall's cladding" if hv["over"] else "over the roof's edge",
                     "" if hv["standard"] else ". That is wider than the G3 piece is made (185 mm): the wall's build-up is deep, and a purpose-made "
                     "head flashing is needed"), hv["length"])
+        ab = i.get("abut")
+        if ab and ab["kind"] == "g3":
+            where = ("%s, whose layers stop %.0f mm above the line the two meet on, %.0f mm under the flashing's top" % (ab["over"], ab["stop"], ABUT_LAP)
+                     if ab["over"] else "a wall that is not picked%s: its top is turned into a chase, wedged and sealed (not drawn)"
+                     % (" (%s)" % ab["wall"] if ab.get("wall") else ""))
+            add("Wall abutment", "pass" if ab["standard"] else "warn",
+                "%s: a G3 head-wall abutment %.2f m long against %s. The trays stop %.0f mm short of the wall and are turned up, the flashing lies "
+                "%.0f mm down the slope over the seams and turns %.0f mm up the wall%s%s" % (
+                    i["elevation"], ab["length"] / 1000.0, where, ab["gap"] / 2.0, ab["width"], ab["up"],
+                    "" if ab["standard"] else ". That is wider than the G3 piece is made (185 mm): a purpose-made flashing is needed",
+                    ". The wall above is standing seam but this chain asks for the G3 flashing: the trays turned up under its cladding is the "
+                    "detail drawn for that (Edges, Wall abutment)" if ab["asked"] == "g3" and ab["over"] and ab.get("seam_wall") else ""), ab["length"])
+        elif ab:
+            add("Wall abutment", "pass" if ab["room"] >= ABUT_VENT else "warn",
+                "%s: a head-wall abutment below cladding %.2f m long, under %s. %d trays run up to the wall and turn up it %.0f mm, welted at the "
+                "top, on %.0f mm discontinuous plywood (fitted between the wall's battens; drawn in one length); each is cut %.0f mm longer for "
+                "it, and the cutting list has it so. A saddle piece closes the end of each of %d seams. The roof's cavity vents up behind "
+                "the upstand into the wall's, through the %.0f mm left between the upstand and the back of the wall's plywood%s: an insect "
+                "mesh closes it (not drawn)"
+                % (i["elevation"], ab["length"] / 1000.0, ab["over"], ab["trays"], ab["upstand"], ab["ply"], ab["sheet"], ab["saddles"],
+                   max(0.0, ab["room"]), "" if ab["room"] >= ABUT_VENT else " (under %.0f mm: the wall's cavity is too shallow for this detail; "
+                   "deepen its battens)" % ABUT_VENT), ab["length"])
+        for o in i.get("abut_over") or []:
+            if o["kind"] == "below":
+                add("Wall abutment", "pass" if o.get("edge") else "warn",
+                    "%s: over the roof %s for %.2f m. Every layer stops level, %.0f mm above the line the two meet on, so the trays lap the "
+                    "roof's upstand by %.0f mm%s. The splash zone over that roof is not applied: the zinc comes down to it"
+                    % (i["elevation"], o["with"], o["length"] / 1000.0, o["stop"], ABUT_COVER,
+                       "; a continuous edge flashing stands on the plywood at their foot" if o.get("edge") else
+                       "; no plywood was found to stand the edge flashing on"), o["length"])
+            else:
+                add("Wall abutment", "pass",
+                    "%s: over the roof %s for %.2f m. Every layer stops level at least %.0f mm above the line the two meet on (higher where "
+                    "the splash zone asks), lapping the roof's G3 flashing, which runs up the wall behind them"
+                    % (i["elevation"], o["with"], o["length"] / 1000.0, o["stop"]), o["length"])
         for u in i.get("eaves_under") or []:
             add("Eaves", "pass", "%s: under the eaves of %s (no overhang) for %.2f m. Every layer stops level, %.0f mm below the line the two "
                 "meet on: the %.0f mm top offset under the roof's plywood where that is lowest, at the outside of this wall's cladding. "

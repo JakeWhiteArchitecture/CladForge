@@ -21,6 +21,7 @@ from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
+from cladding_abut import abut_over, abut_parts, abut_ridges, join_abuts
 from cladding_rake import rake_ends, rake_parts
 
 
@@ -94,6 +95,7 @@ def build_all_groups(params):
     the exporters' quick source of dimensions and setting-out info."""
     meshes, dims, infos = [], [], []
     join_eaves(params)
+    join_abuts(params)
     for sub, _elevs in setting_groups(params):
         m, d, i = _build_all(_parse(sub))
         meshes, dims, infos = meshes + m, dims + d, infos + i
@@ -103,6 +105,7 @@ def build_all_groups(params):
 def generate_preview(params):
     meshes, dims, infos = [], [], []
     join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
+    join_abuts(params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
     for sub, _elevs in setting_groups(params):
         m, d, i = _preview_one(sub)
         meshes, dims, infos = meshes + m, dims + d, infos + i
@@ -121,6 +124,7 @@ def _preview_one(params):
     meshes = mitre_to_linings(meshes, p, infos)
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
     head_ridges(p)                       # a monopitch's head verge is cut as half a ridge
+    abut_ridges(p)                       # and so is a slope run up to a wall: the head-wall abutment
     meshes = ridge_ends(meshes, p, infos)    # two slopes meeting at a ridge: cut to it, the vent slot left
     meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
     meshes = hip_ends(meshes, p, infos)      # two slopes meeting at a hip: the same, along a sloping line
@@ -132,6 +136,8 @@ def _preview_one(params):
     meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
     meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
     meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
+    meshes = abut_parts(meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
+    meshes = abut_over(meshes, p, infos)     # and that wall's layers stop above the roof
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too

@@ -67,6 +67,11 @@ IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCAS
                           "IFCSTAIRFLIGHT", "IFCVIRTUALELEMENT", "IFCGRID", "IFCANNOTATION",
                           "IFCCURTAINWALL", "IFCPLATE", "IFCMEMBER", "IFCBUILDINGELEMENTPROXY"})
 # Of those, the ones that still cut a healed strip they pass right through (_extract).
+# A wall a roof slope runs up to: looked for above a roof face, picked for cladding or not
+# (cladding_abut: the head-wall abutment).
+WALL_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE"})
+WALL_PROBE = 150.0        # mm – above the roof's face: where a wall standing over it is sectioned
+WALL_MIN = 300.0          # mm – and it runs at least this far along the roof
 HEAL_CUT_TYPES = frozenset({"IFCMEMBER", "IFCPLATE", "IFCBUILDINGELEMENTPROXY", "IFCCOVERING"})
 
 
@@ -480,8 +485,18 @@ def _extract(payload):
     skipped = 0
     strips = _heal_strips(heals, n, u)
     strip_area = _union([s[0] for s in strips]) if strips else None
+    roofish = n[2] > RAKE_LEAN and n[2] < 0.9999
+    walls = []           # walls that stand above a roof face (a head-wall abutment)
     for elem in payload.get("context", []):
         etype = (elem.get("type") or "").upper()
+        if roofish and etype in WALL_TYPES and elem.get("tris") and time.perf_counter() <= deadline:
+            try:
+                tris_w = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
+                _st, touches_w, poly_w, _pts = _section(tris_w, n, d + WALL_PROBE, u)
+                if touches_w and poly_w is not None and not poly_w.is_empty:
+                    walls.append((poly_w.bounds, elem.get("name", "")))
+            except Exception:   # noqa: BLE001
+                pass
         # Members, plates and generic objects are otherwise left alone (they are not read as
         # abutments or penetrations), but one may be a batten: those are still looked at.
         ignored = etype in IGNORE_TYPES
@@ -609,6 +624,11 @@ def _extract(payload):
                    "wall_depth": float(options.get("wall_depth") or 0.0),
                    "posts": _merge_posts(posts, umin, vmin, width),
                    "n_holes": sum(len(pg["holes"]) for pg in polygons) + len(notches)})
+    # A wall standing over a roof slope: on the face it starts WALL_PROBE × tan(pitch) up the
+    # slope from the line its own face meets the roof on. "v" is that line.
+    lift = WALL_PROBE * math.sqrt(max(0.0, 1.0 - n[2] ** 2)) / n[2] if roofish else 0.0
+    result["walls_above"] = [{"u0": round(b[0] - umin, 1), "u1": round(b[2] - umin, 1), "v": round(b[1] - lift - vmin, 1), "name": nm}
+                             for b, nm in walls if b[2] - b[0] >= WALL_MIN]
     result["timings_ms"] = {k: v for k, v in sorted(clock.items(), key=lambda kv: -kv[1])[:8] if v >= 20}
     _say(dbg, "%s: done — %s" % (name, result["timings_ms"] or "nothing slow"))
     if any(a.get("pitched") for a in result["abutments"]):
@@ -980,7 +1000,7 @@ def _roof_link(a, b, kind):
             return None                               # two walls: a chain corner; two slopes: a roof junction
         if max(abs(na[2]), abs(nb[2])) > RAKE_LEAN:
             return None                               # one of them is a roof, not a leaning wall: an eaves, not a corner
-    elif kind in ("eaves", "head"):
+    elif kind in ("eaves", "head", "abut"):
         wall, roof = sorted((na, nb), key=lambda v: abs(v[2]))
         if abs(wall[2]) > EAVES_PLUMB or roof[2] <= RAKE_LEAN:
             return None                               # an upright wall under a roof slope, or it is something else
@@ -1002,6 +1022,9 @@ def _roof_link(a, b, kind):
     if kind in ("eaves", "head"):
         if front_a >= 0 or front_b >= 0 or abs(line[2]) > HIP_SLOPE:
             return None                               # on a level line, turning outward
+    roof_a = abs(na[2]) > abs(nb[2])
+    if kind == "abut" and ((front_a if roof_a else front_b) <= 0 or abs(line[2]) > HIP_SLOPE):
+        return None                                   # on a level line, the roof in front of the wall
     external = front_a < 0
     # A point on both planes: from a's centre, straight down a's own slope to b's plane.
     down = _cross(na, line)
@@ -1010,6 +1033,13 @@ def _roof_link(a, b, kind):
         return None
     base = tuple(ca[i] - down[i] * _dot(nb, _sub(ca, fb["origin"])) / step for i in range(3))
     ra, rb = _along_plane(a, b, line, base), _along_plane(b, a, line, base)
+    if kind == "abut":
+        # the roof's top edge lies on the line; the wall stands above it there, whether its
+        # own outline stops on the line or runs on down behind the roof
+        above = _above_line(b if roof_a else a, line, base)
+        if above is None or (ca if roof_a else cb)[2] >= base[2] - 1.0:
+            return None
+        ra, rb = (ra, above) if roof_a else (above, rb)
     if not ra or not rb:
         return None
     t0, t1 = max(ra[0], rb[0]), min(ra[1], rb[1])
@@ -1032,6 +1062,8 @@ def _roof_link(a, b, kind):
            "k": round(k if kind != "rake" or external else -k, 4), "angle": round(math.degrees(beta), 1), "length": round(t1 - t0, 1)}
     if kind == "rake":
         out["external"] = external
+    if kind == "abut":
+        out["a"]["roof"], out["b"]["roof"] = roof_a, not roof_a
     if kind in ("eaves", "head"):
         out["a"]["roof"], out["b"]["roof"] = abs(na[2]) > abs(nb[2]), abs(nb[2]) > abs(na[2])
         roof = cb if out["b"]["roof"] else ca
@@ -1066,11 +1098,47 @@ def head_link(a, b):
     return _roof_link(a, b, "head")
 
 
+ABUT_PROBE = 30.0         # mm – a wall a roof runs up to is looked for this far above the line they meet on
+
+
+def _above_line(wall, line, base):
+    """The stretch of a level *line* (through *base*, in the world) over which an upright
+    face stands above it, as (t0, t1) along the line; None where it does not."""
+    f = wall["frame"]
+    V = f.get("v") or (0.0, 0.0, 1.0)
+    u_b, v_b = _dot(_sub(base, f["origin"]), f["u"]), _dot(_sub(base, f["origin"]), V)
+    du = _dot(line, f["u"])
+    if abs(du) < 0.5:
+        return None
+    probe = LineString([(-1e7, v_b + ABUT_PROBE), (1e7, v_b + ABUT_PROBE)])
+    ts = []
+    for pg in wall.get("polygons") or []:
+        try:
+            cut = Polygon(pg["exterior"]).intersection(probe)
+        except Exception:   # noqa: BLE001
+            continue
+        for g in getattr(cut, "geoms", [cut]):
+            if g.is_empty or g.geom_type != "LineString":
+                continue
+            ts += [(x - u_b) * du for x, _y in g.coords]
+    return (min(ts), max(ts)) if ts else None
+
+
+def abut_link(a, b):
+    """Does a roof slope run up to a wall that stands on above it: a head-wall abutment?
+    None if not, else what eaves_link gives, its kind "abut". The wall is upright and the
+    roof a slope in front of it, below the level line their planes meet on; the roof's top
+    edge lies on that line, and the wall stands above it there (its own outline may stop
+    on the line, where the model's roof cuts it, or run on down behind the roof)."""
+    return _roof_link(a, b, "abut")
+
+
 def valley_links(a, others):
     """For each of *others*, in order: how it meets a, at a valley (valley_link), a hip
-    (hip_link), a raking corner (rake_link) or an eaves on a wall (eaves_link); None where
-    it does none of them."""
-    return [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) or head_link(a, b) for b in others]
+    (hip_link), a raking corner (rake_link), an eaves on a wall (eaves_link), a monopitch's
+    head (head_link) or a head-wall abutment (abut_link); None where it does none of them."""
+    return [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) or head_link(a, b) or abut_link(a, b)
+            for b in others]
 
 
 HEAL_MAX = 500.0          # mm – an edge this far or less from the line two faces would meet on nearly touches it
@@ -1080,7 +1148,8 @@ HEAL_MIN = 300.0          # mm – the two have to run along at least this much 
 
 def _joined(a, b):
     """Are the two joined as they stand: at a corner or a ridge, a valley or a hip?"""
-    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) or head_link(a, b))
+    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) or head_link(a, b)
+                or abut_link(a, b))
 
 
 def _reach(elev, other, line, base):
