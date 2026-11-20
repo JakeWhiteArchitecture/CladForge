@@ -23,7 +23,7 @@ from cladding_primitives import ring_at  # noqa: E402
 from cladding_ridge import RIDGE_GAP, RIDGE_LEG, MEET, _cap_ring  # noqa: E402
 from dxf_generator import meshes_to_dxf_string  # noqa: E402
 from fabric_extract import extract_elevation, chain_link, ridge_link  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 
 TIP = 58.6                                   # the wall tipped back this far lies at 31.4° to level
 PITCH = math.radians(90.0 - TIP)
@@ -296,6 +296,6 @@ def test_the_ridge_exports_to_ifc_and_dxf():
     fillers = [e for e in ifc.by_type("IfcMember") if "Ridge Filler" in (e.Name or "")]
     assert len(fillers) == len([m for m in out["geometry"] if m["ifc_type"] == "ridge_filler"]) and fillers
     products = [e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]
-    assert len(products) == len(out["geometry"])
+    assert len(products) == len(own_elements(out["geometry"]))
     dxf = meshes_to_dxf_string(out["geometry"], params, out["info"])
     assert "ROOF / ROOF A" in dxf and "ROOF / ROOF B" in dxf

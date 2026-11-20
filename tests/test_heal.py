@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pytest  # noqa: E402
 
+from cladding_preview import generate_preview  # noqa: E402
 from fabric_extract import extract_elevation, heal_link, heal_links, hip_link, valley_link, chain_link, HEAL_MAX  # noqa: E402
 
 T = math.tan(math.radians(30.0))
@@ -130,13 +131,15 @@ def _box(x0, x1, y0, y1, top, thick):
     return up, tris
 
 
-def test_a_wall_is_healed_up_through_plywood_that_oversails_it():
+def test_a_wall_healed_up_to_a_roof_stops_under_the_plywood_that_oversails_it():
     """An eaves in 3D: a wall to its plate, rafters on it, and pitched plywood sheathing on
     them that oversails the wall's face. The plywood runs on through the wall's plane, so
-    it has nothing to heal; the wall is offered up to the roof's plane. The strip passes
-    through the plywood it was healed to (which as picked face would be cut out of it again
-    and leave the same 21 mm to heal for ever), but the rafters still cut it, each right
-    through to the top: the cladding is notched round every rafter tail."""
+    it has nothing to heal; the wall is offered up to the roof's plane, and healed up under
+    it: its cladding stops under the plywood (the chain's top offset below it, when it is
+    built), it does not run up through it. The rafters cut it, each right through to the
+    top: the cladding is notched round every rafter tail. And both are cut where they stand
+    at the cladding's outside surface, 150 mm out from the wall, which on a 30 degree
+    pitch is 87 mm lower than at the wall's face: every layer is cut back level to that."""
     quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]         # noqa: E731
     z = lambda y: 2900.0 + y * T                                      # noqa: E731 — the plywood's top; 2900 at the wall's face
     t_ply, t_raft = 18.0 / C, 150.0 / C
@@ -155,17 +158,37 @@ def test_a_wall_is_healed_up_through_plywood_that_oversails_it():
     assert heal["kind"] == "abutment" and heal["gap"] == 200.0 and heal["length"] == 6000.0
     assert len(heal["a"]) == 1 and heal["b"] == []                     # the wall alone is extended
     assert heal_link(roof, plain)["a"] == [] and heal_link(roof, plain)["b"] == heal["a"]
-    healed = wall([{"quad": heal["a"][0], "through": [7]}])            # healed to the plywood, by its id as the app sends it
-    assert healed["height"] == 2900.0                                  # to the roof's plane, through the plywood
-    assert heal_link(healed, roof) is None                             # and it is not offered again
-    # a notch for each rafter, as wide as it, from its underside at the wall's face right through to the top
+    out = -150.0                                                       # the cladding's outside surface, on plan
+    soffit, foot = z(out) - t_ply, z(out) - t_ply - t_raft             # the plywood's underside there, and a rafter's
+    healed = wall([{"quad": heal["a"][0], "through": [7], "under": True}])     # as the app sends it: by id, healed up under it
+    assert healed["height"] == pytest.approx(soffit, abs=0.1)          # under the plywood, where it is lowest over the build-up
+    assert sorted(healed["healed"][0]) == [[0.0, 0.0, 2900.0], [6000.0, 0.0, 2900.0]] and len(healed["healed"]) == 1
+    assert heal_link(healed, roof) is None                             # it stands at the line: not offered again
+    assert heal_link(dict(healed, healed=[]), roof) is not None        # (which is what says so: its outline alone is short of it)
+    # a notch for each rafter, as wide as it, from its underside at the cladding's outside surface right through to the top
     (outline,) = healed["polygons"]
-    under = z(0.0) - t_ply - t_raft
-    notch_feet = sorted(q[0] for q in outline["exterior"] if abs(q[1] - under) < 0.5)
+    notch_feet = sorted(q[0] for q in outline["exterior"] if abs(q[1] - foot) < 0.5)
     assert notch_feet == pytest.approx([875, 925, 2975, 3025, 5075, 5125], abs=0.5)
-    area = 6000.0 * 2900.0 - 3 * 50.0 * (2900.0 - under)
+    area = 6000.0 * soffit - 3 * 50.0 * (soffit - foot)
     assert healed["area"] == pytest.approx(area, abs=2.0) and not outline["holes"]
-    # the same by name; and with nothing said about what it was healed to, the plywood cuts it as it cuts a picked face
-    assert wall([{"quad": heal["a"][0], "through": ["Plywood sheathing"]}])["area"] == pytest.approx(area, abs=2.0)
+    assert wall([{"quad": heal["a"][0], "through": ["Plywood sheathing"], "under": True}])["area"] == pytest.approx(area, abs=2.0)   # the same by name
+    # built, the boards stop the top offset below the plywood, and every layer is cut to the same level top and the same notches
+    params = dict({"elevations": [dict(healed, offset=0, edges={"top": 10.0})], "trim": True, "splash": 0}, cladding_type="panel")
+    tops, feet = {}, {}
+    for m in generate_preview(params)["geometry"]:
+        if m["ifc_type"] in ("panel", "batten"):
+            vs = [q[1] for q in m["profile"]]
+            tops[m["ifc_type"]] = max(tops.get(m["ifc_type"], 0.0), max(vs))
+            under = [q[1] for q in m["profile"] if 2974.0 < q[0] < 3026.0 and q[1] > 2000.0]      # under the middle rafter
+            if under:
+                feet[m["ifc_type"]] = min(min(under), feet.get(m["ifc_type"], 1e9))
+    assert tops == {"panel": pytest.approx(soffit - 10.0, abs=0.2), "batten": pytest.approx(soffit - 10.0, abs=0.2)}
+    assert feet["panel"] == pytest.approx(foot - 10.0, abs=0.2)
+    # A strip not healed up under anything (two faces brought together side by side, or a state
+    # saved before this) still passes through what it was healed to; the rafters cut it level all the same.
+    through = wall([{"quad": heal["a"][0], "through": [7]}])
+    assert through["height"] == 2900.0
+    assert through["area"] == pytest.approx(6000.0 * 2900.0 - 3 * 50.0 * (2900.0 - foot), abs=2.0)
+    # and with nothing said about what it was healed to, the plywood cuts it
     for cut in (wall([heal["a"][0]]), wall(faces=_strips(heal["a"]))):
-        assert cut["height"] == pytest.approx(2900.0 - t_ply, abs=0.1)
+        assert cut["height"] <= 2900.0 - t_ply + 0.1

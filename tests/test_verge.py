@@ -19,7 +19,7 @@ from cladding_constants import frame_to_world, world_to_frame  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
 from cladding_verge import VERGE_TRAY, VERGE_NOSE, VERGE_LAP, VERGE_CLEAR, VERGE_DROP, verge_sides  # noqa: E402
 from dxf_generator import meshes_to_dxf_string  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 
 
 def _one(elev=None, **kw):
@@ -142,6 +142,6 @@ def test_the_verge_exports_to_ifc_and_dxf():
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     strips = [e for e in ifc.by_type("IfcCovering") if "Verge Strip" in (e.Name or "")]
     assert len(strips) == 2 and all(e.PredefinedType == "ROOFING" and e.ObjectType == "Verge strip" for e in strips)
-    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
+    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
     assert len(out["info"][0]["verge_strips"]) == 2
     assert "ROOF A" in meshes_to_dxf_string(out["geometry"], params, out["info"])
