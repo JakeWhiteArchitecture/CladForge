@@ -99,6 +99,12 @@ def build_elevation(p, elev, layout=None):
     behind = lambda d: "mitre" if p["seam"] and d == "lap" else d   # noqa: E731
     _apply_corner(meshes, {lo: left}, behind(d_left), skip=("reveal", "closer"))
     _apply_corner(meshes, {hi: right}, behind(d_right), skip=("reveal", "closer"))
+    k_ends = (elev.get("corner_lo"), elev.get("corner_hi"))          # run order, like the details
+    k_l, k_r = k_ends[::-1] if elev.get("chain_reversed") else k_ends
+    ends = ((lo, left, d_left, "l", float(k_l or 0.0)), (hi, right, d_right, "r", float(k_r or 0.0)))
+    if not p["seam"]:
+        _reentrant_layers(p, elev, meshes, ends)
+        _plank_ends(p, elev, meshes, ends, edge_settings(elev)["gap"])
     # A mitre leaves the chain's mitre gap between the two boards, straight across the
     # joint: each board's end is pulled back half of it. The layers behind still meet.
     gap = edge_settings(elev)["gap"]
@@ -290,6 +296,93 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
             prof["warnings"].append("%s: the corner %s at the %s end is not over a batten"
                                     % (name, "profile's %.0f mm flange" % (profiles.FLANGE_P if plank else fl),
                                        "right" if side == "r" else "left"))
+
+
+BOARDS = ("panel", "plank")
+MIN_CLOSER = 3.0     # mm – a closing plank narrower than this at a corner is left out
+
+
+def _reentrant_layers(p, elev, meshes, ends):
+    """The layers behind the boards at a re-entrant corner set to Master or Square.
+
+    Round an external corner square-ended layers leave the corner empty, which is how a
+    master-lap is built. In a re-entrant corner they would share it: both faces' battens
+    in the same place. So the face that masters the corner is built right into it, and
+    the other's layers stop against the face of its cladding (its boards a joint gap
+    short of that, cladding_primitives.corner_ends): its horizontal layers are cut back,
+    and a batten standing in the way is moved clear."""
+    depth, bw = buildup_depth(p), p["batten_w"]
+    for u_end, (k_b, ext_b), detail, side, k in ends:
+        if k >= 0 or detail not in ("lap", "butt") or end_master(elev, side):
+            continue
+        toward = 1.0 if side == "r" else -1.0
+        back = -ext_b - (p["panel_gap"] if p["cladding_type"] == "panel" else p["plank_gap"] if p["plank_lap"] <= 0 else 0.0)
+        back = max(back, depth)                     # how far its layers stop from the wall's corner line
+        for m in list(meshes):
+            if m["ifc_type"] in BOARDS + ("reveal", "closer", "corner_profile", "corner_trim") or m not in meshes:
+                continue
+            us = [q[0] for q in m["profile"]]
+            near, far = (max(us), min(us)) if toward > 0 else (min(us), max(us))      # near the corner, and away from it
+            if (u_end - near) * toward > back - 0.5:
+                continue                            # clear of the other face already
+            c = {key: v for key, v in (m.get("corner") or {}).items() if not key.endswith("_" + side)}
+            if abs(far - near) <= 2.5 * max(bw, p["cb_w"]):
+                # a batten up the wall: moved whole, to stand against the other face's cladding
+                shift = -toward * (back - (u_end - near) * toward)
+                m["profile"] = [[q[0] + shift, q[1]] for q in m["profile"]]
+                moved = sorted(q[0] for q in m["profile"])
+                m["gasket_to"] = u_end - toward * back      # its gasket stops there too, not lapping past
+                for other in list(meshes):
+                    ou = [q[0] for q in other["profile"]]
+                    if other is not m and other["ifc_type"] == m["ifc_type"] and abs(float(other["depth"]) - float(m["depth"])) < 0.5 \
+                            and abs(max(ou) - min(ou)) <= 2.5 * max(bw, p["cb_w"]) and min(moved[-1], max(ou)) - max(moved[0], min(ou)) > 0.5:
+                        meshes.remove(other)        # one was there already: the moved one takes its place
+            elif abs(near - u_end) < 0.6:
+                c.update({"k_" + side: k_b, "ext_" + side: -back, "u_" + side: u_end})
+            if c:
+                m["corner"] = c
+            else:
+                m.pop("corner", None)
+
+
+def _plank_ends(p, elev, meshes, ends, mitre_gap):
+    """Vertical planks at a chain corner (every detail but Profile, which has its own).
+
+    They are set out across the face and on past its ends, so the cladding that wraps an
+    external corner has boards too: here each end is finished. A plank that lies wholly
+    beyond where the boards stop goes; the one that crosses it is cut there, on the
+    corner's slope, and is the closing plank, never wider than a plank; one past the
+    wall's corner line is trimmed in height only, so the cut at the line leaves it be.
+    At a re-entrant corner the boards stop before the line and the same cut is made."""
+    if p["cladding_type"] != "plank" or p["seam"] or p["boards_run"] != "vertical":
+        return
+    for u_end, (k_b, ext_b), detail, side, k in ends:
+        if detail == "profile" or not k:
+            continue
+        if detail == "mitre" and mitre_gap > 0:
+            ext_b = ext_b - mitre_pullback(mitre_gap, k_b)
+        toward = 1.0 if side == "r" else -1.0
+        for m in list(meshes):
+            if m["ifc_type"] != "plank" or m.get("holes"):
+                continue
+            us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+            near, far = (min(us), max(us)) if toward > 0 else (max(us), min(us))
+            limit = u_end + toward * (ext_b + k_b * float(m["depth"]))       # where the board's back stops
+            c = {key: v for key, v in (m.get("corner") or {}).items() if not key.endswith("_" + side)}
+            if (near - limit) * toward >= -MIN_CLOSER:
+                meshes.remove(m)
+                continue
+            if (far - limit) * toward > 0.5:
+                a, b = sorted((near, limit))
+                m["profile"] = _rect(a, min(vs), b, max(vs))
+                c.update({"k_" + side: k_b, "ext_" + side: -k_b * float(m["depth"]), "u_" + side: limit})
+                far = limit
+            if (far - u_end) * toward > 0.5:
+                m["clip_v_at"] = sorted((u_end - toward * 2.0, u_end - toward * 0.5))
+            if c:
+                m["corner"] = c
+            else:
+                m.pop("corner", None)
 
 
 def _across_corners(meshes, ends):
@@ -779,10 +872,27 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
     depth = _horizontal_battens(p, battens, meshes, name, frame, depth, W)
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
-    starts = centred_positions(W, cover, offset, face)
+    # Round an external chain corner the cladding carries on past the wall's corner line by
+    # up to the buildup's depth, and it wants boards there too: the planks are set out on
+    # past each end that has a corner, and finished there (_plank_ends, _profiled_corners).
+    lo, hi = clip_bounds(elev)
+    k_ends = (elev.get("corner_lo"), elev.get("corner_hi"))
+    k_l, k_r = k_ends[::-1] if elev.get("chain_reversed") else k_ends
+    wrap = lambda k: (max(0.0, float(k or 0.0)) * (depth + p["plank_t"]) + cover) if (k or 0.0) > 0 else 0.0   # noqa: E731
+    first = centred_positions(W, cover, offset, face)
+    starts = list(first)
+    while starts and starts[0] + face > lo - wrap(k_l) and wrap(k_l):
+        starts.insert(0, starts[0] - cover)
+    while starts and starts[-1] < hi + wrap(k_r) and wrap(k_r):
+        starts.append(starts[-1] + cover)
     beside = []                  # the joints in the plank to the left: this one keeps clear of them
     for j, u in enumerate(starts):
-        runs = strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)]
+        # at a free end, a sliver of a plank narrower than can be cut is left out
+        if (not wrap(k_l) and u + face - lo < MIN_CLOSER) or (not wrap(k_r) and hi - u < MIN_CLOSER):
+            continue
+        # a plank wholly past the end runs as high as the face does just inside its corner
+        at = (hi - 2.0, hi - 0.5) if u >= hi - 0.5 else (lo + 0.5, lo + 2.0) if u + face <= lo + 0.5 else (u, u + face)
+        runs = strip_intervals(region, at[0], at[1], across=True) if region is not None else [(v0, H)]
         piece, mine = 0, []
         for a, b in runs:
             segs, bad = _lengths(p, max(a, v0), b, battens, j % 2 == 1, gap, beside)
@@ -796,6 +906,7 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
                     plank.update(section_at=u, section_axis="u")
                 meshes.append(plank)
         beside = mine
+    starts = first               # the face's own, for what is reported and dimensioned
     left_cut = (starts[0] + face) if starts and starts[0] < 0 else 0.0
     right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0
     info.update(n_courses=len(starts), cover=cover, batten_centres=p["batten_centres"],
