@@ -21,6 +21,7 @@ from shapely.geometry import LineString
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
+from cladding_constants import SEAM_AIR
 from cladding_primitives import clip_bounds, openings
 from cladding_corners import TRIM_BACK
 
@@ -410,6 +411,85 @@ def _seam_span(m):
     ax = 1 if m["seam_v"] else 0
     cs = [float(q[ax]) for q in m["profile"]]
     return min(cs), max(cs)
+
+
+def break_at_seams(meshes, p):
+    """Every tray is its own sheet: its flat stops at the foot of its own upstand, so **the
+    flats of two trays do not meet under their seam**. A double lock's two upstands stand
+    SEAM_AIR apart either side of the seam's line (cladding_geometry._double_lock); the
+    trays are set out and cut edge to edge on that line, and this, the last thing done to
+    them, draws each edge back half that air to its upstand. A length of eaves drip, the
+    tray's own sheet turned down, is drawn back with it.
+
+    What the cutting list has of a tray is unchanged: its width seam to seam (the mesh
+    carries what was taken off, "cut_grow", for cladding_nesting)."""
+    if not p.get("seam"):
+        return meshes
+    half = SEAM_AIR / 2.0
+    key = lambda m: (m.get("elevation"), tuple(round(c, 6) for k in ("origin", "u", "n") for c in m["frame"][k]))   # noqa: E731
+    lines = {}
+    for m in meshes:
+        if m.get("ifc_type") == "seam" and m.get("seam_part") in ("over_up", "under_up") and m.get("seam_line") is not None:
+            along = 1 if m.get("seam_v") else 0
+            run = [q[along] for q in m["profile"]]
+            lines.setdefault(key(m) + (bool(m.get("seam_v")),), []).append((float(m["seam_line"]), min(run), max(run)))
+    if not lines:
+        return meshes
+    moved = {}                                             # tray name -> {old edge: new edge}, across vertical seams
+    for m in meshes:
+        if m.get("ifc_type") != "plank":
+            continue
+        grow = [0.0, 0.0]
+        for along_v in (True, False):
+            mine = lines.get(key(m) + (along_v,))
+            if not mine:
+                continue
+            across, along = (0, 1) if along_v else (1, 0)
+            span = [q[across] for q in m["profile"]]
+            mid = (min(span) + max(span)) / 2.0
+            done = set()
+            for ring in [m["profile"]] + list(m.get("holes") or []):
+                was = [list(q) for q in ring]
+                on = [next((line for line, a, b in mine if abs(q[across] - line) < 1e-3 and a - 1.0 <= q[along] <= b + 1.0), None)
+                      for q in was]
+                for i, q in enumerate(ring):
+                    line = on[i]
+                    if line is None:
+                        continue
+                    step = half if mid > line else -half
+                    # the corner slides along the tray's other edge there (an end cut to a hip or a valley
+                    # stays on its line); where that edge runs with the seam, straight across
+                    others = [k for k in ((i - 1) % len(was), (i + 1) % len(was)) if on[k] != line]
+                    d = [was[others[0]][0] - was[i][0], was[others[0]][1] - was[i][1]] if len(others) == 1 else [0.0, 0.0]
+                    if abs(d[across]) > 1e-6 and d[across] * step > 0 and abs(d[along]) < 20.0 * abs(d[across]):
+                        q[along] = round(was[i][along] + d[along] * step / d[across], 4)
+                    q[across] = round(line + step, 4)
+                    done.add(line)
+                    if along_v:
+                        moved.setdefault(m.get("name"), {})[line] = q[across]
+            grow[across] += half * len(done)
+        if grow[0] or grow[1]:
+            m["cut_grow"] = [round(grow[0], 4), round(grow[1], 4)]
+    # A tray's drip at an eaves (cladding_eaves: one length per tray, from seam line to seam line, run along the eaves)
+    frames = {e.get("name"): e["frame"] for e in p.get("elevations", [])}
+    for m in meshes:
+        edges = moved.get(m.get("of")) if m.get("tray_sheet") else None
+        f = frames.get(m.get("elevation"))
+        if not edges or f is None or abs(sum(a * b for a, b in zip(m["frame"]["n"], f["u"]))) < 0.99:
+            continue
+        turn = 1.0 if sum(a * b for a, b in zip(m["frame"]["n"], f["u"])) > 0 else -1.0
+        start = sum((a - b) * c for a, b, c in zip(m["frame"]["origin"], f["origin"], f["u"]))
+        lo, hi = sorted((start, start + turn * float(m["thickness"])))
+        for line, new in edges.items():
+            if abs(lo - line) < 1e-3:
+                lo = new
+            if abs(hi - line) < 1e-3:
+                hi = new
+        if hi - lo > 0.5:
+            at = lo if turn > 0 else hi
+            m["frame"] = dict(m["frame"], origin=[o + (at - start) * c for o, c in zip(m["frame"]["origin"], f["u"])])
+            m["thickness"] = round(hi - lo, 4)
+    return meshes
 
 
 def finish_seams(meshes, p):

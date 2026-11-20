@@ -155,6 +155,10 @@
                 </div>
                 <div class="field"><label>Verge strip <span class="unit">roof slopes: the free side edges, the last tray welted over a strip. Switch off a side that runs into a wall</span></label>
                     <select id="edge-verge" onchange="onEdgeField('verge', this.value)"><option value="both" selected>Both sides</option><option value="start">Left only (of the chain's first face)</option><option value="end">Right only</option><option value="none">None</option></select></div>
+                <div class="field"><label>Verge type <span class="unit">the G3 strip, or where the roof's edge stands over a clad wall: a seam at the edge and a flashing down over the head of the wall's cladding (VMZ-SN-MA-ZI-05)</span></label>
+                    <select id="edge-vergeType" onchange="onEdgeField('vergeType', this.value)"><option value="g3" selected>G3 verge strip</option><option value="cladding">Flashing over cladding (ZI-05)</option></select></div>
+                <div class="field"><label>Verge oversail <span class="unit">mm the plywood runs out past the roof's edge at a verge with cladding. Blank: the thickness of the cladding on the wall below, where that wall is picked</span></label>
+                    <input type="number" id="edge-vergeOver" placeholder="auto" min="0" max="400" step="1" oninput="onEdgeField('vergeOver', this.value)"></div>
                 <div class="field"><label>Eaves drip <span class="unit">roof slopes: the level bottom edge, the trays turned round the plywood's end and down into a drip. Switch off where the slope runs into a wall or a gutter behind a parapet</span></label>
                     <select id="edge-eaves" onchange="onEdgeField('eaves', this.value)"><option value="on" selected>On</option><option value="none">None</option></select></div>
                 <div class="field"><label>Head verge <span class="unit">a monopitch's level top edge: a G3 cap over the trays' ends that turns down over the wall below</span></label>
