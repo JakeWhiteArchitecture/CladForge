@@ -75,7 +75,7 @@ def test_checks_cutting_plan_and_exports_follow_each_chain(walls, tmp_path):
     assert parse_for(params, ["A"])["cladding_type"] == "panel" and parse_for(params, ["B"])["seam"]
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     kinds = {e.ObjectType for e in ifc.by_type("IfcCovering")}
-    assert "Standing seam tray" in kinds and "Standing seam" in kinds
+    assert "Standing seam tray" in kinds and "Standing seam" not in kinds     # a tray's seams are in its own element
     desc = {e.Name: e.Description for e in ifc.by_type("IfcElementAssembly")}
     assert "panel buildup" in desc["A cladding"] and "plank buildup" in desc["B cladding"]
     mats = {m.Name for m in ifc.by_type("IfcMaterial")}

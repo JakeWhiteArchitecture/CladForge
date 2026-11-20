@@ -19,7 +19,7 @@ from shapely.ops import unary_union  # noqa: E402
 from cladding_lod import LODS, MASS_COLORS, MASS_T, PLAIN, at_lod, lod_of, masses  # noqa: E402
 from cladding_primitives import ring_at  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 from test_ridge import _roof, SEAM  # noqa: E402
 
 KINDS = {"panel": dict(cladding_type="panel"), "plank": dict(cladding_type="plank", plank_orient="horizontal"),
@@ -123,7 +123,7 @@ def test_the_ifc_is_written_at_the_level_asked_for_and_says_which(lod):
     ifcopenshell.validate.validate(ifc, logger)
     assert not logger.statements, [s["message"][:200] for s in logger.statements[:3]]
     parts = [e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]
-    assert len(parts) == len(meshes) and all(e.Representation for e in parts)
+    assert len(parts) == len(own_elements(meshes)) and all(e.Representation for e in parts)   # a tray's seams are in its element
     said = [p.NominalValue.wrappedValue for p in ifc.by_type("IfcPropertySingleValue") if p.Name == "LevelOfDevelopment"]
     assert said == ["LOD %d" % lod]
     if lod == 100:

@@ -1654,8 +1654,8 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  records: [valleyRecords(a), valleyRecords(c)].map(v => v.map(x => [x.kind, x.with, x.master, Math.round(x.length)])),
                  cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')),
                  caps: names.filter(n => /Hip Cap/.test(n)), gutters: names.filter(n => /Valley Gutter/.test(n)).length,
-                 upstands: names.filter(n => /Hip Upstand/.test(n)).length, aprons: names.filter(n => /Eaves Apron/.test(n)),
-                 checks: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a hip|eaves apron/.test(t)).length };
+                 upstands: names.filter(n => /Hip Upstand/.test(n)).length, aprons: names.filter(n => /Eaves Support/.test(n)),
+                 checks: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a hip|: an eaves \d/.test(t)).length };
     });
     const hip = await roofParts();
     console.log('hip:', JSON.stringify(hip), '|', hipStatus);
@@ -1690,7 +1690,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         return { chains: state.elevations.map(e => e.chain.name), ridge: state.elevations.slice(0, 2).map(e => e.ridge && [e.ridge.u0, e.ridge.u1]),
                  hips: state.elevations.map(e => valleyRecords(e).filter(v => v.kind === 'hip').length),
                  ridgeCaps: names.filter(n => /Ridge Cap/.test(n)).length, hipCaps: names.filter(n => /Hip Cap/.test(n)).length,
-                 aprons: names.filter(n => /Eaves Apron/.test(n)).length, verges: names.filter(n => /Verge/.test(n)).length,
+                 aprons: names.filter(n => /Eaves Support/.test(n)).length, verges: names.filter(n => /Verge/.test(n)).length,
                  ridgeCheck: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)).map(t => (t.match(/cap ([\d.]+) m long/) || [])[1]) };
     });
     console.log('hipped roof:', JSON.stringify(hipped));
@@ -1804,6 +1804,45 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('raking corner, profile:', JSON.stringify(profiledRake));
     if (profiledRake.profiles !== 'Elevation A Corner Profile B' || !/corner profile run up the corner/.test(profiledRake.check))
         throw new Error('the raking corner did not take its corner profile: ' + JSON.stringify(profiledRake));
+
+    // A seventh model: a wall, and a roof slope that comes down to its head with no overhang
+    // (detail DL-41). Two chains, joined as an eaves: the roof's plywood and trays run on past
+    // the wall's cladding, the zinc turns round the plywood's end and drips in front of the
+    // wall's panels, and every layer of the wall stops level under the roof.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'eaves_flush.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    await page.click('#corner-type .turn-btn[data-value="mitre"]');
+    await lookAt('Wall', [0.05, 0.1, 1]);
+    await picked(1);
+    await panelWall();
+    await settle();
+    await lookAt('Roof', [0.02, 0.87, 0.5]);
+    await picked(2);
+    const eavesStatus = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    await page.evaluate(() => { openWizard(); WIZ.draft.type = 'seam'; WIZ.draft.orient = 'vertical'; wizBuild(); dismissLevels(); });
+    await settle();
+    const flush = await page.evaluate(() => {
+        const g = window._lastPreview.geometry, info = window._lastPreview.info;
+        const tops = t => Math.round(Math.max(...g.filter(m => m.elevation === 'Elevation A' && m.ifc_type === t).flatMap(m => m.profile.map(q => q[1]))) * 10) / 10;
+        const deck = g.find(m => m.elevation === 'Elevation B' && m.ifc_type === 'deck');
+        return { records: state.elevations.map(e => valleyRecords(e).map(v => [v.kind, v.with, v.roof].join())).join(' / '),
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')).join(' / '),
+                 zinc: g.filter(m => /Eaves Drip/.test(m.name)).length, support: g.filter(m => /Eaves Support/.test(m.name)).length,
+                 panelTop: tops('panel'), battenTop: tops('batten'), wallHeight: state.elevations[0].result.height,
+                 deckEnd: Math.round(Math.min(...deck.profile.map(q => q[1]))),
+                 under: (info.find(i => i.elevation === 'Elevation A').eaves_under || []).map(u => [u.with, u.stop, u.gap].join()).join(' / '),
+                 over: (info.find(i => i.elevation === 'Elevation B').eaves || []).map(e => [e.over, e.run > 0].join()).join(' / '),
+                 checks: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /an eaves \d|under the eaves of/.test(t)).length };
+    });
+    console.log('eaves, no overhang:', JSON.stringify(flush), '|', eavesStatus);
+    if (flush.records !== 'eaves,Elevation B,false / eaves,Elevation A,true' || !/eaves \(no overhang\) with B/.test(flush.cards)
+        || !/an eaves with Elevation A, no overhang/.test(eavesStatus) || flush.zinc < 2 || flush.support !== 1
+        || flush.panelTop !== flush.battenTop || flush.panelTop > flush.wallHeight - 9.9 || flush.deckEnd >= 0
+        || flush.under !== 'Elevation B,-10,10' || flush.over !== 'Elevation A,true' || flush.checks !== 2)
+        throw new Error('the roof and the wall were not joined at an eaves with no overhang: ' + JSON.stringify(flush));
 
     console.log('SMOKE OK');
     await browser.close();
