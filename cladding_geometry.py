@@ -8,7 +8,7 @@ up it, depth runs outward from the wall face. Elements are emitted untrimmed
 
 import math
 
-from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_AIR, SEAM_HEAD_D, SEAM_STANDOFF
+from cladding_constants import _prism, _rect, MAX_BATTEN_SPAN, EPDM_T, EPDM_LAP, SEAM_AIR, SEAM_HEAD_D, SEAM_STANDOFF, DPM_T
 from cladding_booleans import clip_region, strip_intervals, iter_polygons, polygon_to_rings
 from cladding_constants import frame_to_world, frame_v, z_to_v
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
@@ -88,6 +88,9 @@ def build_elevation(p, elev, layout=None):
     # over it: carried on to the trays it ran through the deck, and showed through them.
     over = (p["deck_t"] + SEAM_STANDOFF) if p["seam"] else 0.0
     _openings_extras(p, elev, meshes, holes, layers, depth - board - layers - over, depth, board, prof, v0)
+    zones = barrier_zones(p, elev)
+    if zones:
+        info["barriers"] = _barriers(p, elev, meshes, zones, layers, depth - board - layers - over)
     info["openings"] = len(holes)
     frames = opening_frames(elev, holes, depth)
     info["opening_details"] = [dict(d, key=opening_key(r), rect=list(r), frame_depth=frames[r]["depth"],
@@ -545,6 +548,8 @@ def _gaskets(p, elev, meshes, board_back):
             continue                                      # horizontal: not a vertical timber
         if m["ifc_type"] == "closer" and abs(float(m["depth"]) + float(m["thickness"]) - board_back) > 1.0:
             continue                                      # not out to the boards
+        if m.get("dpm"):
+            continue                                      # a cavity barrier's timber: it has its membrane
         c = m.get("corner") or {}
         lo, hi = min(us) - (0.0 if "k_l" in c else EPDM_LAP), max(us) + (0.0 if "k_r" in c else EPDM_LAP)
         if "gasket_to" in m:                              # a corner timber: its corner side
@@ -557,6 +562,8 @@ def _gaskets(p, elev, meshes, board_back):
             g["corner"] = dict(c)
         if m.get("clip_v_at"):
             g["clip_v_at"] = list(m["clip_v_at"])
+        if m.get("keep_clear"):                           # cut short of a cavity barrier with its batten
+            g["keep_clear"] = [list(c) for c in m["keep_clear"]]
         out.append(g)
     meshes.extend(out)
 
@@ -853,7 +860,11 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     courses = _courses(elev, v0, H, cover)
     beside = []                  # the joints in the course below: this one keeps clear of them
     below = []                   # and its runs, which a standing seam joins
+    zones = [] if p["seam"] else barrier_zones(p, elev)
+    every = stops
     for j, v in enumerate(courses):
+        # a batten cut short of a cavity barrier carries no end joint where it is not
+        stops = [u for u in every if _clear_of_barriers(zones, u, max(v, v0), v + face, bw / 2)] if zones else every
         # Set each course out along the part of the face it actually crosses, so a run
         # broken by a gable or an opening gets no seam it does not need.
         lo = max(v, v0)          # a course set out from the chain datum is cut at the base
@@ -1194,6 +1205,10 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         info["reveal_battens"] = len([u for u in jambs if all(abs(u - q) > bw / 2 for q in posts)])
     elif jambs:
         panels, joints = bays_between([0.0] + jambs + [W], p["panel_w"], gap)
+        # Beside its opening a jamb line is backed by the cavity closer; over and under the
+        # opening it is a panel joint like any other and wants a batten, or the battens
+        # there stand a whole bay and more apart and the opening has upset their spacing.
+        reveal = list(jambs)
     else:
         panels, joints = panel_bays(W, p["panel_w"], gap, offset)
     # Where the face board masters the reveal it runs a board's thickness past the jamb
@@ -1376,6 +1391,106 @@ def _row_list(elev, p, rows):
     if rows[-1][2] is not None:
         out[rows[-1][2]] = round(rows[-1][1], 1)            # the closing row, as cut
     return out
+
+
+BARRIER_BESIDE = 25.0     # mm – an upright timber this close beside a barrier counts as joining it: no way past for air
+BARRIER_STUB = 150.0      # mm – a batten end shorter than this, left between a barrier's clear zone and the edge, is left out
+UPRIGHTS = ("batten", "counter_batten", "cross_batten")
+
+
+def barrier_zones(p, elev):
+    """Where openings are closed with solid timber cavity barriers on all four sides
+    (p["barriers"] for the chain, or set on the opening itself: opening_details): one
+    record for each such opening of the face.
+
+    The jamb closers every opening has are joined by a barrier over the head and one under
+    the sill, each the closer's width and running out over the jambs', so the four make a
+    frame filling the cavity round the opening. That shuts the bays above and below the
+    opening: air rising under the sill, or falling over the head, has to pass sideways into
+    the bays that run on beside the opening. So every upright batten that would join the
+    head or sill barrier **stops short of it** by p["barrier_gap"] (200 mm at least), and
+    the strip left is the way across.
+
+    Each record: "index" the opening's place among the face's; "rect" the opening; "head" and "sill" the barriers as (u0, v0, u1, v1), or
+    None where the head or sill is not within the cladding; "solid" the frame's outside;
+    "clear" the box no upright batten enters (the frame, the gap above and below it)."""
+    cw, gap = p["closer_w"], max(200.0, float(p.get("barrier_gap") or 200.0))
+    band_lo, band_hi = clip_bounds_v(elev)
+    out = []
+    for index, ((u0, u1, v0, v1), d) in enumerate(opening_details(elev, p)):
+        if not d["barriers"]:
+            continue
+        head_in, sill_in = v1 < band_hi - 0.5, v0 > band_lo + 0.5
+        top = min(v1 + cw, band_hi) if head_in else min(v1, band_hi)
+        bot = max(v0 - cw, band_lo) if sill_in else max(v0, band_lo)
+        a, b = u0 - cw, u1 + cw
+        hi = top + gap if head_in else top
+        lo = bot - gap if sill_in else bot
+        # no stub of a batten between the gap and the top or bottom of the cladding
+        hi = band_hi + 1.0 if head_in and band_hi - hi < BARRIER_STUB else hi
+        lo = band_lo - 1.0 if sill_in and lo - band_lo < BARRIER_STUB else lo
+        out.append({"index": index, "rect": (u0, u1, v0, v1), "head": (a, v1, b, top) if head_in and top - v1 > 1.0 else None,
+                    "sill": (a, bot, b, v0) if sill_in and v0 - bot > 1.0 else None,
+                    "solid": (a, bot, b, top), "clear": (a - BARRIER_BESIDE, lo, b + BARRIER_BESIDE, hi), "gap": gap})
+    return out
+
+
+def _clear_of_barriers(zones, u, v_lo, v_hi, half=0.0):
+    """Is the line u (a batten *half* wide each side of it) free of every barrier's clear
+    box between these heights? False where a batten there has been cut away."""
+    return not any(z["clear"][0] < u + half and u - half < z["clear"][2] and z["clear"][1] < v_hi and v_lo < z["clear"][3]
+                   for z in zones)
+
+
+def _barriers(p, elev, meshes, zones, cavity_start, cavity_t):
+    """The head and sill barriers of each opening closed on all four sides (barrier_zones),
+    and the battens cut clear of them: uprights out of the whole clear box, level battens
+    out of the frame itself (the barrier is solid timber where they were). The cut is made
+    when the parts are trimmed (cladding_booleans: "keep_clear"). Returns
+    {"openings", "gap", "cut": how many battens stop short, "dpm": how many timbers carry a membrane}."""
+    name, frame, cut, dpm = elev["name"], elev["frame"], set(), 0
+    for z in zones:
+        for key, tag in (("head", "H"), ("sill", "S")):
+            if z[key]:
+                meshes.append(_prism(_rect(*z[key]), cavity_start, cavity_t, frame, "closer",
+                                     "%s Cavity Barrier %d%s" % (name, z["index"] + 1, tag), name))
+        # A damp proof membrane on all four timbers of the frame, between each and the back
+        # of the cladding (drawn in the back 1 mm of the boards, as a gasket is, so nothing
+        # moves). The jamb closers are the opening's own, built already.
+        tags = {"%s Cavity %s %d%s" % (name, word, z["index"] + 1, tag): tag
+                for word, tag in (("Closer", "L"), ("Closer", "R"), ("Barrier", "H"), ("Barrier", "S"))}
+        for m in [m for m in meshes if m["ifc_type"] == "closer" and m["name"] in tags]:
+            m["dpm"] = True
+            meshes.append(_prism([list(q) for q in m["profile"]], float(m["depth"]) + float(m["thickness"]), DPM_T, frame, "dpm",
+                                 "%s Barrier DPM %d%s" % (name, z["index"] + 1, tags[m["name"]]), name))
+            dpm += 1
+        # And over the top of the two level timbers, the head's and the sill's, the full depth
+        # of the cavity: a level top is where water would otherwise stand.
+        for key, tag in (("head", "H"), ("sill", "S")):
+            if z[key]:
+                a, _lo, b, top = z[key]
+                meshes.append(_prism(_rect(a, top, b, top + DPM_T), cavity_start, cavity_t + DPM_T, frame, "dpm",
+                                     "%s Barrier DPM Top %d%s" % (name, z["index"] + 1, tag), name))
+                dpm += 1
+        # And down the window side of the two upright timbers, the jambs': the face that
+        # looks into the opening, behind the reveal lining.
+        for m in [m for m in meshes if m["ifc_type"] == "closer" and tags.get(m["name"]) in ("L", "R")]:
+            us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+            at = max(us) if tags[m["name"]] == "L" else min(us) - DPM_T
+            meshes.append(_prism(_rect(at, min(vs), at + DPM_T, max(vs)), cavity_start, cavity_t + DPM_T, frame, "dpm",
+                                 "%s Barrier DPM Side %d%s" % (name, z["index"] + 1, tags[m["name"]]), name))
+            dpm += 1
+        for m in meshes:
+            if m.get("elevation") != name or m["ifc_type"] not in UPRIGHTS or m.get("clip_v_at"):
+                continue
+            us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+            upright = max(vs) - min(vs) > max(us) - min(us)
+            a, lo, b, hi = z["clear"] if upright else z["solid"]
+            if min(us) < b - 0.5 and max(us) > a + 0.5 and min(vs) < hi - 0.5 and max(vs) > lo + 0.5:
+                m.setdefault("keep_clear", []).append([a, lo, b, hi])
+                if upright:
+                    cut.add(m["name"])
+    return {"openings": len(zones), "gap": zones[0]["gap"] if zones else 0.0, "cut": len(cut), "dpm": dpm}
 
 
 def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board, prof, base):

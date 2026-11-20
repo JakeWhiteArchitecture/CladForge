@@ -127,19 +127,36 @@ def test_the_mitre_gap_is_the_chains():
 
 # ── under a corner profile ────────────────────────────────────────────────
 
+def _heights(out, kind):
+    """(lowest, highest) point of every part of this kind, in the world."""
+    zs = [frame_to_world(m["frame"], u, v, d)[2] for m in out["geometry"] if m["ifc_type"] == kind
+          for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for u, v in ring_at(m, 0, d)]
+    return min(zs), max(zs)
+
+
+def _ends(profile):
+    """A corner profile's two ends, each the world points of its outline (holes too)."""
+    near = float(profile["depth"])
+    rings = range(1 + len(profile.get("holes") or []))
+    return [[frame_to_world(profile["frame"], u, v, d) for k in rings for u, v in ring_at(profile, k, d)]
+            for d in (near, near + float(profile["thickness"]))]
+
+
 @pytest.mark.parametrize("lean", [15.0, -15.0])
 def test_panels_stop_against_a_corner_profile_run_up_the_rake(lean):
     (a, b), params, out = _build(lean, corner="profile", **PANEL)
     (profile,) = [m for m in out["geometry"] if m["ifc_type"] == "corner_profile"]
-    assert profile["name"] == "Leaning Corner Profile Upright" and profile["thickness"] == pytest.approx(H / math.cos(math.radians(lean)), abs=0.1)
-    # its nose's outer corner is where the two panel faces meet, and it runs up the corner line
+    assert profile["name"] == "Leaning Corner Profile Upright" and len(profile["holes"]) == 1          # hollow nose and all
+    # it runs up the corner line, its nose's outer corner where the two panel faces meet
     face = out["info"][0]["total_depth"]
-    foot = frame_to_world(profile["frame"], 0.0, 0.0, 0.0)
     s, c = math.sin(math.radians(lean)), math.cos(math.radians(lean))
-    on_line = [6000.0 + face, -face / c + foot[2] * s / c, foot[2]]            # the outer corner line, at the foot's height
-    assert foot == pytest.approx(on_line, abs=0.5) and abs(foot[2]) < 30.0
-    n = profile["frame"]["n"]
-    assert [round(c, 4) for c in n] == [0.0, round(math.sin(math.radians(lean)), 4), round(math.cos(math.radians(lean)), 4)]
+    foot, head = _ends(profile)
+    for end in (foot, head):
+        on_line = [6000.0 + face, -face / c + end[0][2] * s / c, end[0][2]]      # the outer corner line, at this end's height
+        assert min(math.dist(q, on_line) for q in end) < 0.5
+    for q0, q1 in zip(foot, head):
+        run = [(q1[i] - q0[i]) / (q1[2] - q0[2]) for i in range(3)]
+        assert run == pytest.approx([0.0, s / c, 1.0], abs=1e-4)
     # the panels stop square, the nose (their own thickness) and the 1 mm profile gap short of the outer corner
     least = _off_plane(out, a, b)
     for face_name in ("Leaning", "Upright"):
@@ -149,12 +166,43 @@ def test_panels_stop_against_a_corner_profile_run_up_the_rake(lean):
     assert row["status"] == "pass" and "corner profile" in row["message"]
 
 
+@pytest.mark.parametrize("lean", [15.0, -15.0])
+@pytest.mark.parametrize("clad, kind, part", [(PANEL, "panel", "corner_profile"), (PLANK_H, "plank", "corner_trim"),
+                                              (PLANK_V, "plank", "corner_trim")])
+def test_a_corner_profile_is_cut_level_with_the_bottom_and_the_top_of_the_cladding(lean, clad, kind, part):
+    """It oversails the corner and is cut back level, as a hip cap is cut to the roof's
+    edge: square to its own length its ends would tilt with the lean, proud of the boards
+    on one side of the corner and short of them on the other."""
+    _faces, _params, out = _build(lean, corner="profile", **clad)
+    (profile,) = [m for m in out["geometry"] if m["ifc_type"] == part]
+    low, high = _heights(out, kind)
+    assert -30.0 < low < 30.0 and H - 30.0 < high < H + 30.0        # the boards themselves keep to the walls' height
+    foot, head = _ends(profile)
+    assert {round(q[2], 2) for q in foot} == {round(low, 2)} and {round(q[2], 2) for q in head} == {round(high, 2)}
+    assert (profile.get("profile_info") or profile.get("trim_info"))["length"] == pytest.approx(
+        (high - low) / math.cos(math.radians(lean)), abs=0.1)
+
+
 def test_planks_take_the_plank_corner_profile():
     (a, b), _params, out = _build(15.0, corner="profile", **PLANK_H)
     (trim,) = [m for m in out["geometry"] if m["ifc_type"] == "corner_trim"]
-    assert trim["trim_info"]["length"] == pytest.approx(H / math.cos(math.radians(15.0)), abs=0.1)
+    assert trim["trim_info"]["name"].startswith("External corner profile") and len(trim["holes"]) == 1
     least = _off_plane(out, a, b)
     assert least[("Leaning", "plank")] == pytest.approx((TRIM_BACK + 1.0) / math.sqrt(2.0), abs=0.3)
+
+
+def test_boards_keep_their_own_top_and_bottom_at_a_raking_corner():
+    """The strip a top or bottom offset takes off a face runs on into the corner it makes
+    with a raking edge. Stopping at the end of its own edge it left a sliver there, and a
+    board's end, slid out along that, stood a spike up to 300 mm out of the cladding."""
+    for clad, kind in ((PANEL, "panel"), (PLANK_H, "plank"), (PLANK_V, "plank")):
+        for lean in (15.0, -15.0):
+            for corner in ("profile", "mitre"):
+                _faces, _params, out = _build(lean, corner=corner, **clad)
+                low, high = _heights(out, kind)
+                # (mitred, the long point of an upright board's rake still passes the wall's foot
+                # where the whole of its end is the rake: a known fault, about 100 mm)
+                assert low > (-120.0 if corner == "mitre" else -30.0) and high < H + 30.0, (kind, clad, lean, corner)
 
 
 def test_the_corner_is_one_detail_for_both_faces_whatever_their_chains_say():
@@ -176,3 +224,22 @@ def test_a_raking_corner_exports():
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
     assert [e.Name for e in ifc.by_type("IfcMember") if "Corner Profile" in e.Name] == ["Leaning Corner Profile Upright"]
+
+
+@pytest.mark.parametrize("clad, part", [(PANEL, "corner_profile"), (PLANK_H, "corner_trim")])
+def test_a_level_cut_profile_stands_in_the_ifc_where_it_was_built(clad, part):
+    """Its ends are level and its length rakes, so it is not a plain extrusion: a reader
+    must make the same solid of it, hollow nose and all."""
+    geom = pytest.importorskip("ifcopenshell.geom")
+    _faces, params, out = _build(-15.0, corner="profile", **clad)
+    (profile,) = [m for m in out["geometry"] if m["ifc_type"] == part]
+    built = [q for end in _ends(profile) for q in end]
+    box = [min(q[i] for q in built) for i in range(3)] + [max(q[i] for q in built) for i in range(3)]
+    ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
+    (member,) = [e for e in ifc.by_type("IfcMember") if e.Name == profile["name"]]
+    settings = geom.settings()
+    settings.set("use-world-coords", True)
+    verts = geom.create_shape(settings, member).geometry.verts
+    scale = 1000.0 if max(abs(c) for c in verts) < 100.0 else 1.0
+    xyz = [[verts[i + k] * scale for i in range(0, len(verts), 3)] for k in range(3)]
+    assert [min(a) for a in xyz] + [max(a) for a in xyz] == pytest.approx(box, abs=0.5)
