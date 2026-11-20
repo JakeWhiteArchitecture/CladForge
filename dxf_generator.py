@@ -32,7 +32,7 @@ LAYERS = {
 }
 _LAYER_FOR_TYPE = {"batten": "BATTEN", "cross_batten": "BATTEN", "counter_batten": "COUNTER_BATTEN",
                    "sheathing": "SHEATHING", "insulation": "INSULATION", "panel": "CLADDING",
-                   "plank": "CLADDING", "closer": "CLOSER", "gasket": "GASKET",
+                   "plank": "CLADDING", "closer": "CLOSER", "gasket": "GASKET", "dpm": "CLOSER",
                    "deck": "SHEATHING", "seam": "CLADDING", "ridge_filler": "CLOSER"}
 _ELEV_GAP = 2500.0     # mm between elevations on the sheet
 _TEXT = 50.0           # mm dimension / note text height

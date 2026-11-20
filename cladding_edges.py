@@ -121,16 +121,51 @@ def classify_edges(elev, region):
     return out
 
 
+def _run_on(e, edges, w):
+    """The edge *e* as (p1, p2), run on past each end as far as its offset strip has to
+    reach to meet the next edge. A strip only as long as its edge leaves a sliver where the
+    edge meets a raking one at more than a right angle (a wall's top against a leaning
+    corner, an eaves against a hip): the triangle between the strip's square end and the
+    raking edge. Everything trimmed to the face then has a spur in that corner."""
+    (ax, ay), (bx, by) = e["p1"], e["p2"]
+    size = math.hypot(bx - ax, by - ay)
+    if size < 1e-6:
+        return [e["p1"], e["p2"]]
+    dx, dy = (bx - ax) / size, (by - ay) / size
+
+    def reach(at, other, sign):
+        # the neighbour at this end, as a direction leaving the corner; the face is on the left
+        for o in edges:
+            if o is e:
+                continue
+            near, far = (o["p2"], o["p1"]) if sign < 0 else (o["p1"], o["p2"])
+            if abs(near[0] - at[0]) > 0.02 or abs(near[1] - at[1]) > 0.02:
+                continue
+            ox, oy = far[0] - near[0], far[1] - near[1]
+            length = math.hypot(ox, oy)
+            if length < 1e-6:
+                continue
+            ox, oy = ox / length, oy / length
+            along = (ox * dx + oy * dy) * sign                # how far it carries on the edge's way
+            inward = -ox * dy + oy * dx                       # and into the face
+            if along > 0.02 and inward > 0.05:
+                return min(w * along / inward, 20.0 * w, length)
+        return 0.0
+    back, on = reach(e["p1"], None, -1.0), reach(e["p2"], None, 1.0)
+    return [[ax - back * dx, ay - back * dy], [bx + on * dx, by + on * dy]]
+
+
 def offset_region(elev, region, edges=None):
     """*region* with a strip taken off along every top, side and bottom edge, as wide as
     that edge's offset, so everything trimmed to it stands back from the edge."""
     s = settings(elev)
     cuts = []
-    for e in edges if edges is not None else classify_edges(elev, region):
+    edges = edges if edges is not None else classify_edges(elev, region)
+    for e in edges:
         w = s.get(e["kind"], 0.0) if e["kind"] in EDGE_DEFAULTS else 0.0
         if w > 0:
             try:
-                cuts.append(LineString([e["p1"], e["p2"]]).buffer(w, cap_style=2))
+                cuts.append(LineString(_run_on(e, edges, w)).buffer(w, cap_style=2))
             except Exception:   # noqa: BLE001 — a degenerate edge just goes without
                 continue
     if not cuts:
@@ -157,7 +192,8 @@ def opening_details(elev, p):
     """[(rect, detail)] for every window and door, detail {"jamb", "jamb_master", "head",
     "head_master"} as chosen on the elevation (elev["opening_details"], by opening_key)
     or mitred by default. Both jambs of an opening share one detail and one arrangement,
-    mirrored; the head has its own. Master and Profile are panel details: with planks
+    mirrored; the head has its own. "barriers": closed with cavity barriers on all four
+    sides (cladding_geometry.barrier_zones), as the chain is set or as set on the opening. Master and Profile are panel details: with planks
     the corner stays mitred; Profile is offered with plank boards too (the Marley-type
     profile), not with standing seam."""
     chosen = elev.get("opening_details") or {}
@@ -166,6 +202,8 @@ def opening_details(elev, p):
     out = []
     for rect in openings(elev):
         d = dict(OPENING_DEFAULT, **(chosen.get(opening_key(rect)) or {}))
+        # cavity barriers on all four sides: the chain's setting, or this opening's own
+        d["barriers"] = bool(d["barriers"] if d.get("barriers") is not None else p.get("barriers"))
         for part in ("jamb", "head"):
             if d[part] not in DETAILS or (d[part] == "lap" and not panel) or (d[part] == "profile" and seam):
                 d[part] = "mitre"
