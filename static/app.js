@@ -525,8 +525,10 @@ async function applyHeal(i) {
     if (!h) return;
     state.heals.splice(i, 1);
     showHeals();
-    h.a.heals = (h.a.heals || []).concat(h.quads.a);
-    h.b.heals = (h.b.heals || []).concat(h.quads.b);
+    // a strip, and the elements it was healed to: those do not cut it, everything else does (fabric_extract._extract)
+    const onto = m => m.picks.map(p => p.mesh.userData.index);
+    h.a.heals = (h.a.heals || []).concat(h.quads.a.map(quad => ({ quad, through: onto(h.b) })));
+    h.b.heals = (h.b.heals || []).concat(h.quads.b.map(quad => ({ quad, through: onto(h.a) })));
     // Two walls, or two slopes at a ridge, become one chain: a face that was given a chain
     // of its own for want of a neighbour goes back into its partner's before it is re-read.
     if ((h.kind === 'corner' || h.kind === 'ridge') && h.a.chain !== h.b.chain) {
@@ -554,7 +556,7 @@ function dismissHeal(i) {
 
 // The picked surface, ghosted: the faces clicked and the strips healed onto them.
 function pickHighlights(e) {
-    return e.picks.map(p => highlightFaces(p.mesh, p.faces)).concat((e.heals || []).length ? [quadMesh(e.heals, PICK_COLOR, highlightGroup)] : []);
+    return e.picks.map(p => highlightFaces(p.mesh, p.faces)).concat((e.heals || []).length ? [quadMesh(e.heals.map(h => h.quad), PICK_COLOR, highlightGroup)] : []);
 }
 
 async function linkIntoChain(e) {
@@ -802,7 +804,7 @@ async function extractOnce(e) {
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
     // strips healed onto it (applyHeal) are sent apart: they count as its surface, but nothing is cut out of them
-    const healed = (e.heals || []).flatMap(q => [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]);
+    const healed = (e.heals || []).flatMap(({ quad: q }) => [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]);
     const { elements: context, dropped, triangles: nTris } = contextFor(new Set(e.picks.map(p => p.mesh)), tris.concat(healed), 300, e.picks[0].normal);
     setStatus(`Extracting ${e.name}… ${tris.length} faces, ${context.length} nearby elements (${nTris} triangles)`
               + (dropped ? `, ${dropped} too far to fit` : ''), 'busy');

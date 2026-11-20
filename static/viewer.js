@@ -569,7 +569,7 @@ function contextFor(pickedMeshes, tris, margin, outward) {
         const t = meshTriangles(meta.mesh);
         if (used && used + t.length > CONTEXT_TRI_BUDGET) { dropped++; continue; }
         used += t.length;
-        elements.push({ type: meta.type, name: meta.name, tris: t });
+        elements.push({ type: meta.type, name: meta.name, id: meta.mesh.userData.index, tris: t });
     }
     return { elements, dropped, triangles: used };
 }
