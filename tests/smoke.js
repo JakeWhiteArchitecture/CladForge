@@ -1796,6 +1796,36 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || flush.under !== 'Elevation B,-10,10' || flush.over !== 'Elevation A,true' || flush.checks !== 2)
         throw new Error('the roof and the wall were not joined at an eaves with no overhang: ' + JSON.stringify(flush));
 
+    // Windows in standing seam (VMZ-SN-MA-RA-07): the sample house's south wall, clad in standing
+    // seam. Its window gets a sill capping on a board, dropping over the cladding below, whose
+    // top edge is turned out, and a drip strip at the head. The chain's Edges can switch them off.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'sample_house.ifc'));
+    await page.waitForFunction(() => state.model && allMeshes.length > 4 && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    await lookAt('South wall', [0, 0.35, 1]);
+    await picked(1);
+    await seamRoof();
+    await settle();
+    const windowParts = () => page.evaluate(() => {
+        const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
+        const count = re => names.filter(n => re.test(n)).length;
+        return { caps: count(/Sill Capping/), boards: count(/Sill Board/), strips: count(/Sill Strip/), lips: count(/Turn-out/),
+                 heads: count(/Head Strip/), setting: document.getElementById('edge-windows').value,
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /VMZ-SN-MA-RA-07/.test(t)).length };
+    });
+    const win = await windowParts();
+    console.log('windows in standing seam:', JSON.stringify(win));
+    if (win.caps !== 1 || win.boards !== 1 || win.strips !== 1 || win.lips < 2 || win.heads !== 1 || win.setting !== 'on' || win.check !== 1)
+        throw new Error('the window sill and head were not built: ' + JSON.stringify(win));
+    await page.selectOption('#edge-windows', 'none');
+    await settle();
+    const winOff = await windowParts();
+    if (winOff.caps || winOff.boards || winOff.lips || winOff.heads || winOff.check) throw new Error('the window sill and head did not switch off: ' + JSON.stringify(winOff));
+    await page.selectOption('#edge-windows', 'on');
+    await settle();
+    if ((await windowParts()).caps !== 1) throw new Error('the window sill did not come back');
+
     console.log('SMOKE OK');
     await browser.close();
 }

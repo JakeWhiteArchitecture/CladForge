@@ -8,7 +8,9 @@ of an upright wall clad in standing seam:
     piece** lies on it from the frame, where it is turned up, out over the front, and drops
     in front of the cladding below to cover its head by SILL_COVER (60, dimensioned),
     clear of the tips of that cladding's seams and hemmed at its foot. **The continuous
-    folded strip** under its front edge holds it.
+    folded strip** under its front edge holds it. **The top edge of the cladding below is
+    turned out**: each tray under the sill ends in a lip folded outward, as far as the
+    tips of its seams, behind the capping's drop (the tray's own sheet, marked as its).
   * **The head**: **the continuous strip** behind the foot of the cladding over the opening,
     which that cladding's sheet is welted round: it hangs HEAD_DRIP below the trays' feet
     as the drip. And **the continuous welt piece** under the head lining, WELT_BACK out from
@@ -130,7 +132,20 @@ def window_parts(meshes, p, infos):
                 extra.append(_prism(tidy(board), 0.0, u1 - u0, place(v0), "sill_board", "%s Sill Board %d" % (name, k + 1), name))
                 for ring, what in ((strip, "Sill Strip"), (cap, "Sill Capping")):
                     extra.append(_prism(tidy(ring), 0.0, u1 - u0, place(v0), "window_flashing", "%s %s %d" % (name, what, k + 1), name))
-                made["sill"] = {"fall": SILL_FALL, "cover": SILL_COVER, "foot": round(v0 + foot, 1),
+                # the top edge of the cladding below, turned out: a lip on each tray under the sill, its own sheet
+                lips = 0
+                for m in trays:
+                    us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+                    a, b, top = max(min(us), u0), min(max(us), u1), max(vs)
+                    if b - a < 1.0 or not (v0 - 200.0 < top <= v0 + 1.0):
+                        continue
+                    lip = _sheet([(face, top - v0 - t / 2.0), (face + seam_h, top - v0 - t / 2.0)], t)
+                    part = _prism(tidy(lip), 0.0, b - a, dict(place(v0), origin=frame_to_world(frame, a, v0, 0.0)),
+                                  "window_flashing", "%s Turn-out %d" % (m["name"], k + 1), name)
+                    part.update(tray_sheet=True, of=m["name"], color=m.get("color", part["color"]))
+                    extra.append(part)
+                    lips += 1
+                made["sill"] = {"fall": SILL_FALL, "cover": SILL_COVER, "foot": round(v0 + foot, 1), "turned_out": lips,
                                 "out": round(face + seam_h + SILL_CLEAR + t, 1), "length": round(u1 - u0, 1)}
                 info.setdefault("window_strips", []).append([[u0, v0 + foot], [u1, v0 + foot], [u1, v0 + SILL_BOARD], [u0, v0 + SILL_BOARD]])
             if above:
