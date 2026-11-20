@@ -18,10 +18,10 @@ T = math.tan(math.radians(30.0))
 S, C = math.sin(math.radians(30.0)), math.cos(math.radians(30.0))
 
 
-def _extract(name, tris, normal, heals=()):
-    """*heals*: strips healed onto the face, as the app sends them."""
-    return extract_elevation({"name": name, "faces": tris, "heals": list(heals), "outward": list(normal), "context": [],
-                              "options": {"debug": False, "clad_depth": 150.0}})
+def _extract(name, tris, normal, heals=(), trims=()):
+    """*heals*: strips healed onto the face, as the app sends them; *trims*: outlines trimmed off it."""
+    return extract_elevation({"name": name, "faces": tris, "heals": list(heals), "trims": list(trims), "outward": list(normal),
+                              "context": [], "options": {"debug": False, "clad_depth": 150.0}})
 
 
 def _fan(plan, height):
@@ -42,9 +42,9 @@ def _hip(short, heal=None):
             _extract("Roof C", c, (-S, 0, C), heal["b"] if heal else ()))
 
 
-def _wall(name, p0, p1, outward, extra=()):
+def _wall(name, p0, p1, outward, extra=(), heals=(), trims=()):
     q = [[p0[0], p0[1], 0.0], [p1[0], p1[1], 0.0], [p1[0], p1[1], 3000.0], [p0[0], p0[1], 3000.0]]
-    return _extract(name, [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] + list(extra), outward)
+    return _extract(name, [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] + list(extra), outward, heals, trims)
 
 
 def test_two_slopes_short_of_their_hip_can_be_healed():
@@ -163,8 +163,10 @@ def test_a_wall_healed_up_to_a_roof_stops_under_the_plywood_that_oversails_it():
     healed = wall([{"quad": heal["a"][0], "through": [7], "under": True}])     # as the app sends it: by id, healed up under it
     assert healed["height"] == pytest.approx(soffit, abs=0.1)          # under the plywood, where it is lowest over the build-up
     assert sorted(healed["healed"][0]) == [[0.0, 0.0, 2900.0], [6000.0, 0.0, 2900.0]] and len(healed["healed"]) == 1
-    assert heal_link(healed, roof) is None                             # it stands at the line: not offered again
-    assert heal_link(dict(healed, healed=[]), roof) is not None        # (which is what says so: its outline alone is short of it)
+    again = heal_link(healed, roof)                                    # it stands at the line: the wall is not offered again
+    assert again["a"] == [] and again["b"] == [] and again["gap"] == 0.0
+    assert again["trim"]["b"] and again["trim"]["a"] == []             # what is left to offer is the roof's edge, past the wall: to trim
+    assert heal_link(dict(healed, healed=[]), roof)["a"]               # (which is what says so: its outline alone is short of it)
     # a notch for each rafter, as wide as it, from its underside at the cladding's outside surface right through to the top
     (outline,) = healed["polygons"]
     notch_feet = sorted(q[0] for q in outline["exterior"] if abs(q[1] - foot) < 0.5)
@@ -192,3 +194,68 @@ def test_a_wall_healed_up_to_a_roof_stops_under_the_plywood_that_oversails_it():
     # and with nothing said about what it was healed to, the plywood cuts it
     for cut in (wall([heal["a"][0]]), wall(faces=_strips(heal["a"]))):
         assert cut["height"] <= 2900.0 - t_ply + 0.1
+
+
+# ── trimming: faces that run on past the line they meet on ────────────────
+
+def _corner(over_a=0.0, over_b=0.0, short_b=0.0, trims_a=(), trims_b=(), heals_b=()):
+    """Two walls at an external corner at (4000, 0): A along y = 0 looking south, B along
+    x = 4000 looking east. *over*: how far each is drawn on past the corner; *short_b*:
+    how far B stops short of it instead."""
+    a = _wall("A", (0, 0), (4000 + over_a, 0), (0, -1, 0), trims=trims_a)
+    b = _wall("B", (4000, 0 - over_b + short_b), (4000, 3000), (1, 0, 0), heals=heals_b, trims=trims_b)
+    return a, b
+
+
+def test_two_walls_drawn_on_past_their_corner_can_be_trimmed_back_to_it():
+    """Each runs through the other's plane, so neither has an edge on the line and they are
+    not joined. There is nothing to extend: the offer is to trim what is past the line."""
+    a, b = _corner(600.0, 500.0)                                       # further than a wall's thickness (CORNER_TOL), which is a corner as it stands
+    assert chain_link(a, b) is None and chain_link(*_corner(300.0, 250.0))
+    heal = heal_link(a, b)
+    assert heal["a"] == [] and heal["b"] == [] and heal["gap"] == 0.0 and heal["length"] == 3000.0
+    trim = heal["trim"]
+    assert trim["kind"] == "corner" and trim["over"] == 600.0 and trim["add"] == {"a": [], "b": []}
+    (ra,), (rb,) = trim["a"], trim["b"]
+    assert sorted({(p[0], p[1]) for p in ra}) == [(4000.0, 0.0), (4600.0, 0.0)] and sorted({p[2] for p in ra}) == [0.0, 3000.0]
+    assert sorted({(p[0], p[1]) for p in rb}) == [(4000.0, -500.0), (4000.0, 0.0)]
+    assert len(trim["show"]) == 4 and all(len(q) == 4 and q[2] == q[3] for q in trim["show"])   # two triangles a face, as the app draws them
+    ta, tb = _corner(600.0, 500.0, trims_a=trim["a"], trims_b=trim["b"])
+    assert (ta["width"], tb["width"]) == (4000.0, 3000.0) and ta["area"] == pytest.approx(4000.0 * 3000.0, abs=200.0)
+    link = chain_link(ta, tb)
+    assert link and link["external"] and abs(link["angle"]) == 90.0
+    assert heal_link(ta, tb) is None                                   # joined: nothing left to offer
+
+
+def test_one_wall_past_the_corner_and_the_other_on_it_or_short_of_it():
+    a, b = _corner(500.0)                                              # B ends on the line already
+    heal = heal_link(a, b)
+    assert heal["a"] == [] and heal["b"] == [] and heal["trim"]["a"] and heal["trim"]["b"] == []
+    assert chain_link(*_corner(500.0, trims_a=heal["trim"]["a"]))
+    a, b = _corner(500.0, short_b=200.0)                               # B stops short: two ways to bring them together
+    heal = heal_link(a, b)
+    assert heal["kind"] == "abutment" and len(heal["b"]) == 1 and heal["a"] == [] and heal["gap"] == 200.0   # extend B to A, as before
+    trim = heal["trim"]                                                # or trim A back to the corner and bring B to it
+    assert trim["kind"] == "corner" and trim["a"] and trim["b"] == [] and trim["add"] == {"a": [], "b": heal["b"]}
+    ta, tb = _corner(500.0, short_b=200.0, trims_a=trim["a"], heals_b=[{"quad": q} for q in trim["add"]["b"]])
+    assert chain_link(ta, tb) and heal_link(ta, tb) is None
+    assert heal_link(b, a)["trim"]["b"] == trim["a"]                   # asked the other way round, the same
+
+
+def test_only_an_overshoot_is_trimmed_not_a_face_that_really_crosses():
+    from fabric_extract import HEAL_TRIM_MAX
+    assert heal_link(*_corner(HEAL_TRIM_MAX, 500.0))["trim"]["over"] == HEAL_TRIM_MAX
+    assert heal_link(*_corner(HEAL_TRIM_MAX + 50.0, 500.0)) is None    # past the line by more than an overshoot: left alone
+    a = _wall("A", (0, 0), (4000, 0), (0, -1, 0))                      # a wall crossing another's middle: neither side is the lesser
+    assert heal_link(a, _wall("X", (2000, -400), (2000, 400), (1, 0, 0))) is None
+
+
+def test_a_roofs_edge_past_the_wall_it_lands_on_can_be_trimmed_to_it():
+    roof = _extract("Roof", _fan([(0, -300), (6000, -300), (6000, 3000), (0, 3000)], lambda x, y: 2700.0 + y * T), (0, -S, C))
+    wall = _extract("Wall", _fan([(0, 0), (6000, 0)], lambda x, y: 0.0)[:0] + [[[0, 0, 0], [6000, 0, 0], [6000, 0, 2700]], [[0, 0, 0], [6000, 0, 2700], [0, 0, 2700]]], (0, -1, 0))
+    heal = heal_link(roof, wall)
+    assert heal["a"] == [] and heal["b"] == [] and heal["trim"]["kind"] == "edge"
+    (ring,) = heal["trim"]["a"]
+    assert sorted({round(p[1]) for p in ring}) == [-300, 0] and heal["trim"]["over"] == pytest.approx(300.0 / C, abs=0.1)
+    cut = _extract("Roof", _fan([(0, -300), (6000, -300), (6000, 3000), (0, 3000)], lambda x, y: 2700.0 + y * T), (0, -S, C), trims=heal["trim"]["a"])
+    assert cut["height"] == pytest.approx(3000.0 / C, abs=0.1) and heal_link(cut, wall) is None
