@@ -16,10 +16,11 @@ from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip
 from cladding_edges import mitre_to_linings, finish_seams, break_at_seams
 from cladding_checks import check_rules as _check_rules
 from cladding_ridge import ridge_ends, ridge_parts
-from cladding_verge import verge_parts
+from cladding_verge import verge_parts, join_verges
 from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
+from cladding_head import head_ridges, head_parts
 from cladding_rake import rake_ends, rake_parts
 from cladding_lod import at_lod, masses, tag  # noqa: F401 — at_lod is the app's and the exporters'
 from cladding_match import plan_matches
@@ -115,6 +116,7 @@ def build_all_groups(params):
     """(meshes, dims, infos) for every face, each group with its chain's settings, untrimmed:
     the exporters' quick source of dimensions and setting-out info."""
     meshes, dims, infos = [], [], []
+    join_verges(params)      # a verge over a clad wall: how far its plywood oversails
     join_eaves(params)
     for p, ready in _groups(params):
         m, d, i = _build_all(p, ready)
@@ -124,6 +126,7 @@ def build_all_groups(params):
 
 def generate_preview(params):
     meshes, dims, infos = [], [], []
+    join_verges(params)      # a verge over a clad wall: how far its plywood oversails
     join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
     for p, ready in _groups(params):
         m, d, i = _preview_one(p, ready)
@@ -145,6 +148,7 @@ def _preview_one(p, ready=None):
     # holes left by trimming are mitred as well as the ends that land on a jamb.
     meshes = mitre_to_linings(meshes, p, infos)
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
+    head_ridges(p)                       # a monopitch's head verge is cut as half a ridge
     meshes = ridge_ends(meshes, p, infos)    # two slopes meeting at a ridge: cut to it, the vent slot left
     meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
     meshes = hip_ends(meshes, p, infos)      # two slopes meeting at a hip: the same, along a sloping line
@@ -155,6 +159,7 @@ def _preview_one(p, ready=None):
     meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
     meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
     meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
+    meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
     meshes = break_at_seams(meshes, p)       # last: each tray's flat drawn back to its own upstand, clear of the next tray's
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
