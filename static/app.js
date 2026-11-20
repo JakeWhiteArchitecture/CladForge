@@ -478,7 +478,7 @@ function relayoutChain(chain) {
 // cross. The tick adds them to the faces (as picked surface, so everything downstream sees
 // one face that reaches the line) and extracts both again, which is what joins them; the
 // cross leaves that pair alone from then on.
-const HEAL_KINDS = { corner: 'a corner', ridge: 'a ridge', hip: 'a hip', valley: 'a valley', rake: 'a raking corner', edge: 'an edge (no junction is detailed between a wall and a pitched face yet)' };
+const HEAL_KINDS = { corner: 'a corner', ridge: 'a ridge', hip: 'a hip', valley: 'a valley', rake: 'a raking corner', edge: 'an edge (no junction is detailed between a roof and a wall)', abutment: 'an abutment (the other face runs on past it, and is left as it is)' };
 const healKey = (a, b) => [a.name, b.name].sort().join(' | ');
 function showHeals() {
     state.heals = (state.heals || []).filter(h => state.elevations.includes(h.a) && state.elevations.includes(h.b));
@@ -792,14 +792,15 @@ async function extractOnce(e) {
     showHeals();
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
-    for (const q of e.heals || []) tris.push([q[0], q[1], q[2]], [q[0], q[2], q[3]]);     // strips healed onto it (applyHeal)
-    const { elements: context, dropped, triangles: nTris } = contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300, e.picks[0].normal);
+    // strips healed onto it (applyHeal) are sent apart: they count as its surface, but nothing is cut out of them
+    const healed = (e.heals || []).flatMap(q => [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]);
+    const { elements: context, dropped, triangles: nTris } = contextFor(new Set(e.picks.map(p => p.mesh)), tris.concat(healed), 300, e.picks[0].normal);
     setStatus(`Extracting ${e.name}… ${tris.length} faces, ${context.length} nearby elements (${nTris} triangles)`
               + (dropped ? `, ${dropped} too far to fit` : ''), 'busy');
     e.error = null;
     renderElevationList();
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
-    const payload = { name: e.name, faces: tris, outward: e.picks[0].normal, context,
+    const payload = { name: e.name, faces: tris, heals: e.heals || [], outward: e.picks[0].normal, context,
                       seeds: e.picks.map(p => p.point).filter(Boolean),
                       options: { penetrations: document.getElementById('penetrations').checked, wall_depth: wallDepth(e.picks) } };
     const json = JSON.stringify(payload);
