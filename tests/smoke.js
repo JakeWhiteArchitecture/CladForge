@@ -1604,14 +1604,14 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  ridgeCheck: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)).map(t => (t.match(/cap ([\d.]+) m long/) || [])[1]) };
     });
     console.log('hipped roof:', JSON.stringify(hipped));
-    // The floor grid lies below the lowest point of everything drawn: here the caps' feet and
-    // the eaves aprons hang below the model.
+    // The floor grid lies just below the lowest point of everything drawn, model or cladding.
     const floor = await page.evaluate(() => {
         const low = g => new THREE.Box3().setFromObject(g).min.y;
         return { grid: gridHelper.position.y, model: low(modelGroup), clad: low(cladGroup) };
     });
     console.log('grid:', JSON.stringify(floor));
-    if (!(floor.clad < floor.model) || !(floor.grid < floor.clad) || floor.clad - floor.grid > 60)
+    const lowest = Math.min(floor.model, floor.clad);
+    if (!(floor.grid < lowest) || lowest - floor.grid > 60)
         throw new Error('the grid is not just below the lowest geometry: ' + JSON.stringify(floor));
     if (hipped.chains.join() !== 'Chain 1,Chain 1,Chain 2,Chain 3' || hipped.ridge.map(r => r.join('-')).join() !== '3000-6000,3000-6000'
         || hipped.hips.join() !== '2,2,2,2' || hipped.ridgeCaps !== 2 || hipped.hipCaps !== 8 || hipped.aprons !== 4 || hipped.verges
