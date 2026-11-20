@@ -838,6 +838,54 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (!/^IFC4X3/.test(firstSchema || '') || secondSchema !== 'IFC4' || ifcLabel.trim() !== 'Download IFC4')
         throw new Error('IFC version choice: ' + firstSchema + ' / ' + ifcLabel + ' / ' + secondSchema);
     await page.selectOption('#ifc_schema', 'IFC4X3');
+    // Level of development: the LOD button redraws the same build as flat sheets (100), plain
+    // boards and battens (200) or everything (300), without rebuilding; and the IFC can be
+    // written at any one of them, or all three at once as three files.
+    const lod = await page.evaluate(() => {
+        const count = () => { let n = 0; cladGroup.children.forEach(g => { n += g.children.filter(c => c.isMesh).length; }); return n; };
+        const full = count();
+        document.querySelector('#lod-switch button[data-lod="200"]').click(); const plain = count();
+        document.querySelector('#lod-switch button[data-lod="100"]').click(); const sheets = count();
+        const active = document.querySelector('#lod-switch button.active').dataset.lod;
+        document.querySelector('#lod-switch button[data-lod="300"]').click();
+        return { full, plain, sheets, active, back: count(), masses: window._lastPreview.masses.length, faces: state.elevations.length,
+                 tagged: window._lastPreview.geometry.every(m => m.lod === 200 || m.lod === 300),
+                 options: [...document.getElementById('ifc_lod').options].map(o => o.value).join() };
+    });
+    console.log('LOD view:', JSON.stringify(lod));
+    await page.evaluate(() => { frameElevation(state.elevations[0].result); setLayerVisible('faces', false); setLayerVisible('dims', false); });
+    for (const level of [100, 200, 300]) {
+        await page.evaluate(n => document.querySelector(`#lod-switch button[data-lod="${n}"]`).click(), level);
+        await page.waitForTimeout(500);
+        await page.screenshot({ path: path.join(__dirname, `smoke_lod${level}.png`) });
+    }
+    await page.evaluate(() => { setLayerVisible('faces', true); setLayerVisible('dims', true); });
+    if (lod.sheets !== lod.masses || lod.sheets < 1 || !(lod.plain < lod.full && lod.plain > lod.sheets) || lod.back !== lod.full
+        || lod.active !== '100' || !lod.tagged || lod.options !== '300,200,100,all')
+        throw new Error('the LOD switch did not redraw the build at each level: ' + JSON.stringify(lod));
+    await page.selectOption('#ifc_lod', 'all');
+    const lodFiles = [];
+    const keep = d => lodFiles.push(d);
+    page.on('download', keep);
+    await page.click('#ifc-btn');
+    await page.waitForSelector('#download-reminder.open', { timeout: 300000 });
+    await page.click('#download-reminder .btn-primary');
+    for (let i = 0; i < 100 && lodFiles.length < 3; i++) await page.waitForTimeout(100);
+    page.off('download', keep);
+    const lodSaid = [];
+    for (const d of lodFiles) {
+        const out = path.join(__dirname, 'smoke_out.' + d.suggestedFilename().replace(/^.*_(LOD\d+)\.ifc$/, '$1') + '.ifc');
+        await d.saveAs(out);
+        const text = fs.readFileSync(out, 'latin1');
+        lodSaid.push([d.suggestedFilename().replace(/^.*_(LOD\d+)\.ifc$/, '$1'), (text.match(/'LevelOfDevelopment',\$,IFCLABEL\('(LOD \d+)'\)/) || [])[1],
+                      (text.match(/IFCCOVERING|IFCMEMBER|IFCPLATE/g) || []).length].join(':'));
+    }
+    console.log('LOD export, all three:', lodSaid.join(' | '));
+    const sizes = lodSaid.map(s => +s.split(':')[2]);
+    if (lodSaid.length !== 3 || !/^LOD100:LOD 100:/.test(lodSaid[0]) || !/^LOD200:LOD 200:/.test(lodSaid[1]) || !/^LOD300:LOD 300:/.test(lodSaid[2])
+        || !(sizes[0] < sizes[1] && sizes[1] < sizes[2]))
+        throw new Error('the IFC was not written at all three levels: ' + lodSaid.join(' | '));
+    await page.selectOption('#ifc_lod', '300');
     // Corners: the chain's corner row, the master-lap detail and the master swap.
     await page.click('#cladding-type .turn-btn[data-value="panel"]');
     await settle();
