@@ -22,11 +22,13 @@ from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
 from cladding_rake import rake_ends, rake_parts
+from cladding_match import plan_matches
 
 
-def _build_all(p):
-    meshes, dims, infos = [], [], []
+def _prepare(p):
+    """One group's faces made ready to build: (the faces, clipped; the chains' layout)."""
     live = [clip_elevation(e) for e in p["elevations"] if e.get("ok", True) and e.get("polygons")]
+    live = [dict(e) for e in live]      # this build's own: what it notes on a face does not outlast it
     p["elevations"] = live      # the outline, splash bands and trimming all follow the clip
     layout = chain_layout(live, buildup_depth(p), corner_detail(p))
     # One course datum per chain: where the chosen member starts cladding (the elevation
@@ -44,11 +46,31 @@ def _build_all(p):
         if elev.get("chain") in datums:
             elev["course_datum_z"] = datums[elev["chain"]]
             elev["course_datum_locked"] = elev["chain"] in chosen
+    return live, layout
+
+
+def _build_all(p, ready=None):
+    """Every face of one group, built. *ready*: the group as _prepare left it, where the
+    caller has done that already (_groups)."""
+    meshes, dims, infos = [], [], []
+    live, layout = ready or _prepare(p)
     for elev in live:
         m, d, i = build_elevation(p, elev, layout.get(elev.get("name")))
         meshes, dims = meshes + m, dims + d
         infos.append(i)
     return meshes, dims, infos
+
+
+def _groups(params):
+    """[(p, (faces, layout))]: every settings group parsed and made ready, and each face
+    given the batten lines of the chain directly above or below it (cladding_match)."""
+    out = []
+    for sub, _elevs in setting_groups(params):
+        p = _parse(sub)
+        out.append((p, _prepare(p)))
+    plan_matches([(p, live, layout) for p, (live, layout) in out],
+                 [e.get("name") for e in params.get("elevations") or []], build_elevation)
+    return out
 
 
 def setting_groups(params):
@@ -94,8 +116,8 @@ def build_all_groups(params):
     the exporters' quick source of dimensions and setting-out info."""
     meshes, dims, infos = [], [], []
     join_eaves(params)
-    for sub, _elevs in setting_groups(params):
-        m, d, i = _build_all(_parse(sub))
+    for p, ready in _groups(params):
+        m, d, i = _build_all(p, ready)
         meshes, dims, infos = meshes + m, dims + d, infos + i
     return meshes, dims, infos
 
@@ -103,16 +125,16 @@ def build_all_groups(params):
 def generate_preview(params):
     meshes, dims, infos = [], [], []
     join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
-    for sub, _elevs in setting_groups(params):
-        m, d, i = _preview_one(sub)
+    for p, ready in _groups(params):
+        m, d, i = _preview_one(p, ready)
         meshes, dims, infos = meshes + m, dims + d, infos + i
     return {"geometry": _ensure_unique_names(meshes), "dimensions": dims, "info": infos}
 
 
-def _preview_one(params):
-    """One group of faces sharing their settings, built, trimmed, mitred and finished."""
-    p = _parse(params)
-    meshes, dims, infos = _build_all(p)
+def _preview_one(p, ready=None):
+    """One group of faces sharing their settings (*p*, parsed), built, trimmed, mitred and
+    finished."""
+    meshes, dims, infos = _build_all(p, ready)
     if p["trim"]:
         meshes = apply_boolean_ops(meshes, p)
     meshes = valley_cut(meshes, p)       # the cladding stands back from a valley, before its seams are finished
