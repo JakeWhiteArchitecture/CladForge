@@ -13,7 +13,7 @@ import pytest  # noqa: E402
 import ifcopenshell  # noqa: E402
 
 from cladding_checks import check_rules  # noqa: E402
-from cladding_constants import frame_to_world  # noqa: E402
+from cladding_constants import frame_to_world, world_to_frame  # noqa: E402
 from cladding_eaves import (EAVES_TRAY, EAVES_NOSE, EAVES_LAP, EAVES_DROP, EAVES_CLEAR, EAVES_OVER, EAVES_WALL_LAP, EAVES_HOOK, EAVES_SUPPORT_LEG,  # noqa: E402
                             apron_drop, wall_stop, has_eaves)
 from cladding_constants import _parse  # noqa: E402
@@ -64,7 +64,7 @@ def _in_section(out, part):
 
 
 def test_the_zinc_turns_round_the_end_of_the_plywood_comes_back_under_it_and_drops_into_a_drip():
-    """As sketched: the plywood runs on past the drip's line; the zinc comes down its top,
+    """As sketched: the plywood runs on past the drip's line; the trays' sheet goes on
     round its end in a half circle and back under it, then drops plumb over a support
     profile fixed under the plywood, and is hooked back under at the foot."""
     _params, out = _one(elev={"verge": "none"})
@@ -129,7 +129,7 @@ def test_at_a_hip_the_eaves_ends_follow_the_hip_cut():
     """Each slope of a hipped corner has its eaves; a tray cut to the hip carries that cut on
     down its overhang, and only a level bottom edge is an eaves: the hip is not one."""
     _link, params, out = _hipped(elev={"eaves": "on"}, **SEAM)
-    assert sorted(m["name"] for m in _aprons(out)) == ["Roof A Eaves Apron 1", "Roof C Eaves Apron 1"]
+    assert sorted(m["name"] for m in _aprons(out)) == ["Roof A Eaves Drip 1", "Roof C Eaves Drip 1"]
     for face in ("Roof A", "Roof C"):
         assert _bottoms(out, "plank", face) == [-EAVES_TRAY]
     corner = min((m for m in out["geometry"] if m["ifc_type"] == "plank" and m["elevation"] == "Roof A"),
@@ -146,8 +146,8 @@ def test_an_eaves_exports():
     _params, out = _one(elev={"verge": "none"})
     params = _params
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
-    (apron,) = [e for e in ifc.by_type("IfcCovering") if "Eaves Apron" in e.Name]
-    assert apron.PredefinedType == "ROOFING" and apron.ObjectType == "Eaves apron"
+    (apron,) = [e for e in ifc.by_type("IfcCovering") if "Eaves Drip" in e.Name]
+    assert apron.PredefinedType == "ROOFING" and apron.ObjectType == "Eaves drip"
     assert out["info"][0]["eaves_strips"] and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
 
 
@@ -269,3 +269,31 @@ def test_the_check_tells_both_faces():
     assert len(rows) == 2 and any("over Wall" in m and "laps it" in m for m in rows) and any("under the eaves of Roof" in m for m in rows)
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
+
+
+def test_the_drip_is_the_trays_own_sheet_and_the_cutting_list_has_each_tray_that_much_longer():
+    """The drip is the same coil as the roof covering: it starts where the trays' flat ends,
+    in their own layer, with nothing lying under them; and each tray at the eaves is cut
+    longer by the sheet that goes round the plywood's end and down into the drip."""
+    from cladding_nesting import plank_pieces
+    params, out = _one(elev={"verge": "none"})
+    (drip,) = _aprons(out)
+    trays = [m for m in out["geometry"] if m["ifc_type"] == "plank"]
+    back, t = min(m["depth"] for m in trays), drip["eaves_info"]["thickness"]
+    assert drip.get("tray_sheet") and EAVES_LAP == 0.0 and drip["eaves_info"]["lap"] == 0.0
+    a = params["elevations"][0]
+    pts = [world_to_frame(a["frame"], frame_to_world(drip["frame"], x, y, 0.0)) for x, y in drip["profile"]]
+    foot = min(q[1] for m in trays for q in m["profile"])                    # where the trays' flat ends, down the slope
+    upper = [q for q in pts if q[2] > back - 3.0]                            # what of it is up at the trays' level
+    assert max(q[1] for q in upper) == pytest.approx(foot, abs=0.6), "it starts at the trays' ends: none of it lies up the roof under them"
+    start = [q[2] for q in upper if q[1] > foot - 0.6]
+    assert min(start) == pytest.approx(back, abs=0.05) and max(start) == pytest.approx(back + t, abs=0.05), "in the trays' own layer"
+    sheet = drip["eaves_info"]["sheet"]
+    assert 100.0 < sheet < 260.0
+    assert trays and all(m.get("cut_extra") == sheet for m in trays)
+    for q in plank_pieces(out["geometry"], {"Roof A"}, "vertical"):
+        m = next(m for m in trays if m["name"] == q["name"])
+        on_roof = max(p[1] for p in m["profile"]) - min(p[1] for p in m["profile"])
+        assert q["length"] == pytest.approx(on_roof + sheet, abs=0.2)
+    (row,) = [r["message"] for r in check_rules(params, out["info"]) if r["name"].endswith("Eaves")]
+    assert "the trays' own sheet" in row and "cut %.0f mm longer" % sheet in row

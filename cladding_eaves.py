@@ -8,11 +8,14 @@ the supplier's eaves detail. The face's bottom edge is the edge of the roof's ow
 
   * **The plywood runs on**: the deck under the trays is carried EAVES_NOSE down the slope
     past the drip's line, and the trays and their seams run to its end. Their outlines are
-    lengthened, so the cutting list has a tray as long as it is on the roof (the turn
-    round the end is not added). The battens and the layers under them stay at the edge.
-  * **The zinc**: a folded sheet under the trays' ends, EAVES_LAP up the plywood, that
-    turns round the plywood's end in a half circle, **comes back under the plywood**, then
-    drops plumb and is hooked back up at its foot: the drip (_eaves_rings).
+    lengthened, so the cutting list has a tray as long as it is on the roof, and the
+    turn round the end and the drip are added to it. The battens and the layers under them stay at the edge.
+  * **The drip is the trays' own sheet**, the same coil as the roof covering: at the
+    plywood's end each tray turns round it in a half circle, **comes back under the
+    plywood**, then drops plumb and is hooked back up at its foot (_eaves_rings). It is
+    drawn as one run along the eaves, starting where the trays' flat ends; each tray at
+    the eaves carries the sheet it takes ("cut_extra"), so the cutting list has the tray
+    as long as the coil it is cut from.
   * **The support profile**: what the zinc is dressed over. An angle, one leg fixed up
     under the plywood and one hanging plumb behind the zinc's drop.
   * The drip's line is where the plywood's underside stands over the roof's edge (the
@@ -49,7 +52,7 @@ from cladding_verge import ROOF_PITCH, VERGE_TRAY
 
 EAVES_NOSE = 40.0     # mm – the plywood, on past the drip's line, down the slope (assumed)
 EAVES_TRAY = EAVES_NOSE   # the trays run to the plywood's end, where the zinc turns round it
-EAVES_LAP = 100.0     # mm – the eaves zinc on the plywood under the trays, up from its end (assumed)
+EAVES_LAP = 0.0       # the drip is the trays' own sheet turned round the plywood's end: nothing lies under them
 EAVES_SUPPORT_T = 1.5  # mm – the support profile's metal (assumed)
 EAVES_SUPPORT_LEG = 60.0   # mm – its leg under the plywood, up the slope from the drip's line (assumed)
 EAVES_HOOK = 10.0     # mm – the zinc hooked back up behind the support's foot (assumed)
@@ -149,13 +152,15 @@ def wall_stop(depth, soffit, top, pitch):
     return min(0.0, soffit / c - depth * t) - top
 
 
-def _eaves_rings(top, soffit, t, pitch, below=EAVES_DROP):
-    """The eaves in section, as (the zinc's ring, the support profile's ring): x out from
-    the edge the roof runs to, down the slope, y the depth from the face.
+def _eaves_rings(tray, soffit, t, pitch, below=EAVES_DROP):
+    """The eaves in section, as (the zinc's ring, the support profile's ring, the zinc's
+    developed length): x out from the edge the roof runs to, down the slope, y the depth
+    from the face.
 
-    The plywood (its top *top* off the face, its underside *soffit*) runs EAVES_NOSE on
-    past the drip's line. **The zinc** comes down the plywood's top under the trays, turns
-    round the plywood's end in a half circle, **comes back under the plywood**, then
+    The plywood (its underside *soffit* off the face) runs EAVES_NOSE on past the drip's
+    line, under the trays (their backs *tray* off the face). **The zinc** is the trays'
+    own sheet carried on: from where their flat ends at the plywood's end it turns
+    round it in a half circle, **comes back under the plywood**, then
     drops plumb and is hooked back under at its foot: the drip. **The support profile** is
     what it is dressed over: an angle, one leg fixed up under the plywood and one hanging
     plumb, the zinc lying on the outside of that and hooked round its foot. *pitch*: the
@@ -172,7 +177,7 @@ def _eaves_rings(top, soffit, t, pitch, below=EAVES_DROP):
     flange = [(end - 5.0, soffit - ts / 2.0), (q[0] - EAVES_SUPPORT_LEG, soffit - ts / 2.0)]
     support = unary_union([LineString(leg).buffer(ts / 2.0, cap_style=2), LineString(flange).buffer(ts / 2.0, cap_style=2)])
     # the zinc
-    yt, yb = top + t, soffit - ts - t                      # on the plywood, and under the support's flange
+    yt, yb = tray + t / 2.0, soffit - ts - t               # the tray's own sheet, and under the support's flange
     r, yc = (yt - yb) / 2.0, (yt + yb) / 2.0
     arc = [(end + r * math.cos(math.radians(a)), yc + r * math.sin(math.radians(a))) for a in range(75, -76, -15)]
     off = ts + t                                           # the drop: on the outside of the support's leg
@@ -181,10 +186,11 @@ def _eaves_rings(top, soffit, t, pitch, below=EAVES_DROP):
     under = (line[0] + down[0] * k, yb) if k > 0 else (line[0], yb)
     foot = (line[0] + down[0] * (fall + off * s / c + 2.0 * t), line[1] + down[1] * (fall + off * s / c + 2.0 * t))
     hook = (foot[0] - away[0] * (ts + 3.0 * t), foot[1] - away[1] * (ts + 3.0 * t))
-    path = [(end - EAVES_LAP, yt), (end, yt)] + arc + [(end, yb), under, foot, hook, (hook[0] - down[0] * EAVES_HOOK, hook[1] - down[1] * EAVES_HOOK)]
+    path = [(end, yt)] + arc + [(end, yb), under, foot, hook, (hook[0] - down[0] * EAVES_HOOK, hook[1] - down[1] * EAVES_HOOK)]
     zinc = LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0)
     ring = lambda g: list(g.exterior.coords)[:-1]          # noqa: E731
-    return ring(zinc), ring(support if support.geom_type == "Polygon" else max(support.geoms, key=lambda g: g.area))
+    return (ring(zinc), ring(support if support.geom_type == "Polygon" else max(support.geoms, key=lambda g: g.area)),
+            LineString(path).length)
 
 
 def _fold_back(m, at):
@@ -256,6 +262,7 @@ def eaves_parts(meshes, p, infos):
                 ve = v - run
                 nose, drop_out, below = apron_drop(soffit, pitch, below)
                 end = ve - (drop_out - soffit * s) / c - nose           # the plywood's end, and the trays'
+                turned = []
                 for m in mine:
                     kind = m.get("ifc_type")
                     out = end if kind in ("plank", "seam", "deck") else v
@@ -269,21 +276,26 @@ def eaves_parts(meshes, p, infos):
                             _lower(q, [pts[x] for x in ((k - 1) % len(pts), (k + 1) % len(pts)) if not at[x]], out)
                     if kind == "seam":
                         _fold_back(m, at)                  # at this eaves the seams are always folded back
+                    elif kind == "plank":
+                        turned.append(m)                   # its sheet goes on round the plywood's end and into the drip
                 ring = lambda pts: [[round(x, 3), round(y, 3)] for x, y in                   # noqa: E731
                                     list(orient(Polygon([(x, sign * y) for x, y in pts]), 1.0).exterior.coords)[:-1]]
                 place = {"origin": frame_to_world(frame, a, ve, 0.0), "u": toward, "v": across, "n": along}
-                zinc, support = _eaves_rings(back - 1.0 - t, soffit, t, pitch, below)
+                zinc, support, sheet = _eaves_rings(back, soffit, t, pitch, below)
+                for m in turned:
+                    m["cut_extra"] = round(sheet, 1)       # the cutting list: the tray is cut this much longer
                 n += 1
-                apron = _prism(ring(zinc), 0.0, b - a, place, "eaves_strip", "%s Eaves Apron %d" % (name, n), name)
+                apron = _prism(ring(zinc), 0.0, b - a, place, "eaves_strip", "%s Eaves Drip %d" % (name, n), name)
+                apron["tray_sheet"] = True                 # not a sheet of its own: the trays', turned round the end
                 prop = _prism(ring(support), 0.0, b - a, dict(place), "eaves_strip", "%s Eaves Support %d" % (name, n), name)
                 prop.update(eaves_support=True, color="#eab308")
                 extra.append(prop)
                 apron["eaves_info"] = {"length": round(b - a, 1), "lap": EAVES_LAP, "nose": nose, "drop": round(below, 1),
-                                       "clear": round(drop_out, 1), "tray": EAVES_TRAY, "thickness": t,
+                                       "clear": round(drop_out, 1), "tray": EAVES_TRAY, "thickness": t, "sheet": round(sheet, 1),
                                        "over": over["with"] if over else None, "run": round(run, 1)}
                 extra.append(apron)
                 info.setdefault("eaves", []).append(dict(apron["eaves_info"], u0=round(a, 1), u1=round(b, 1), v=round(v, 1)))
-                info.setdefault("eaves_strips", []).append([[a, end], [b, end], [b, end + EAVES_LAP], [a, end + EAVES_LAP]])
+                info.setdefault("eaves_strips", []).append([[a, end - t], [b, end - t], [b, end + 2.0], [a, end + 2.0]])
     return meshes + extra
 
 

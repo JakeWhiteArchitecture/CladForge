@@ -55,7 +55,7 @@ _IFC_TYPE_MAP = {
     "ridge_filler":   ("IfcMember",   "USERDEFINED", "Vented ridge filler"),
     "verge_strip":    ("IfcCovering", "ROOFING",     "Verge strip"),
     "valley_gutter":  ("IfcCovering", "ROOFING",     "Valley gutter"),
-    "eaves_strip":    ("IfcCovering", "ROOFING",     "Eaves apron"),
+    "eaves_strip":    ("IfcCovering", "ROOFING",     "Eaves drip"),
 }
 _MATERIALS = {
     "batten": ("Timber (softwood) batten", "wood"), "counter_batten": ("Timber (softwood) batten", "wood"),
@@ -68,7 +68,7 @@ _MATERIALS = {
     "deck": ("Timber deck (softwood boarding or WBP plywood)", "wood"),
     "seam": ("Standing seam sheet", "metal"),
     "ridge_cap": ("Ridge cap sheet", "metal"), "ridge_filler": ("Vented foam filler", "rubber"),
-    "verge_strip": ("Verge strip sheet", "metal"), "valley_gutter": ("Valley gutter sheet", "metal"), "eaves_strip": ("Eaves apron sheet", "metal"),
+    "verge_strip": ("Verge strip sheet", "metal"), "valley_gutter": ("Valley gutter sheet", "metal"), "eaves_strip": ("Eaves drip (the trays' sheet)", "metal"),
 }
 
 
