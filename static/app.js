@@ -1231,7 +1231,7 @@ _json.dumps(_o)`);
         window._lastPreview = result;
         const byName = {};
         params.elevations.forEach(e => byName[e.name] = e);
-        renderGeometry(result.geometry);
+        renderGeometry(lodGeometry(result));
         renderOutlines(params.elevations, params.splash);
         const act = state.elevations[state.active];
         renderDimensions(result.dimensions, byName, act && act.result ? act.result.name : null);
@@ -1676,18 +1676,57 @@ function downloadName(ext) {
     try { n = parseInt(localStorage.getItem(key) || '0', 10) + 1; localStorage.setItem(key, String(n)); } catch (e) { /* private mode */ }
     return `CladForge_${stamp}_${n}.${ext}`;
 }
+// *blob*: one file, or several as [{blob, tag}] (an IFC at each level of development): they
+// share a name and number, each with its tag before the extension.
 function showReminder(blob, ext) { _pendingBlob = blob; _pendingExt = ext; document.getElementById('download-reminder').classList.add('open'); }
 function confirmDownload() {
     document.getElementById('download-reminder').classList.remove('open');
     if (!_pendingBlob) return;
-    const url = URL.createObjectURL(_pendingBlob), a = document.createElement('a');
-    a.href = url; a.download = downloadName(_pendingExt); document.body.appendChild(a); a.click();
-    document.body.removeChild(a); URL.revokeObjectURL(url); _pendingBlob = null;
+    const files = Array.isArray(_pendingBlob) ? _pendingBlob : [{ blob: _pendingBlob, tag: '' }];
+    const name = downloadName(_pendingExt), dot = name.lastIndexOf('.');
+    _pendingBlob = null;
+    window._lastDownloads = files.map(f => f.tag ? name.slice(0, dot) + '_' + f.tag + name.slice(dot) : name);
+    files.forEach((f, k) => setTimeout(() => {          // spaced out, or a browser keeps only the last
+        const url = URL.createObjectURL(f.blob), a = document.createElement('a');
+        a.href = url; a.download = window._lastDownloads[k]; document.body.appendChild(a); a.click();
+        document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }, 400 * k));
 }
 
 function busy(btn, on, label) {
     btn.disabled = on; btn.classList.toggle('btn-generating', on);
     btn.innerHTML = on ? '<span class="btn__text">' + label + '</span>' : btn.dataset.label;
+}
+
+// ─── LEVEL OF DEVELOPMENT ───
+// The same build shown at LOD 100 (one plain mass per face, exact at its extremities), 200 (the
+// boards, battens and layers, plain: no seam folds or junction metalwork) or 300 (everything).
+// The engine tags every mesh with the lowest level it is there at and sends LOD 100's sheets
+// beside them (cladding_lod.py: this is its at_lod), so switching redraws without rebuilding.
+// The cutting list, the checks and the setting-out always come from the full build.
+const LODS = [100, 200, 300];
+let viewLod = 300;
+function lodGeometry(result, lod) {
+    lod = lod || viewLod;
+    if (!result) return [];
+    if (lod === 100) return result.masses || [];
+    if (lod === 200) return (result.geometry || []).filter(m => (m.lod || 300) <= 200).map(m =>
+        m.ifc_type === 'seam' && m.vshift ? Object.assign({}, m, { vshift: null })
+        : (m.parts || m.section_ring) ? Object.assign({}, m, { parts: null, section_ring: null }) : m);
+    return result.geometry || [];
+}
+function setViewLod(lod) {
+    viewLod = LODS.includes(+lod) ? +lod : 300;
+    document.querySelectorAll('#lod-switch button').forEach(b => b.classList.toggle('active', +b.dataset.lod === viewLod));
+    if (window._lastPreview) {
+        renderGeometry(lodGeometry(window._lastPreview));
+        if (typeof tintPanels === 'function') tintPanels();
+    }
+}
+// What the IFC is written at: one level, or all three (three files).
+function ifcLods() {
+    const v = document.getElementById('ifc_lod').value;
+    return v === 'all' ? LODS.slice() : [LODS.includes(+v) ? +v : 300];
 }
 
 // The schema the IFC is written in (ifc_generator.IFC_SCHEMA_CHOICES): the button says which.
@@ -1709,20 +1748,28 @@ async function downloadIFC() {
     try {
         await ensureIfcOpenShell(btn);
         pyodide.globals.set('_params_json', JSON.stringify(params));
-        const proxy = await enginePy(`
+        // One build, written at each level asked for (cladding_lod.at_lod): a file per level.
+        const lods = ifcLods(), files = [];
+        for (const lod of lods) {
+            if (lods.length > 1) busy(btn, true, `Generating LOD ${lod}…`);
+            pyodide.globals.set('_ifc_lod', lod);
+            const proxy = await enginePy(`
 import json as _json, os as _os
-from cladding_preview import generate_preview as _gp
+from cladding_preview import generate_preview as _gp, at_lod as _at_lod
 from ifc_generator import meshes_to_ifc as _to_ifc
 _p = _json.loads(_params_json)
-_o = _gp(_p)
-_path = _to_ifc(_o["geometry"], _p, _o["info"])
+if int(_ifc_lod) == ${lods[0]}:
+    _o = _gp(_p)
+_path = _to_ifc(_at_lod(_o["geometry"], _o["masses"], int(_ifc_lod)), dict(_p, lod=int(_ifc_lod)), _o["info"])
 with open(_path, 'rb') as _f:
     _data = _f.read()
 _os.unlink(_path)
 _data`);
-        const blob = new Blob([proxy.toJs()], { type: 'application/x-step' });
-        if (proxy.destroy) proxy.destroy();
-        showReminder(blob, 'ifc');
+            files.push({ blob: new Blob([proxy.toJs()], { type: 'application/x-step' }),
+                         tag: lods.length > 1 || lod !== 300 ? 'LOD' + lod : '' });
+            if (proxy.destroy) proxy.destroy();
+        }
+        showReminder(files, 'ifc');
     } catch (err) { alert('IFC export failed: ' + err.message); }
     finally { busy(btn, false); }
 }
@@ -2097,7 +2144,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_lod', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();
