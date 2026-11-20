@@ -19,7 +19,7 @@ from cladding_preview import generate_preview  # noqa: E402
 from cladding_primitives import ring_at  # noqa: E402
 from cladding_ridge import RIDGE_GAP, RIDGE_LEG  # noqa: E402
 from fabric_extract import extract_elevation, head_link, eaves_link, valley_links  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 
 SEAM = dict(cladding_type="plank", plank_profile="seam", plank_orient="vertical")
 PANEL = dict(cladding_type="panel")
@@ -145,4 +145,4 @@ def test_the_check_says_what_it_is_and_when_the_cap_is_wider_than_the_g3():
     assert row["status"] == "warn" and "purpose-made head flashing" in row["message"]
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     assert [e.Name for e in ifc.by_type("IfcCovering") if "Head Verge Cap" in e.Name] == ["Roof Head Verge Cap"]
-    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
+    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
