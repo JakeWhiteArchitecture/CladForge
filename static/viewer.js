@@ -123,9 +123,16 @@ function clearGroup(group) {
 }
 
 // ─── WEB-IFC IMPORT ───
-async function initWebIfc() {
-    try { ifcApi = new WebIFC.IfcAPI(); await ifcApi.Init(); }
-    catch (err) { console.error('web-ifc init failed', err); ifcApi = null; }
+// ifcApi is set only once it has started: Init fetches its WASM, and an API handed out before
+// that finishes fails on its first call. webIfcReady settles when it has started, or failed to.
+let webIfcReady = null;
+const WEB_IFC_WAIT_MS = 30000;      // how long a file dropped while it is starting waits for it
+function initWebIfc() {
+    webIfcReady = (async () => {
+        try { const api = new WebIFC.IfcAPI(); await api.Init(); ifcApi = api; }
+        catch (err) { console.error('web-ifc init failed', err); ifcApi = null; }
+    })();
+    return webIfcReady;
 }
 
 let _typeNames = null;
@@ -185,6 +192,13 @@ function readLengthUnitScale(modelID) {
 // the server reader uses IfcOpenShell and builds geometry web-ifc cannot.
 
 async function readWithWebIfc(file, onStatus) {
+    // A file dropped while the browser importer is still starting waits for it, rather than
+    // going to the server: the file stays in the browser, and the two readers do not give
+    // quite the same model.
+    if (!ifcApi && webIfcReady) {
+        if (onStatus) onStatus('Starting the browser importer…');
+        await Promise.race([webIfcReady, new Promise(r => setTimeout(r, WEB_IFC_WAIT_MS))]);
+    }
     if (!ifcApi) throw new Error('web-ifc is still loading');
     onStatus('Parsing IFC in the browser…');
     const data = new Uint8Array(await file.arrayBuffer());

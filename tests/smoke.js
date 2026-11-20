@@ -87,7 +87,11 @@ async function main() {
 
     await page.setInputFiles('#ifc-file', path.join(__dirname, 'sample_house.ifc'));
     await page.waitForFunction(() => typeof allMeshes !== "undefined" && allMeshes.length > 0, null, { timeout: 120000 });
-    console.log('model:', await page.evaluate(() => document.getElementById('model-info').textContent));
+    const modelInfo = await page.evaluate(() => document.getElementById('model-info').textContent);
+    console.log('model:', modelInfo);
+    // The file goes in the moment the page has loaded, while web-ifc may still be starting:
+    // it has to wait for the browser importer, not fall back to the server.
+    if (!/Read by web-ifc/.test(modelInfo)) throw new Error('the model was not read in the browser: ' + modelInfo);
     await page.waitForFunction(() => (typeof pyReady !== "undefined" && pyReady === true) || (document.getElementById('status-chip').classList.contains('ready')), null, { timeout: 300000 });
     console.log('engine ready');
 
