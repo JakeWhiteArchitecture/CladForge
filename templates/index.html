@@ -161,6 +161,8 @@
                     <input type="number" id="edge-vergeOver" placeholder="auto" min="0" max="400" step="1" oninput="onEdgeField('vergeOver', this.value)"></div>
                 <div class="field"><label>Eaves drip <span class="unit">roof slopes: the level bottom edge, the trays turned round the plywood's end and down into a drip. Switch off where the slope runs into a wall or a gutter behind a parapet</span></label>
                     <select id="edge-eaves" onchange="onEdgeField('eaves', this.value)"><option value="on" selected>On</option><option value="none">None</option></select></div>
+                <div class="field"><label>Head verge <span class="unit">a monopitch's level top edge: a G3 cap over the trays' ends that turns down over the wall below</span></label>
+                    <select id="edge-head" onchange="onEdgeField('head', this.value)"><option value="auto" selected>Over a picked wall</option><option value="g3">On every level top edge</option><option value="none">None</option></select></div>
                 <div class="field"><label>Hip and ridge cap ends <span class="unit">an end that meets no other cap: run on and cut back to the roof's own edge (30 mm past the metal at the eaves), or cut square</span></label>
                     <select id="edge-capEnds" onchange="onEdgeField('capEnds', this.value)"><option value="edge" selected>Cut to the roof edge</option><option value="square">Square</option></select></div>
                 </div>
