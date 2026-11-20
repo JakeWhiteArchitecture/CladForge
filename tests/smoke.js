@@ -1679,6 +1679,46 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     if (healed.offers.length || healed.marks || healed.hips !== '1,1' || healed.widths !== '6000,6000' || healedCaps !== 2)
         throw new Error('the heal did not join the two slopes: ' + JSON.stringify(healed));
 
+    // A sixth model: a wall leaning back 15° and an upright wall round the corner from it. Two
+    // chains, joined at a raking corner: mitred, then under a corner profile when the job's
+    // corner is set to Profile.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'leaning_corner.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    const panelWall = () => page.evaluate(() => { openWizard(); WIZ.draft.type = 'panel'; wizBuild(); dismissLevels(); });
+    await lookAt('Leaning wall', [0.05, 0.26, 0.97]);
+    await picked(1);
+    await panelWall();
+    await settle();
+    await lookAt('Upright wall', [1, 0.05, 0.05]);
+    await picked(2);
+    const rakeStatus = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    await panelWall();
+    await settle();
+    const raking = () => page.evaluate(() => {
+        const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
+        return { chains: state.elevations.map(e => e.chain.name).join(), pitch: state.elevations.map(e => e.result.pitch).join(),
+                 records: state.elevations.map(e => valleyRecords(e).map(v => [v.kind, v.with, v.master, Math.round(v.length), v.k, v.detail, v.match].join())).join(' / '),
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')).join(' / '),
+                 profiles: names.filter(n => /Corner Profile/.test(n)).join(),
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /raking corner/.test(t)).join(' | ') };
+    });
+    const mitredRake = await raking();
+    console.log('raking corner:', JSON.stringify(mitredRake), '|', rakeStatus);
+    if (mitredRake.chains !== 'Chain 1,Chain 2' || mitredRake.pitch !== '75,90'
+        || mitredRake.records !== 'rake,Elevation B,true,3106,1,mitre,true / rake,Elevation A,false,3106,1,mitre,true'
+        || !/raking corner with B/.test(mitredRake.cards) || !/a raking corner with Elevation A/.test(rakeStatus)
+        || mitredRake.profiles || !/10 mm apart across the mitre/.test(mitredRake.check))
+        throw new Error('the leaning wall and the upright one were not joined at a raking corner: ' + JSON.stringify(mitredRake));
+    await page.click('#corner-type .turn-btn[data-value="profile"]');
+    await settle();
+    const profiledRake = await raking();
+    console.log('raking corner, profile:', JSON.stringify(profiledRake));
+    if (profiledRake.profiles !== 'Elevation A Corner Profile B' || !/corner profile run up the corner/.test(profiledRake.check))
+        throw new Error('the raking corner did not take its corner profile: ' + JSON.stringify(profiledRake));
+
     console.log('SMOKE OK');
     await browser.close();
 }

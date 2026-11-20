@@ -426,13 +426,14 @@ _json.dumps(_vl(_json.loads(_valley_a), _json.loads(_valley_b)))`));
 }
 
 // A face's valleys as the engine and a saved state take them: each partner by name.
-// A raking corner is one corner whatever chains its two faces are in: its master's chain
-// says how it is detailed, and a corner profile needs both faces clad alike.
+// A raking corner is one corner whatever chains its two faces are in, so both are told the
+// same detail: Profile where either chain's corner is set to it (whichever was active when
+// it was chosen), else its master's. A corner profile needs both faces clad alike.
 function rakeDetail(master, other) {
     const of = m => (m.chain && m.chain.settings) || (typeof formSettings === 'function' ? formSettings() : {}) || {};
     const a = of(master), b = of(other);
     const alike = ['cladding_type', 'plank_profile', 'panel_t', 'plank_t'].every(k => String(a[k]) === String(b[k]));
-    return { detail: a.corner || 'mitre', match: alike };
+    return { detail: [a.corner, b.corner].includes('profile') ? 'profile' : (a.corner || 'mitre'), match: alike };
 }
 
 function valleyRecords(e) {
