@@ -1816,7 +1816,8 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     });
     const win = await windowParts();
     console.log('windows in standing seam:', JSON.stringify(win));
-    if (win.caps !== 1 || win.boards !== 1 || win.strips !== 1 || win.lips < 2 || win.heads !== 1 || win.setting !== 'on' || win.check !== 1)
+    // one sill, the window's; two heads, the window's and the door's (a door has a head and no sill)
+    if (win.caps !== 1 || win.boards !== 1 || win.strips !== 1 || win.lips < 2 || win.heads !== 2 || win.setting !== 'on' || win.check !== 1)
         throw new Error('the window sill and head were not built: ' + JSON.stringify(win));
     await page.selectOption('#edge-windows', 'none');
     await settle();
