@@ -114,7 +114,10 @@
                 <label class="chk"><input type="checkbox" id="reveals" checked onchange="updatePreview()"> Reveal linings at jambs and heads, mitred to the face panel</label>
                 <div class="field"><label>Cavity closer width <span class="unit">solid timber, both jambs</span></label>
                     <input type="number" id="closer_w" value="50" min="25" max="150" step="5" oninput="onNumeric()"></div>
-                <p class="hint">Panel edges land on the window jambs and each span between them is split into equal bays no wider than the maximum panel, so a window that does not suit the panel centres still sets the joints. A solid timber cavity closer goes to both vertical sides of every opening. Jambs and heads are lined; sills are not.</p>
+                <label class="chk"><input type="checkbox" id="barriers" onchange="syncTypeUI(); updatePreview()"> Cavity barriers on all four sides <span class="unit">head and sill too</span></label>
+                <div class="field" id="barrier-gap-field" style="display:none"><label>Battens stop short of them by <span class="unit">mm, 200 at least</span></label>
+                    <input type="number" id="barrier_gap" value="200" min="200" max="600" step="25" oninput="onNumeric()"></div>
+                <p class="hint">Panel edges land on the window jambs and each span between them is split into equal bays no wider than the maximum panel, so a window that does not suit the panel centres still sets the joints. A solid timber cavity closer goes to both vertical sides of every opening. Jambs and heads are lined; sills are not. <b>Cavity barriers on all four sides</b> adds one over the head and one under the sill, so the opening is framed in solid timber; every upright batten that would join those stops short of them, leaving a clear strip for the bays above and below the opening to drain and vent sideways into the bays beside it.</p>
             </div>
 
             <div class="section" id="edge-section">
@@ -317,6 +320,7 @@
         </div>
         <div class="view-actions">
             <button id="run-open" style="display:none" onclick="openCuttingRun()" title="Play the cutting plan board by board beside the model">Cutting run</button>
+            <button id="barriers-2d" style="display:none" onclick="toggleBarriers()" title="Close every window and door of this chain with solid timber cavity barriers on all four sides (head and sill as well as the jambs); the battens over and under stop short of them. Click a jamb or head to set one opening on its own.">Cavity barriers: off</button>
             <button id="view-2d" onclick="toggle2D()" disabled title="Look at the active elevation flat and square-on (E)">2D elevation</button>
             <button id="make-chain" style="display:none" onclick="openWizard()">Make chain</button>
         </div>
