@@ -1758,6 +1758,51 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || flush.under !== 'Elevation B,-10,10' || flush.over !== 'Elevation A,true' || flush.checks !== 2)
         throw new Error('the roof and the wall were not joined at an eaves with no overhang: ' + JSON.stringify(flush));
 
+    // An eighth model: a monopitch roof whose top edge is the head of a wall it falls away behind
+    // (VMZINC's Head verge G3). Two chains, joined at a head verge: the roof runs on over the
+    // wall's build-up under a cap that turns down over the wall's cladding.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'head_mono.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    const seamChain2 = () => page.evaluate(() => { openWizard(); WIZ.draft.type = 'seam'; WIZ.draft.orient = 'vertical'; wizBuild(); dismissLevels(); });
+    await lookAt('Wall', [0.05, 0.1, 1]);
+    await picked(1);
+    await seamChain2();
+    await settle();
+    await lookAt('Roof', [0.02, 0.96, -0.26]);
+    await picked(2);
+    // The wall stands under the roof slab, a slab's thickness short of the roof's top edge: the two
+    // nearly meet, and the tick brings the wall up to the line. Then they are joined at a head verge.
+    await page.waitForFunction(() => (state.heals || []).length === 1 && document.querySelectorAll('.heal-mark').length === 1, null, { timeout: 30000 });
+    const headHeal = await page.evaluate(() => state.heals.map(h => [h.kind, Math.round(h.gap)].join()).join());
+    await page.evaluate(() => document.querySelector('.heal-mark .heal-yes').click());
+    await page.waitForFunction(() => state.elevations.every(e => !e._running && e.result) && !(state.heals || []).length
+                                     && state.elevations.some(e => (e.valleys || []).length), null, { timeout: 60000 });
+    await settle();
+    const headStatus = 'healed ' + headHeal + ' · ' + await page.evaluate(() => state.elevations.map(e => valleyRecords(e).map(v => v.kind).join()).join('/'));
+    await seamChain2();
+    await settle();
+    const headVerge = () => page.evaluate(() => {
+        const g = window._lastPreview.geometry, info = window._lastPreview.info.find(i => i.elevation === 'Elevation B') || {};
+        return { records: state.elevations.map(e => valleyRecords(e).map(v => [v.kind, v.with, v.roof].join())).join(' / '),
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')).join(' / '),
+                 caps: g.filter(m => /Head Verge Cap/.test(m.name)).length, fillers: g.filter(m => m.ifc_type === 'ridge_filler').length,
+                 upstands: g.filter(m => /Ridge Upstand/.test(m.name)).length, head: info.head ? [info.head.over, info.head.drop, info.head.run > 0].join() : '',
+                 setting: document.getElementById('edge-head').value,
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /G3 head verge/.test(t)).length };
+    });
+    const head = await headVerge();
+    console.log('head verge:', JSON.stringify(head), '|', headStatus);
+    if (head.records !== 'head,Elevation B,false / head,Elevation A,true' || !/head verge with B/.test(head.cards) || !/^healed edge,2\d\d · head\/head$/.test(headStatus)
+        || head.caps !== 1 || head.fillers < 6 || head.upstands < 6 || head.head !== 'Elevation A,60,true' || head.setting !== 'auto' || head.check !== 1)
+        throw new Error('the monopitch and the wall were not joined at a head verge: ' + JSON.stringify(head));
+    await page.selectOption('#edge-head', 'none');
+    await settle();
+    const noHead = await headVerge();
+    if (noHead.caps || noHead.upstands || noHead.check) throw new Error('the head verge did not follow its chain setting: ' + JSON.stringify(noHead));
+
     console.log('SMOKE OK');
     await browser.close();
 }
