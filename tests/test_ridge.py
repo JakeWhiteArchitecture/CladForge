@@ -133,7 +133,7 @@ def test_seams_carry_over_the_ridge(offset):
 
 def test_a_shorter_second_slope_is_set_out_from_the_first_slopes_line():
     a, b = _slope("Roof A"), _slope("Roof B", u0=2650.0, u1=8000.0, mirrored=True)
-    a, b = _paired(a, b, chain_link(a, b))
+    a, b = _paired(a, b, chain_link(a, b), verge="none")        # a verge moves the seams next to it
     params = dict({"elevations": [a, b], "trim": True, "splash": 0}, **SEAM)
     out = generate_preview(params)
 

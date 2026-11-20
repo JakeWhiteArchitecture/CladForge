@@ -168,3 +168,22 @@ def test_a_closing_plank_too_narrow_to_cut_is_left_out():
     for offset in range(0, 160, 2):
         out = _build(a, b, "mitre", KINDS["vertical boards"], offset=float(offset))
         assert min(e - s for s, e in _spans(out, "A") + _spans(out, "B")) >= 3.0, offset
+
+
+@pytest.mark.parametrize("detail", ["mitre", "lap", "profile"])
+def test_a_standing_seam_tray_at_a_corner_is_never_wider_than_a_tray(detail):
+    """A tray that turns an external corner runs on past the wall's corner line by the
+    depth of the buildup. That is counted in the setting-out, so with it the tray is still
+    no wider than the tray width, and never a sliver either."""
+    a, b = _corner(internal=False)
+    for offset in range(0, 530, 20):
+        out = _build(a, b, detail, KINDS["standing seam"], offset=float(offset))
+        for name in "AB":
+            trays = sorted((m for m in out["geometry"] if m["ifc_type"] == "plank" and m["elevation"] == name),
+                           key=lambda m: min(q[0] for q in m["profile"]))
+            widths = [max(q[0] for q in ring_at(m, 0, m["depth"])) - min(q[0] for q in ring_at(m, 0, m["depth"])) for m in trays]
+            assert max(widths) <= 530.0 + 1e-6, (detail, offset, name, max(widths))
+            at_corner = widths[-1] if name == "A" else widths[0]          # the far ends are free: any closing cut
+            assert at_corner >= 100.0 - 1e-6, (detail, offset, name, at_corner)
+        found, worst = clashes(out)
+        assert not found, (detail, offset, worst)
