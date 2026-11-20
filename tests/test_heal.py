@@ -17,8 +17,9 @@ T = math.tan(math.radians(30.0))
 S, C = math.sin(math.radians(30.0)), math.cos(math.radians(30.0))
 
 
-def _extract(name, tris, normal):
-    return extract_elevation({"name": name, "faces": tris, "outward": list(normal), "context": [],
+def _extract(name, tris, normal, heals=()):
+    """*heals*: strips healed onto the face, as the app sends them."""
+    return extract_elevation({"name": name, "faces": tris, "heals": list(heals), "outward": list(normal), "context": [],
                               "options": {"debug": False, "clad_depth": 150.0}})
 
 
@@ -36,9 +37,8 @@ def _hip(short, heal=None):
     heal_link result, adds its strips to the faces as the app does."""
     a = _fan([(short, 0), (6000, 0), (6000, 3000), (3000 + short, 3000)], lambda x, y: y * T)
     c = _fan([(0, short), (3000, 3000 + short), (3000, 6000), (0, 6000)], lambda x, y: x * T)
-    if heal:
-        a, c = a + _strips(heal["a"]), c + _strips(heal["b"])
-    return _extract("Roof A", a, (0, -S, C)), _extract("Roof C", c, (-S, 0, C))
+    return (_extract("Roof A", a, (0, -S, C), heal["a"] if heal else ()),
+            _extract("Roof C", c, (-S, 0, C), heal["b"] if heal else ()))
 
 
 def _wall(name, p0, p1, outward, extra=()):
@@ -116,3 +116,40 @@ def test_faces_that_cross_or_run_parallel_or_stand_apart_are_left_alone():
     assert heal_link(a, _wall("F", (4000, 3000), (4000, 6000), (1, 0, 0))) is None        # 3 m off
     c = _hip(200.0)[1]
     assert [h and h["kind"] for h in heal_links(_hip(200.0)[0], [c, a])] == ["hip", None]
+
+
+def test_a_wall_is_healed_up_through_plywood_that_oversails_it():
+    """An eaves in 3D: a wall to its plate, and pitched plywood sheathing that oversails the
+    wall's face. The plywood runs on through the wall's plane, so it has nothing to heal;
+    the wall is offered up to the roof's plane. The strip passes through the plywood, which
+    is not cut out of it again as the model's other sections are: healed once, it is done."""
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]         # noqa: E731
+    z = lambda y: 2900.0 + y * T                                      # noqa: E731 — the plywood's top; 2900 at the wall's face
+    t_ply = 18.0 / C
+    top = [[0, -400, z(-400)], [6000, -400, z(-400)], [6000, 3000, z(3000)], [0, 3000, z(3000)]]
+    under = [[x, y, h - t_ply] for x, y, h in top]
+    ply = quad(top) + quad(under[::-1])
+    for i in range(4):
+        j = (i + 1) % 4
+        ply += quad([top[j], top[i], under[i], under[j]])
+
+    def wall(heals=()):
+        return extract_elevation({"name": "Wall", "faces": quad([[0, 0, 0], [6000, 0, 0], [6000, 0, 2700], [0, 0, 2700]]),
+                                  "heals": list(heals), "outward": [0, -1, 0], "seeds": [[3000, 0, 1350]],
+                                  "context": [{"type": "IFCROOF", "name": "Plywood sheathing", "tris": ply}],
+                                  "options": {"debug": False, "clad_depth": 150.0, "penetrations": True}})
+    roof = _extract("Roof", quad(top), (0, -S, C))
+    plain = wall()
+    heal = heal_link(plain, roof)
+    assert heal["kind"] == "abutment" and heal["gap"] == 200.0 and heal["length"] == 6000.0
+    assert len(heal["a"]) == 1 and heal["b"] == []                     # the wall alone is extended
+    assert heal_link(roof, plain)["a"] == [] and heal_link(roof, plain)["b"] == heal["a"]
+    healed = wall(heal["a"])
+    assert healed["height"] == 2900.0 and len(healed["polygons"][0]["exterior"]) == 4      # to the roof's plane, one clean outline
+    assert heal_link(healed, roof) is None                             # and it is not offered again
+    # as picked faces instead, the same strip would be cut back to the plywood's underside
+    cut = extract_elevation({"name": "Wall", "faces": quad([[0, 0, 0], [6000, 0, 0], [6000, 0, 2700], [0, 0, 2700]]) + _strips(heal["a"]),
+                             "outward": [0, -1, 0], "seeds": [[3000, 0, 1350]],
+                             "context": [{"type": "IFCROOF", "name": "Plywood sheathing", "tris": ply}],
+                             "options": {"debug": False, "clad_depth": 150.0, "penetrations": True}})
+    assert cut["height"] == pytest.approx(2900.0 - t_ply, abs=0.1)

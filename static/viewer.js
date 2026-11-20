@@ -575,12 +575,12 @@ function contextFor(pickedMeshes, tris, margin, outward) {
 }
 
 // Quads given in IFC coordinates, as one flat translucent mesh in *group*.
-function quadMesh(quads, color, group) {
+function quadMesh(quads, color, group, opacity = 0.45) {
     const positions = [];
     for (const q of quads) for (const k of [0, 1, 2, 0, 2, 3]) positions.push(q[k][0], q[k][2], -q[k][1]);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthTest: false }));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthTest: false }));
     group.add(mesh);
     return mesh;
 }
@@ -589,7 +589,7 @@ function quadMesh(quads, color, group) {
 // Where two picked faces nearly meet, the strips that would bring them together are ghosted
 // in red, with a tick and a cross floating over them: heal the junction, or leave it. The
 // marks are page elements laid over the view, so a click on one never reaches the model.
-const HEAL_COLOR = 0xff3b3b;
+const HEAL_COLOR = 0xe2777a, HEAL_OPACITY = 0.4;     // a soft red, as light on the model as the picked faces' ghost
 const healMarks = [];
 function renderHeals(offers, onYes, onNo) {
     clearGroup(healGroup);
@@ -598,7 +598,7 @@ function renderHeals(offers, onYes, onNo) {
     const host = renderer.domElement.parentElement;
     offers.forEach((o, i) => {
         if (!o.quads.length) return;
-        quadMesh(o.quads, HEAL_COLOR, healGroup);
+        quadMesh(o.quads, HEAL_COLOR, healGroup, HEAL_OPACITY);
         const at = new THREE.Vector3();
         let n = 0;
         for (const q of o.quads) for (const p of q) { at.add(new THREE.Vector3(p[0], p[2], -p[1])); n++; }

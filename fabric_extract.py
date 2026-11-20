@@ -415,7 +415,13 @@ def _say(on, msg):
 
 def _extract(payload):
     name = payload.get("name") or "Elevation"
-    faces = _dedupe([[tuple(float(c) for c in v) for v in tri] for tri in payload.get("faces", [])])
+    # Strips healed onto the face (heal_link, the app's tick): quads in the world. They are
+    # part of the face for its plane, its extent and what counts as near it, but nothing in
+    # the model is cut out of them: a wall healed up to a roof that oversails it passes
+    # through the roof's plywood, which would otherwise be cut out of it again as a section.
+    healed = [[tuple(float(c) for c in q[i]) for i in idx] for q in payload.get("heals") or [] if len(q) == 4
+              for idx in ((0, 1, 2), (0, 2, 3))]
+    faces = _dedupe([[tuple(float(c) for c in v) for v in tri] for tri in payload.get("faces", [])] + healed)
     result = {"ok": False, "name": name, "warnings": [], "n_faces": len(faces)}
     if not faces:
         result["warnings"].append("No faces picked")
@@ -527,6 +533,15 @@ def _extract(payload):
         except Exception:
             continue
 
+    if healed:
+        try:
+            strips = _union_faces(_dedupe(healed), n, u)
+            if strips is not None and not strips.is_empty:
+                joined = _union([region, strips])
+                tidy = joined.simplify(0.01, preserve_topology=True)      # the seams between strip and face leave no vertices
+                region = tidy if tidy.is_valid and not tidy.is_empty else joined
+        except Exception:   # noqa: BLE001 — a strip that will not union leaves the face as it was cut
+            pass
     region, dropped = _seeded(region, payload.get("seeds"), u, n=n)
     if dropped:
         result["warnings"].append("%d patch(es) beyond the junction you clicked were left out" % dropped)
@@ -885,8 +900,9 @@ def _reach(elev, other, line, base):
     """How *elev* stands to the line its plane meets *other*'s on. (strips, (t0, t1)):
     for each edge of its outline that runs along the line within HEAL_MAX of it, short of
     it, the quad between that edge and the line, in the world; and the stretch of the line
-    it covers, edges already on the line included. (None, None) where it has no such edge,
-    or where it crosses the line (it would have to be cut back, not healed)."""
+    it covers, edges already on the line included. (None, None) where it has no such edge.
+    A face that runs on through the line (a roof oversailing a wall) has nothing to heal
+    but is there to be met: ("through", the stretch of the line that lies within it)."""
     f, fo = elev["frame"], other["frame"]
     n, no = tuple(f["n"]), tuple(fo["n"])
     w = _cross(n, line)                               # in the face, square to the line
@@ -933,21 +949,35 @@ def _reach(elev, other, line, base):
                 P2, Q2 = carried(q, ring[i - 1], a), carried(r, ring[(i + 2) % m], b)
                 strips.append({"quad": [list(P), list(Q), list(Q2), list(P2)], "gap": max(abs(a), abs(b))})
             ts += [_dot(_sub(P, base), line), _dot(_sub(Q, base), line)]
-        # the whole face on both sides of the line: it runs through the other plane
+        # the face on both sides of the line: it runs on through the other plane
         vs = [off(_at(f, q[0], q[1])) for q in ring]
         if min(vs) < -HEAL_ON and max(vs) > HEAL_ON:
-            return None, None
+            lu, lv = _dot(line, f["u"]), _dot(line, f.get("v") or (0.0, 0.0, 1.0))
+            at = (ring[0][0] + wu * vs[0], ring[0][1] + wv * vs[0])             # a point of the line, in the face
+            t_at = _dot(_sub(_at(f, at[0], at[1]), base), line)
+            reach = 1e6
+            try:
+                cut = shape.intersection(LineString([(at[0] - lu * reach, at[1] - lv * reach), (at[0] + lu * reach, at[1] + lv * reach)]))
+            except Exception:   # noqa: BLE001
+                return None, None
+            if cut.is_empty or cut.length < 1.0:
+                return None, None
+            along = [(x - at[0]) * lu + (y - at[1]) * lv for g in getattr(cut, "geoms", [cut]) for x, y in g.coords]
+            return "through", (t_at + min(along), t_at + max(along))
     return (strips, (min(ts), max(ts))) if ts else (None, None)
 
 
 def heal_link(a, b):
     """Do faces a and b nearly meet, so that extending one or both to the line their planes
     meet on would join them? None if not (they are joined already, are parallel, are too
-    far apart, or cross), else {"a": the quads to add to a, in the world (none where it is
+    far apart, or each runs through the other), else {"a": the quads to add to a, in the world (none where it is
     on the line already), "b": the same for b, "gap": the widest strip, "length": the
     stretch of the line both would cover, "kind": what they would meet at once healed:
-    "corner" (two walls), "ridge", "hip" or "valley" (two roof slopes), or "edge" (a wall
-    and a pitched face: brought together, but no junction is detailed between them yet)}."""
+    "corner" (two walls), "ridge", "hip" or "valley" (two roof slopes), "edge" (a wall and
+    a pitched face: brought together, but no junction is detailed between them yet), or
+    "abutment": one of the two runs on through the line (a roof oversailing a wall, its
+    plywood carried over the wall's head), so only the other is extended, up to it and
+    through whatever it is made of; the one that runs on is left as it is}."""
     fa, fb = a["frame"], b["frame"]
     na, nb = tuple(fa["n"]), tuple(fb["n"])
     line = _cross(na, nb)
@@ -962,13 +992,19 @@ def heal_link(a, b):
         return None
     base = tuple(ca[i] - down[i] * _dot(nb, _sub(ca, fb["origin"])) / step for i in range(3))
     (sa, ra), (sb, rb) = _reach(a, b, line, base), _reach(b, a, line, base)
+    through = sa == "through" or sb == "through"
+    if sa == "through" and sb == "through":
+        return None                                   # each runs through the other: nothing nearly meets
+    sa, sb = ([] if sa == "through" else sa), ([] if sb == "through" else sb)
     if ra is None or rb is None or not (sa or sb):
         return None
     t0, t1 = max(ra[0], rb[0]), min(ra[1], rb[1])
     if t1 - t0 < HEAL_MIN:
         return None
     wall_a, wall_b = abs(na[2]) < 1e-6, abs(nb[2]) < 1e-6
-    if wall_a and wall_b:
+    if through:
+        kind = "abutment"                             # one runs up to the other, which carries on past
+    elif wall_a and wall_b:
         kind = "corner"
     elif wall_a or wall_b or na[2] < 0 or nb[2] < 0:
         kind = "edge"
