@@ -297,3 +297,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .run-board svg { transition: opacity 0.25s; }
 .run-rack-item.taken rect:first-child { fill: transparent; stroke-dasharray: 30 20; }
 .run-rack-item.taken text, .run-rack-item.taken .run-rack-hatch { opacity: 0.25; }
+.lod-switch { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border); color: var(--muted); }
+.lod-switch span { margin-right: 4px; letter-spacing: 0.5px; }
+.lod-switch button { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px; font-size: 11px; cursor: pointer; }
+.lod-switch button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
