@@ -32,6 +32,7 @@ FRAME_REACH = 600.0     # with no wall depth known: how far behind the wall face
 HEAD_AIR = 10.0         # vented at the back: air over the head lining, and its gap off the frame
 MAX_EDGE = 100.0
 TOL = 0.6
+BESIDE = 5.0           # mm – a board edge runs beside an opening where they share more than this of its height
 KINDS = ("corner", "jamb", "top", "side", "bottom", "head")
 
 
@@ -261,7 +262,10 @@ def _opening_shift(a, b, treatments, air):
         return None
     nx, ny = dy / length, -dx / length
     for (u0, u1, v0, v1), wj, wh in treatments:
-        inside_v = min(a[1], b[1]) >= v0 - TOL and max(a[1], b[1]) <= v1 + TOL
+        # A board's edge on a jamb line is treated along its whole length wherever any of
+        # it runs beside the opening: a board that carries on past the sill or the head is
+        # still one board with one straight edge, not a stopped cut with a step in it.
+        inside_v = min(max(a[1], b[1]), v1) - max(min(a[1], b[1]), v0) > BESIDE
         if nx > 0.9 and abs(a[0] - u0) < TOL and abs(b[0] - u0) < TOL and inside_v:
             return (wj[0], wj[1], 0.0, 0.0)                  # board left of the opening
         if nx < -0.9 and abs(a[0] - u1) < TOL and abs(b[0] - u1) < TOL and inside_v:
@@ -273,15 +277,15 @@ def _opening_shift(a, b, treatments, air):
 
 
 def _split(ring, holes):
-    """The ring with a vertex added wherever an edge along a jamb or head line runs past
-    the end of the opening, so only the part beside the opening is mitred."""
+    """The ring with a vertex added wherever an edge along a head line runs past the end
+    of the opening, so only the part over the opening comes down to the lining: a course
+    over a window is longer than the window is wide. An edge on a jamb line is not split
+    (_opening_shift): it is one edge of one board."""
     out = []
     for a, b in zip(ring, ring[1:] + ring[:1]):
         out.append(a)
         cuts = []
         for u0, u1, v0, v1 in holes:
-            if abs(a[0] - b[0]) < TOL and (abs(a[0] - u0) < TOL or abs(a[0] - u1) < TOL):
-                cuts += [(v, 1) for v in (v0, v1)]
             if abs(a[1] - b[1]) < TOL and abs(a[1] - v1) < TOL:
                 cuts += [(u, 0) for u in (u0, u1)]
         ts = set()

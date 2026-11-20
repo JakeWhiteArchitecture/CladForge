@@ -90,13 +90,16 @@ def test_panel_joints_land_on_the_columns_and_line_through_at_the_reveals():
                      for m in out["geometry"] if m["ifc_type"] == "panel"})
     joints = [round((a[1] + b[0]) / 2, 1) for a, b in zip(panels, panels[1:])]
     battens = _us(out, "batten")
-    # every joint on a batten, every panel within the maximum
-    assert all(any(abs(j - b) < 1 for b in battens) for j in joints)
+    # every joint on a batten, every panel within the maximum. On a reveal line the gap is
+    # taken under and over the window, so it sits half a gap off the batten's centre.
+    on_reveal = lambda j: min(abs(j - 2005.0), abs(j - 3195.0)) < 1      # noqa: E731
+    assert all(any(abs(j - b) < (5.5 if on_reveal(j) else 1) for b in battens) for j in joints)
     assert all(e - s <= 1200 + 1e-6 for s, e in panels)
     # the reveal lines are panel edges, carried straight through: 2000 has a column, 3200
     # does not and gets a batten of its own; on both the batten runs above and below the
     # window (900-2100), not beside it where the closer is
-    assert any(abs(e - 3200) < 1 for _s, e in panels) and any(abs(s - 2000) < 1 for s, _e in panels)
+    assert any(abs(s - 3200) < 1 for s, _e in panels) and any(abs(e - 2000) < 1 for _s, e in panels)
+    assert (2010.0, 3190.0) in panels                # under and over the window: the gap off both lines
     assert info["reveal_battens"] == 1 and info["post_extra"] == 0
     for line in (2000.0, 3200.0):
         at = [m for m in out["geometry"] if m["ifc_type"] == "batten"

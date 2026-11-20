@@ -432,6 +432,12 @@ def corner_ends(elev, p):
 
     def end(k, master, override):
         detail = corner_detail(p, override, k if k else None)
+        if detail == "butt" and k < 0:
+            # Square at a re-entrant corner cannot be both stopping on the wall's corner
+            # line: the two buildups would share the corner. One runs in and the other
+            # stops against it, as with Master; under standing seam they meet on the
+            # bisector, as its other corners do.
+            return ((k, 0.0) if p.get("seam") else lap(k, master)), detail
         if detail == "butt":
             return (0.0, 0.0), detail
         # A profiled corner cuts the layers behind as a mitre, so the battens run on under

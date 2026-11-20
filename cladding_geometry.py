@@ -84,7 +84,10 @@ def build_elevation(p, elev, layout=None):
     holes = openings(elev)
     prof = {"strips": [], "warnings": [], "count": 0}     # corner profiles, for the DXF and checks
     edges = classify_edges(elev, outline)
-    _openings_extras(p, elev, meshes, holes, layers, depth - board - layers, depth, board, prof, v0)
+    # Under standing seam the closer stops at the back of the deck, which runs to the jamb
+    # over it: carried on to the trays it ran through the deck, and showed through them.
+    over = (p["deck_t"] + SEAM_STANDOFF) if p["seam"] else 0.0
+    _openings_extras(p, elev, meshes, holes, layers, depth - board - layers - over, depth, board, prof, v0)
     info["openings"] = len(holes)
     frames = opening_frames(elev, holes, depth)
     info["opening_details"] = [dict(d, key=opening_key(r), rect=list(r), frame_depth=frames[r]["depth"],
@@ -99,6 +102,12 @@ def build_elevation(p, elev, layout=None):
     behind = lambda d: "mitre" if p["seam"] and d == "lap" else d   # noqa: E731
     _apply_corner(meshes, {lo: left}, behind(d_left), skip=("reveal", "closer"))
     _apply_corner(meshes, {hi: right}, behind(d_right), skip=("reveal", "closer"))
+    k_ends = (elev.get("corner_lo"), elev.get("corner_hi"))          # run order, like the details
+    k_l, k_r = k_ends[::-1] if elev.get("chain_reversed") else k_ends
+    ends = ((lo, left, d_left, "l", float(k_l or 0.0)), (hi, right, d_right, "r", float(k_r or 0.0)))
+    if not p["seam"]:
+        _reentrant_layers(p, elev, meshes, ends)
+        _plank_ends(p, elev, meshes, ends, edge_settings(elev)["gap"])
     # A mitre leaves the chain's mitre gap between the two boards, straight across the
     # joint: each board's end is pulled back half of it. The layers behind still meet.
     gap = edge_settings(elev)["gap"]
@@ -140,6 +149,42 @@ def build_elevation(p, elev, layout=None):
 SEAM_FLASHING = 50.0     # mm – each leg of a standing seam's corner flashing strip
 
 
+def _seam_end(p, elev, face, k, detail, side):
+    """(k, ext) of a tray's end at an external chain corner: it sits at the corner line
+    plus ext + k × depth. Square for a corner seam (the master's stops SEAM_AIR short of the
+    other face's metal and turns up; the other's runs on to the master's metal), else on
+    the bisector, pulled back half the mitre gap where it is left as a mitre."""
+    back = face - p["plank_t"]
+    if detail == "lap":
+        return 0.0, (back - SEAM_AIR) if end_master(elev, side) else face
+    return k, (-mitre_pullback(edge_settings(elev)["gap"], k) if detail == "mitre" else 0.0)
+
+
+def _tray_reach(p, elev, depth):
+    """How far the trays run past each end of the clad face, (left, right), at their backs:
+    round an external chain corner, or out over a verge strip. The setting-out counts it,
+    so the tray at the end is never wider than a tray. With them, the least and most that
+    end tray may be, ((least, most) left, (least, most) right): at a verge the last seam
+    stands 150 to 370 mm in from the tray's edge (cladding_verge.VERGE_SEAM); at a corner
+    the tray is at least SEAM_MIN_CLOSE, and clear of the turn."""
+    from cladding_verge import verge_sides, VERGE_TRAY, VERGE_SEAM
+    left, right, (d_left, d_right) = corner_ends(elev, p)
+    verges = verge_sides(elev, p)
+    reach, limits = [], []
+    for (k, _ext), detail, side in ((left, d_left, "l"), (right, d_right, "r")):
+        if k and k > 0 and detail != "butt":
+            k_end, ext = _seam_end(p, elev, depth + p["plank_t"], k, detail, side)
+            reach.append(max(0.0, ext + k_end * depth))
+            limits.append((max(SEAM_MIN_CLOSE, reach[-1] + 20.0), p["plank_w"]))
+        elif side in verges and not k:
+            reach.append(VERGE_TRAY)
+            limits.append((VERGE_SEAM[0], min(VERGE_SEAM[1], p["plank_w"])))
+        else:
+            reach.append(0.0)
+            limits.append((0.0, p["plank_w"]))
+    return tuple(reach), tuple(limits)
+
+
 def _seam_corners(p, elev, meshes, info, face, ends):
     """A standing seam chain's external right-angled corners, where the corner is not left
     mitred (the deck and battens behind mitre either way).
@@ -167,8 +212,7 @@ def _seam_corners(p, elev, meshes, info, face, ends):
         # The metal's end: square for a corner seam (this face's stops SEAM_AIR short of the
         # other's metal and turns up; the other's runs on to this face's metal), else on the
         # bisector, pulled back half the mitre gap where it is left as a mitre.
-        k_end = 0.0 if seam else k
-        ext = ((back - SEAM_AIR) if master else face) if seam else (-mitre_pullback(gap, k) if detail == "mitre" else 0.0)
+        k_end, ext = _seam_end(p, elev, face, k, detail, side)
         trays = []
         for m in meshes:
             c = m.get("corner") or {}
@@ -290,6 +334,93 @@ def _profiled_corners(p, elev, meshes, prof, edges, face, ends):
             prof["warnings"].append("%s: the corner %s at the %s end is not over a batten"
                                     % (name, "profile's %.0f mm flange" % (profiles.FLANGE_P if plank else fl),
                                        "right" if side == "r" else "left"))
+
+
+BOARDS = ("panel", "plank")
+MIN_CLOSER = 3.0     # mm – a closing plank narrower than this at a corner is left out
+
+
+def _reentrant_layers(p, elev, meshes, ends):
+    """The layers behind the boards at a re-entrant corner set to Master or Square.
+
+    Round an external corner square-ended layers leave the corner empty, which is how a
+    master-lap is built. In a re-entrant corner they would share it: both faces' battens
+    in the same place. So the face that masters the corner is built right into it, and
+    the other's layers stop against the face of its cladding (its boards a joint gap
+    short of that, cladding_primitives.corner_ends): its horizontal layers are cut back,
+    and a batten standing in the way is moved clear."""
+    depth, bw = buildup_depth(p), p["batten_w"]
+    for u_end, (k_b, ext_b), detail, side, k in ends:
+        if k >= 0 or detail not in ("lap", "butt") or end_master(elev, side):
+            continue
+        toward = 1.0 if side == "r" else -1.0
+        back = -ext_b - (p["panel_gap"] if p["cladding_type"] == "panel" else p["plank_gap"] if p["plank_lap"] <= 0 else 0.0)
+        back = max(back, depth)                     # how far its layers stop from the wall's corner line
+        for m in list(meshes):
+            if m["ifc_type"] in BOARDS + ("reveal", "closer", "corner_profile", "corner_trim") or m not in meshes:
+                continue
+            us = [q[0] for q in m["profile"]]
+            near, far = (max(us), min(us)) if toward > 0 else (min(us), max(us))      # near the corner, and away from it
+            if (u_end - near) * toward > back - 0.5:
+                continue                            # clear of the other face already
+            c = {key: v for key, v in (m.get("corner") or {}).items() if not key.endswith("_" + side)}
+            if abs(far - near) <= 2.5 * max(bw, p["cb_w"]):
+                # a batten up the wall: moved whole, to stand against the other face's cladding
+                shift = -toward * (back - (u_end - near) * toward)
+                m["profile"] = [[q[0] + shift, q[1]] for q in m["profile"]]
+                moved = sorted(q[0] for q in m["profile"])
+                m["gasket_to"] = u_end - toward * back      # its gasket stops there too, not lapping past
+                for other in list(meshes):
+                    ou = [q[0] for q in other["profile"]]
+                    if other is not m and other["ifc_type"] == m["ifc_type"] and abs(float(other["depth"]) - float(m["depth"])) < 0.5 \
+                            and abs(max(ou) - min(ou)) <= 2.5 * max(bw, p["cb_w"]) and min(moved[-1], max(ou)) - max(moved[0], min(ou)) > 0.5:
+                        meshes.remove(other)        # one was there already: the moved one takes its place
+            elif abs(near - u_end) < 0.6:
+                c.update({"k_" + side: k_b, "ext_" + side: -back, "u_" + side: u_end})
+            if c:
+                m["corner"] = c
+            else:
+                m.pop("corner", None)
+
+
+def _plank_ends(p, elev, meshes, ends, mitre_gap):
+    """Vertical planks at a chain corner (every detail but Profile, which has its own).
+
+    They are set out across the face and on past its ends, so the cladding that wraps an
+    external corner has boards too: here each end is finished. A plank that lies wholly
+    beyond where the boards stop goes; the one that crosses it is cut there, on the
+    corner's slope, and is the closing plank, never wider than a plank; one past the
+    wall's corner line is trimmed in height only, so the cut at the line leaves it be.
+    At a re-entrant corner the boards stop before the line and the same cut is made."""
+    if p["cladding_type"] != "plank" or p["seam"] or p["boards_run"] != "vertical":
+        return
+    for u_end, (k_b, ext_b), detail, side, k in ends:
+        if detail == "profile" or not k:
+            continue
+        if detail == "mitre" and mitre_gap > 0:
+            ext_b = ext_b - mitre_pullback(mitre_gap, k_b)
+        toward = 1.0 if side == "r" else -1.0
+        for m in list(meshes):
+            if m["ifc_type"] != "plank" or m.get("holes"):
+                continue
+            us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+            near, far = (min(us), max(us)) if toward > 0 else (max(us), min(us))
+            limit = u_end + toward * (ext_b + k_b * float(m["depth"]))       # where the board's back stops
+            c = {key: v for key, v in (m.get("corner") or {}).items() if not key.endswith("_" + side)}
+            if (near - limit) * toward >= -MIN_CLOSER:
+                meshes.remove(m)
+                continue
+            if (far - limit) * toward > 0.5:
+                a, b = sorted((near, limit))
+                m["profile"] = _rect(a, min(vs), b, max(vs))
+                c.update({"k_" + side: k_b, "ext_" + side: -k_b * float(m["depth"]), "u_" + side: limit})
+                far = limit
+            if (far - u_end) * toward > 0.5:
+                m["clip_v_at"] = sorted((u_end - toward * 2.0, u_end - toward * 0.5))
+            if c:
+                m["corner"] = c
+            else:
+                m.pop("corner", None)
 
 
 def _across_corners(meshes, ends):
@@ -779,10 +910,27 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
     depth = _horizontal_battens(p, battens, meshes, name, frame, depth, W)
     cover, face = p["cover"], p["plank_w"]
     gap = p["plank_gap"] if p["plank_lap"] <= 0 else 0.0
-    starts = centred_positions(W, cover, offset, face)
+    # Round an external chain corner the cladding carries on past the wall's corner line by
+    # up to the buildup's depth, and it wants boards there too: the planks are set out on
+    # past each end that has a corner, and finished there (_plank_ends, _profiled_corners).
+    lo, hi = clip_bounds(elev)
+    k_ends = (elev.get("corner_lo"), elev.get("corner_hi"))
+    k_l, k_r = k_ends[::-1] if elev.get("chain_reversed") else k_ends
+    wrap = lambda k: (max(0.0, float(k or 0.0)) * (depth + p["plank_t"]) + cover) if (k or 0.0) > 0 else 0.0   # noqa: E731
+    first = centred_positions(W, cover, offset, face)
+    starts = list(first)
+    while starts and starts[0] + face > lo - wrap(k_l) and wrap(k_l):
+        starts.insert(0, starts[0] - cover)
+    while starts and starts[-1] < hi + wrap(k_r) and wrap(k_r):
+        starts.append(starts[-1] + cover)
     beside = []                  # the joints in the plank to the left: this one keeps clear of them
     for j, u in enumerate(starts):
-        runs = strip_intervals(region, u, u + face, across=True) if region is not None else [(v0, H)]
+        # at a free end, a sliver of a plank narrower than can be cut is left out
+        if (not wrap(k_l) and u + face - lo < MIN_CLOSER) or (not wrap(k_r) and hi - u < MIN_CLOSER):
+            continue
+        # a plank wholly past the end runs as high as the face does just inside its corner
+        at = (hi - 2.0, hi - 0.5) if u >= hi - 0.5 else (lo + 0.5, lo + 2.0) if u + face <= lo + 0.5 else (u, u + face)
+        runs = strip_intervals(region, at[0], at[1], across=True) if region is not None else [(v0, H)]
         piece, mine = 0, []
         for a, b in runs:
             segs, bad = _lengths(p, max(a, v0), b, battens, j % 2 == 1, gap, beside)
@@ -796,6 +944,7 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
                     plank.update(section_at=u, section_axis="u")
                 meshes.append(plank)
         beside = mine
+    starts = first               # the face's own, for what is reported and dimensioned
     left_cut = (starts[0] + face) if starts and starts[0] < 0 else 0.0
     right_cut = (W - starts[-1]) if starts and starts[-1] + face > W else 0.0
     info.update(n_courses=len(starts), cover=cover, batten_centres=p["batten_centres"],
@@ -812,18 +961,58 @@ LOCK_SEAMS = "Set out from the structural openings: the seams are on the reveal 
 SEAM_JAMB_MERGE = 100.0     # mm – jambs closer than this share one seam line
 
 
-def seam_columns(W, cover, offset, jambs):
+SEAM_MIN_CLOSE = 100.0      # mm – a closing tray at a corner or a verge is never narrower than this
+
+
+def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=None):
     """The tray columns (u0, u1) across a face *W* wide. Set out from the openings, each
     jamb is a seam line, carried straight up and down past the opening, and each span between
     jambs (and the face's ends) is split into equal trays no wider than *cover*: no narrow
-    closing cut. Otherwise trays at *cover* centres, centred on the face plus *offset*."""
+    closing cut. Otherwise trays at *cover* centres, centred on the face plus *offset*.
+
+    *ends* (lo, hi) is the clad part of the face and *reach* how far the trays run on past
+    each of its ends (round a corner, over a verge strip: _tray_reach). An end with a reach
+    is set out to where the tray really ends, so that tray is never wider than *cover*.
+    *limits* is the least and most its end tray may be: narrower, the last two trays share
+    their width equally instead; wider (a verge takes at most 370), it is halved."""
+    lo, hi = ends if ends else (0.0, W)
+    limits = limits or ((SEAM_MIN_CLOSE, cover), (SEAM_MIN_CLOSE, cover))
+    a_dev, b_dev = lo - reach[0], hi + reach[1]
     lines = []
     for u in sorted(jambs):
         if 1.0 < u < W - 1.0 and not (lines and u - lines[-1] < SEAM_JAMB_MERGE):
             lines.append(u)
     if lines:
-        return [(a, b) for a, b, _full in bays_between([0.0] + lines + [W], cover, 0.0)[0]]
-    return [(u, u + cover) for u in centred_positions(W, cover, offset, cover)]
+        first, last = (a_dev if reach[0] else 0.0), (b_dev if reach[1] else W)
+        return [(a, b) for a, b, _full in bays_between([first] + lines + [last], cover, 0.0)[0]]
+    cols = [(u, u + cover) for u in centred_positions(W, cover, offset, cover)]
+    if not (reach[0] or reach[1]) or not cols:
+        return cols
+    # the seam lines between the trays, carried on at the same centres out to each developed end
+    seams = [u for u, _u1 in cols[1:]]
+    while reach[0] and (seams[0] if seams else cols[0][1]) - cover > a_dev + 1e-6:
+        seams.insert(0, (seams[0] if seams else cols[0][1]) - cover)
+    while reach[1] and (seams[-1] if seams else cols[0][0]) + cover < b_dev - 1e-6:
+        seams.append((seams[-1] if seams else cols[0][0]) + cover)
+    seams = [u for u in seams if (a_dev < u if reach[0] else True) and (u < b_dev if reach[1] else True)]
+    if reach[0] and seams:
+        least, most = limits[0]
+        if seams[0] - a_dev < least - 1e-6:               # too close to that end: the two end trays share
+            nxt = seams[1] if len(seams) > 1 else (b_dev if reach[1] else cols[-1][1])
+            seams[0] = (a_dev + nxt) / 2.0
+        elif seams[0] - a_dev > most + 1e-6:              # too far from it: one more seam, half way
+            seams.insert(0, (a_dev + seams[0]) / 2.0)
+    if reach[1] and seams:
+        least, most = limits[1]
+        if b_dev - seams[-1] < least - 1e-6:
+            prev = seams[-2] if len(seams) > 1 else (a_dev if reach[0] else cols[0][0])
+            seams[-1] = (b_dev + prev) / 2.0
+        elif b_dev - seams[-1] > most + 1e-6:
+            seams.append((b_dev + seams[-1]) / 2.0)
+    first = a_dev if reach[0] else min(cols[0][0], seams[0] - cover if seams else cols[0][0])
+    last = b_dev if reach[1] else max(cols[-1][1], seams[-1] + cover if seams else cols[-1][1])
+    stops = [first] + seams + [last]
+    return [(a, b) for a, b in zip(stops, stops[1:]) if b - a > 1.0]
 
 
 def _tray_seams(p, meshes, frame, name, face, laid, holes):
@@ -875,8 +1064,9 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
     stops = [v0 + SEAM_STOPS * k for k in range(1, int((H - v0) / SEAM_STOPS))]
     cover = p["plank_w"]
     jambs = [u for o in openings(elev) for u in (o[0], o[1])] if p["set_out_from_openings"] else []
-    cols = seam_columns(W, cover, offset, jambs)
-    from_openings = bool(jambs) and len(cols) > 0 and abs(cols[0][0]) < 1e-6 and abs(cols[-1][1] - W) < 1e-6
+    reach, limits = _tray_reach(p, elev, depth)
+    cols = seam_columns(W, cover, offset, jambs, clip_bounds(elev), reach, limits)
+    from_openings = bool(jambs) and len(cols) > 0 and (abs(cols[0][0]) < 1e-6 or reach[0]) and (abs(cols[-1][1] - W) < 1e-6 or reach[1])
     beside, laid = [], []        # the joints of the column to the left; every column's runs and trays
     for j, (u, u1) in enumerate(cols):
         runs = strip_intervals(region, u, u1, across=True) if region is not None else [(v0, H)]
@@ -947,6 +1137,23 @@ def _staggers(elev, region, W, margin, holes, posts):
     return out
 
 
+def _gap_at_jamb_lines(panels, holes, gap, grow=None):
+    """The joint gap on each jamb line, taken out of the bay under and over the opening.
+    Beside an opening a panel runs to the jamb, where it meets the reveal lining, so no
+    gap is taken on that side; but the jamb line carries on above the head and below the
+    sill as an ordinary joint between two panels, and those want their gap. It is given by
+    the bay that lies within the opening's width, so the panel beside the opening still
+    lines through with the reveal."""
+    out, grow = [], grow or {}
+    for s, e, full in panels:
+        inside = [o for o in holes if o[0] - 0.5 <= s and e <= o[1] + 0.5]
+        left = [gap + grow.get(tuple(o), 0.0) for o in inside if abs(s - o[0]) < 0.5]
+        right = [gap + grow.get(tuple(o), 0.0) for o in inside if abs(e - o[1]) < 0.5]
+        s2, e2 = s + max(left, default=0.0), e - max(right, default=0.0)
+        out.append((s2, e2, full) if e2 - s2 > 1.0 else (s, e, full))
+    return out
+
+
 def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Panels on vertical battens, joints on battens, noggins at horizontal joints only
     where a counter-batten layer is there to keep the drainage plane clear.
@@ -989,6 +1196,11 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         panels, joints = bays_between([0.0] + jambs + [W], p["panel_w"], gap)
     else:
         panels, joints = panel_bays(W, p["panel_w"], gap, offset)
+    # Where the face board masters the reveal it runs a board's thickness past the jamb
+    # line, for its whole length: the bay under and over the opening stands off that.
+    grow = {tuple(r): (p["panel_t"] if d.get("jamb") == "lap" and d.get("jamb_master", "face") == "face" else 0.0)
+            for r, d in opening_details(elev, p)} if p.get("reveals", True) else {}
+    panels = _gap_at_jamb_lines(panels, holes, gap, grow)
     edges = [bw / 2, W - bw / 2]
     if posts:
         supports = dedupe_priority([posts, extra, edges], bw)

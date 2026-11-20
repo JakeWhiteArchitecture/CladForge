@@ -304,6 +304,20 @@ def _prism_polygon(mesh):
         return None
 
 
+def _tidy(pg):
+    """The polygon without the vertices a cut leaves along its straight edges. Where a
+    board's edge lies on the outline's (a panel beside a window, its edge on the jamb) the
+    cut hands the board every vertex the outline has on that line, the ends of the
+    offsets at the sill and the head among them. They change nothing in the shape, but a
+    viewer triangulates to them and draws lines across the board, and anything that reads
+    an edge end to end (the mitre to a lining) sees several edges where there is one."""
+    try:
+        out = pg.simplify(0.01, preserve_topology=True)
+        return out if out.geom_type == "Polygon" and not out.is_empty and abs(out.area - pg.area) < 1.0 else pg
+    except Exception:   # noqa: BLE001 — GEOS trouble leaves it as it was
+        return pg
+
+
 def apply_boolean_ops(meshes, p):
     """Return a new mesh list with every trimmable prism clipped to its elevation.
 
@@ -355,7 +369,7 @@ def apply_boolean_ops(meshes, p):
         parts.sort(key=lambda pg: (pg.bounds[1], pg.bounds[0]))
         for i, pg in enumerate(parts):
             m = copy.copy(mesh)
-            m["profile"], m["holes"] = polygon_to_rings(pg)
+            m["profile"], m["holes"] = polygon_to_rings(_tidy(pg))
             if len(parts) > 1:
                 m["name"] = "%s%s" % (mesh.get("name", ""), chr(97 + i) if i < 26 else str(i))
             out.append(m)

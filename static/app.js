@@ -945,6 +945,7 @@ function getParams() {
     p.battens_from_model = document.getElementById('battens_from_model').checked;
     p.seam_full_length = document.getElementById('seam_full_length').checked;
     p.panels_as_walls = document.getElementById('panels_as_walls').checked;
+    p.ifc_schema = ifcSchema();
     p.share_offcuts = document.getElementById('share_offcuts').checked;
     p.plank_orient = toggleValue('plank-orient');
     p.plank_profile = toggleValue('plank-profile') || 'board';
@@ -1167,6 +1168,7 @@ function snapshotState() {
     for (const k of STATE_TOGGLES) settings[k] = toggleValue(k);
     settings.counter_batten = val('counter_batten');
     settings.seam_deck = val('seam_deck');
+    settings.ifc_schema = ifcSchema();
     Object.assign(settings, customProfileParams());
     const elevation = e => ({
         name: e.name, storey: e.storey || null, start: e.start || 0, rev: !!e.rev, link: e.link || null, offset: e.offset || 0,
@@ -1322,6 +1324,7 @@ function restoreState(st, add) {
         for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
         if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
         if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
+        if (s.ifc_schema) { document.getElementById('ifc_schema').value = s.ifc_schema; onIfcSchema(); }
         if (s.custom_section) addCustomProfile(s.custom_section, true);
         else if (s.custom_profile && CUSTOM_LIBRARY[s.custom_profile]) document.getElementById('custom_profile').value = s.custom_profile;
     }
@@ -1457,11 +1460,22 @@ function busy(btn, on, label) {
     btn.innerHTML = on ? '<span class="btn__text">' + label + '</span>' : btn.dataset.label;
 }
 
+// The schema the IFC is written in (ifc_generator.IFC_SCHEMA_CHOICES): the button says which.
+function ifcSchema() {
+    const v = document.getElementById('ifc_schema').value;
+    return ['IFC4X3', 'IFC4', 'IFC2X3'].includes(v) ? v : 'IFC4X3';
+}
+function onIfcSchema() {
+    const btn = document.getElementById('ifc-btn'), label = 'Download ' + ifcSchema().replace('2X3', '2x3');
+    btn.dataset.label = label;
+    if (!btn.disabled) btn.textContent = label;
+}
+
 async function downloadIFC() {
     const params = getParams(); params.trim = true;
     if (!params.elevations.length) { alert('Pick some faces and build the chain first (press Enter).'); return; }
     const btn = document.getElementById('ifc-btn');
-    busy(btn, true, 'Generating IFC4X3…');
+    busy(btn, true, `Generating ${ifcSchema().replace('2X3', '2x3')}…`);
     try {
         await ensureIfcOpenShell(btn);
         pyodide.globals.set('_params_json', JSON.stringify(params));

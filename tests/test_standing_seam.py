@@ -457,3 +457,14 @@ def test_corner_seam_and_flashing_checks_and_export(wall, tmp_path):
     p = _parse({"cladding_type": "plank", "plank_profile": "seam"})
     assert corner_detail(p, "lap", -1.0) == "mitre" and corner_detail(p, "profile", -1.0) == "mitre"
     assert corner_detail(p, "lap", 1.0) == "lap" and corner_detail(p, "profile", 1.0) == "profile"
+
+
+def test_the_cavity_closer_stops_under_the_deck(wall):
+    """The deck runs to the jamb over the closer. A closer carried on to the trays ran
+    through the deck, and showed through the trays beside every jamb in a viewer."""
+    _params, out = _build(wall, trim=True)
+    deck = _of(out, "deck")[0]
+    closers = _of(out, "closer")
+    assert closers
+    for c in closers:
+        assert c["depth"] + c["thickness"] == pytest.approx(deck["depth"])

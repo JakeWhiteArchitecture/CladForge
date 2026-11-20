@@ -106,20 +106,35 @@ def test_only_trays_running_with_the_fall_on_a_roof_get_a_verge():
     assert not _strips(out) and "verges" not in out["info"][0]
 
 
-@pytest.mark.parametrize("offset, status", [(0.0, "warn"), (150.0, "pass")])
-def test_the_last_seam_is_checked_against_150_to_370(offset, status):
-    """Centred, 530 trays leave 25 mm closers on an 8000 slope: 65 mm from the tray's edge
-    with the 40 the tray runs out. Moved 150, they are 175 and 405 on the roof: 215 at one
-    verge and outside at the other, so one side only is kept to make the pass."""
-    elev = {"offset": offset, "verge": "both" if not offset else "start"}
-    params, out = _one(elev=elev)
-    (row,) = [c for c in check_rules(params, out["info"]) if c["name"].endswith("Verge")]
-    assert row["status"] == status, row["message"]
-    seams = [v["last_seam"] for v in out["info"][0]["verges"]]
-    if status == "warn":
-        assert seams == [65.0, 65.0] and "65 mm (left) and 65 mm (right)" in row["message"] and "150 to 370" in row["message"]
-    else:
-        assert seams == [215.0] and "215 mm" in row["message"]
+def test_the_setting_out_keeps_the_last_seam_150_to_370_from_the_trays_edge():
+    """Whatever the offset, the tray at each verge is neither a sliver nor too wide for the
+    detail, and no tray anywhere is wider than the tray width, counting the 40 mm it runs
+    out over the strip: a closer under 150 shares with its neighbour, one over 370 is
+    halved."""
+    for offset in range(0, 530, 10):
+        params, out = _one(elev={"offset": float(offset)})
+        trays = sorted({(round(min(q[0] for q in m["profile"]), 1), round(max(q[0] for q in m["profile"]), 1))
+                        for m in out["geometry"] if m["ifc_type"] == "plank"})
+        assert (trays[0][0], trays[-1][1]) == (-VERGE_TRAY, 8000.0 + VERGE_TRAY), offset
+        assert max(b - a for a, b in trays) <= 530.0 + 1e-6, offset
+        seams = [v["last_seam"] for v in out["info"][0]["verges"]]
+        assert all(150.0 - 1e-6 <= s <= 370.0 + 1e-6 for s in seams), (offset, seams)
+        (row,) = [c for c in check_rules(params, out["info"]) if c["name"].endswith("Verge")]
+        assert row["status"] == "pass", (offset, row["message"])
+    # with no verge that end is set out as before: the closer is whatever the offset leaves
+    _p, plain = _one(elev={"offset": 0.0, "verge": "none"})
+    widths = sorted({round(max(q[0] for q in m["profile"]) - min(q[0] for q in m["profile"]), 1)
+                     for m in plain["geometry"] if m["ifc_type"] == "plank"})
+    assert widths == [25.0, 530.0]
+
+
+def test_the_verge_check_still_warns_when_the_tray_is_narrower_than_the_rule_allows():
+    """A tray width the rule cannot be met with (narrow trays: 200 wide cannot leave 150 to
+    370 at both verges of every width) is said, not hidden."""
+    from cladding_checks import check_rules as rules
+    info = [{"elevation": "Roof A", "verges": [{"side": "l", "last_seam": 65.0}, {"side": "r", "last_seam": 415.0}]}]
+    (row,) = [c for c in rules(dict(SEAM, elevations=[]), info) if c["name"].endswith("Verge")]
+    assert row["status"] == "warn" and "65 mm (left) and 415 mm (right)" in row["message"] and "150 to 370" in row["message"]
 
 
 def test_the_verge_exports_to_ifc_and_dxf():
