@@ -27,6 +27,12 @@ from cladding_constants import (_parse, chain_params, TOOL_NAME, TOOL_URL, IFC_S
 from cladding_primitives import corner_ring, ring_at
 
 IFC_SCHEMA_VERSIONS = ("IFC4X3", "IFC4X3_ADD2", "IFC4")
+# What params["ifc_schema"] can ask for, and what is tried for each, in order. IFC4X3 is the
+# newest and the default; IFC4 is what most programs import (Archicad before 29 takes
+# IFC2x3 and IFC4 only); IFC2X3 is for anything older still.
+IFC_SCHEMA_CHOICES = {"IFC4X3": IFC_SCHEMA_VERSIONS, "IFC4": ("IFC4",), "IFC2X3": ("IFC2X3", "IFC4")}
+# The model view each schema's header names: what an importer expects to be told.
+_VIEW_DEFINITION = {"IFC2X3": "CoordinationView_V2.0", "IFC4": "ReferenceView_V1.2"}
 _GUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, TOOL_URL)
 
 # ifc_type: (IFC class, PredefinedType, ObjectType / material label)
@@ -92,20 +98,22 @@ def _header(ifc):
     return hdr
 
 
-def _create_file():
-    """Newest schema this build carries. Ask before trying: the browser's WASM wheel
-    ships IFC2X3 and IFC4 only, and requesting a schema it does not have raises a C++
-    exception that kills the Pyodide runtime outright rather than something Python can
-    catch — so a try/except ladder cannot be the fallback."""
+def _create_file(want=None):
+    """A file in the schema asked for (IFC_SCHEMA_CHOICES; the newest by default), or the
+    nearest this build carries. Ask before trying: a WASM wheel may not ship every schema,
+    and requesting one it does not have raises a C++ exception that kills the Pyodide
+    runtime outright rather than something Python can catch — so a try/except ladder
+    cannot be the fallback."""
+    versions = IFC_SCHEMA_CHOICES.get(str(want or "").upper().replace(".", "X"), IFC_SCHEMA_VERSIONS)
     try:
         import ifcopenshell.ifcopenshell_wrapper as _wrapper
         available = set(_wrapper.schema_names())
     except Exception:   # noqa: BLE001 — an old build without the introspection
         available = set()
-    for version in IFC_SCHEMA_VERSIONS:
+    for version in tuple(versions) + ("IFC4",):
         if not available or version in available:
             return ifcopenshell.api.run("project.create_file", version=version)
-    return ifcopenshell.api.run("project.create_file", version=IFC_SCHEMA_VERSIONS[-1])
+    return ifcopenshell.api.run("project.create_file", version="IFC4")
 
 
 def _schema_label(ifc):
@@ -311,6 +319,14 @@ def _setting_out_props(p, info, elev, schema=IFC_SCHEMA_LABEL):
 
 # ── spatial hierarchy ────────────────────────────────────────────────────
 
+def _place(ifc, product, relative_to=None, z=0.0):
+    """Give a product a local placement: at height *z* in its parent's (the world's with
+    none). Some importers will not take a site, building, storey or assembly that has no
+    placement of its own."""
+    at = ifc.createIfcAxis2Placement3D(ifc.createIfcCartesianPoint((0.0, 0.0, float(z))), None, None)
+    product.ObjectPlacement = ifc.createIfcLocalPlacement(getattr(relative_to, "ObjectPlacement", None), at)
+
+
 def _spatial(ifc, context, elevations):
     """Project → Site → Building → Storeys, named after the host model."""
     project = ifcopenshell.api.run("root.create_entity", ifc, ifc_class="IfcProject",
@@ -330,16 +346,20 @@ def _spatial(ifc, context, elevations):
                                     name=context.get("building") or "Building")
     ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=project, products=[site])
     ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=site, products=[building])
+    _place(ifc, site)
+    _place(ifc, building, site)
     storeys = {}
     for elev in elevations:
         st = elev.get("storey") or {}
         key = st.get("name") or "Ground Floor"
         if key not in storeys:
             storey = ifcopenshell.api.run("root.create_entity", ifc, ifc_class="IfcBuildingStorey", name=key)
+            level = float(st.get("elevation", 0.0) or 0.0)
             try:
-                storey.Elevation = float(st.get("elevation", 0.0) or 0.0)
+                storey.Elevation = level
             except Exception:
                 pass
+            _place(ifc, storey, building, level)
             ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=building, products=[storey])
             storeys[key] = storey
     return project, body, site, building, storeys
@@ -361,7 +381,8 @@ def _unshift(meshes, offset):
 
 
 def meshes_to_ifc(meshes, params, infos=None):
-    """Convert prism meshes into an IFC4X3 file. Returns the temp file path."""
+    """Convert prism meshes into an IFC file, in the schema params["ifc_schema"] asks for
+    (IFC4X3 by default, IFC4 or IFC2X3). Returns the temp file path."""
     p = _parse(params)
     if infos is None:
         from cladding_preview import build_all_groups
@@ -369,7 +390,7 @@ def meshes_to_ifc(meshes, params, infos=None):
     info_by_name = {i["elevation"]: i for i in infos}
     context = p.get("context") or {}
     meshes = _unshift(meshes, context.get("offset"))
-    ifc = _create_file()
+    ifc = _create_file(params.get("ifc_schema"))
 
     person = ifcopenshell.api.run("owner.add_person", ifc, family_name="User")
     org = ifcopenshell.api.run("owner.add_organisation", ifc, identification="JWA",
@@ -401,6 +422,9 @@ def meshes_to_ifc(meshes, params, infos=None):
             except Exception:
                 pass
         ifcopenshell.api.run("spatial.assign_container", ifc, relating_structure=storey, products=[assembly])
+        # At the world origin, like its parts, which carry absolute coordinates.
+        assembly.ObjectPlacement = ifc.createIfcLocalPlacement(None, ifc.createIfcAxis2Placement3D(
+            ifc.createIfcCartesianPoint((0.0, 0.0, 0.0)), None, None))
         parts = []
         for mesh in by_elev.get(name, []):
             ifc_class, predefined, label = _IFC_TYPE_MAP.get(mesh.get("ifc_type"), ("IfcBuildingElementProxy", None, None))
@@ -456,7 +480,9 @@ def meshes_to_ifc(meshes, params, infos=None):
         if seam_tray:
             mat_name, category = "Standing seam sheet", "metal"
         try:
-            material = ifc.create_entity("IfcMaterial", Name=mat_name, Category=category)
+            material = ifc.create_entity("IfcMaterial", Name=mat_name)
+            if hasattr(material, "Category"):                   # IFC2X3 materials have a name only
+                material.Category = category
             ifc.create_entity("IfcRelAssociatesMaterial", GlobalId=ifcopenshell.guid.new(), OwnerHistory=_owner(ifc),
                               RelatedObjects=elems, RelatingMaterial=material)
         except Exception:
@@ -469,7 +495,9 @@ def meshes_to_ifc(meshes, params, infos=None):
     try:
         hdr = _header(ifc)
         hdr.file_name.authorization = "User must verify all outputs before use."
-        hdr.file_description.description = ("ViewDefinition [ReferenceView]",
+        hdr.file_name.name = "%s cladding.ifc" % (context.get("project") or TOOL_NAME)
+        view = _VIEW_DEFINITION.get(str(_schema_label(ifc)).upper(), "ReferenceView")
+        hdr.file_description.description = ("ViewDefinition [%s]" % view,
                                             "%s %s cladding setting-out. %s" % (TOOL_NAME, _schema_label(ifc), SCOPE_NOTE))
     except Exception:
         pass
