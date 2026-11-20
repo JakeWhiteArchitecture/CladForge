@@ -93,7 +93,7 @@ def eaves_parts(meshes, p, infos):
         if info is None or not has_eaves(elev, p):
             continue
         mine = [m for m in meshes if m.get("elevation") == name and m.get("ifc_type") not in OWN
-                and _same_frame(m["frame"], frame)]
+                and _same_frame(m["frame"], frame) and not (m.get("hip_part") or m.get("ridge_part"))]   # not a turned-up end
         trays = [m for m in mine if m.get("ifc_type") == "plank"]
         if not trays:
             continue
