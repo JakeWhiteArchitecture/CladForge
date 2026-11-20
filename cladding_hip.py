@@ -53,7 +53,7 @@ HIP_SEAMS = 940.0     # mm – the most between two standing seams at a hip (dim
 HIP_PROJECT = 30.0    # mm – a cap's foot beyond the trays' ends at the eaves: it hides the vent slot from below
 HIP_TOL = 30.0        # mm – an edge this close to the hip line, and along it, is an end at the hip
 ALONG = 0.15          # an edge is along the hip when it leans no more than this (a sine) off its line
-OWN = ("ridge_cap", "ridge_filler", "verge_strip", "valley_gutter", "eaves_strip")
+OWN = ("ridge_cap", "ridge_filler", "verge_strip", "valley_gutter", "eaves_strip", "corner_profile", "corner_trim")
 
 
 def cap_ends(elev):
@@ -110,10 +110,30 @@ def _at_hip(ring, h, tol):
     return out
 
 
+def _hip_cut(h, kind, near, t, face, board, _elev, _p):
+    """Where a part of this kind ends at a hip, as (its distance in from the hip line at
+    its own mid-depth, how that grows towards the line with depth)."""
+    k, mid = h["k"], near + t / 2.0
+    if kind in MEET:
+        return -k * mid, k
+    if kind in CLAD:
+        return h["back"] - k * mid, k
+    # the deck, battens, closers: square, behind the cladding's end
+    return h["back"] - min(k * (face - board) - RIDGE_OVERSAIL, k * near), 0.0
+
+
 def hip_ends(meshes, p, infos):
     """Bring every part's end to the hip (module docstring). Returns the meshes with the
     trays' turned-up ends added."""
-    faces = {e.get("name"): (hips_of(e), e) for e in p.get("elevations", []) if e.get("valleys")}
+    return cut_to_lines(meshes, p, infos, hips_of, _hip_cut, upstands=True)
+
+
+def cut_to_lines(meshes, p, infos, lines_of, cut, upstands=False):
+    """Bring the end of every part of a face to each of the lines *lines_of*(face) gives
+    (a hip; a raking corner: cladding_rake), where *cut* says a part of its kind ends.
+    Each end is slid along the part's own edge; a cut that leans is carried as a shift
+    with depth."""
+    faces = {e.get("name"): (lines_of(e), e) for e in p.get("elevations", []) if e.get("valleys")}
     faces = {name: f for name, f in faces.items() if f[0]}
     if not faces:
         return meshes
@@ -131,13 +151,7 @@ def hip_ends(meshes, p, infos):
         mid = near + t / 2.0
         rings = [m["profile"]] + list(m.get("holes") or [])
         for h in hips:
-            k = h["k"]
-            if kind in MEET:
-                target, lean = -k * mid, k
-            elif kind in CLAD:
-                target, lean = h["back"] - k * mid, k
-            else:       # the deck, battens, closers: square, behind the cladding's end
-                target, lean = h["back"] - min(k * (face - board) - RIDGE_OVERSAIL, k * near), 0.0
+            target, lean = cut(h, kind, near, t, face, board, elev, p)
             old = m.get("vshift") or []
             shifts, moved = [], []
             for j, ring in enumerate(rings):
@@ -159,7 +173,7 @@ def hip_ends(meshes, p, infos):
                 continue
             if lean or old:
                 m["vshift"] = shifts
-            if kind == "plank" and _up_slope(p) and len(moved) >= 2:
+            if upstands and kind == "plank" and _up_slope(p) and len(moved) >= 2:
                 up = _upstand(m, h, moved)
                 if up is not None:
                     extra.append(up)

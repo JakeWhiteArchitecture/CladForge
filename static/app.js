@@ -181,8 +181,8 @@ function elevationCard(e, i) {
     const clipped = ok && (e.clipLo > 0.5 || (e.clipHi !== null && e.clipHi < r.width - 0.5));
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
-        + ['valley', 'hip'].map(kind => { const with_ = ok ? valleyRecords(e).filter(v => v.kind === kind).map(v => v.with.replace('Elevation ', '')) : [];
-                                           return with_.length ? ` · ${kind} with ${with_.join(', ')}` : ''; }).join('')
+        + ROOF_JOINS.map(kind => { const with_ = ok ? valleyRecords(e).filter(v => v.kind === kind).map(v => v.with.replace('Elevation ', '')) : [];
+                                           return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind} with ${with_.join(', ')}` : ''; }).join('')
         + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
@@ -393,11 +393,16 @@ function ridgeRecord(e) {
 // it is looked for between a face and every other roof slope, whatever chains they are in. The
 // face that was there first masters the valley: it carries the gutter.
 const isRoofSlope = m => !!(m.result && m.result.ok && m.result.pitch !== undefined && m.result.pitch < 89 && !m.result.faces_down);
+const isPitched = m => !!(m.result && m.result.ok && m.result.pitch !== undefined && (m.result.pitch < 89 || m.result.faces_down));
+const ROOF_JOINS = ['valley', 'hip', 'rake'];
 async function linkValleys(e) {
     for (const m of state.elevations) if (m.valleys) m.valleys = m.valleys.filter(v => v.partner !== e);
     e.valleys = [];
-    const others = state.elevations.filter(m => m !== e && isRoofSlope(m));
-    if (!isRoofSlope(e) || !others.length) return [];
+    // Two roof slopes meet at a valley or a hip; a pitched face (a leaning wall, a slope) and
+    // any other face at a raking corner. Two upright walls are a chain corner, not this.
+    const ok = m => !!(m.result && m.result.ok), upright = m => ok(m) && !isPitched(m);
+    const others = state.elevations.filter(m => m !== e && ok(m) && !(upright(e) && upright(m)));
+    if (!ok(e) || !others.length) return [];
     const slim = r => ({ frame: r.frame, width: r.width, height: r.height, polygons: r.polygons });
     pyodide.globals.set('_valley_a', JSON.stringify(slim(e.result)));
     pyodide.globals.set('_valley_b', JSON.stringify(others.map(m => slim(m.result))));
@@ -415,15 +420,25 @@ _json.dumps(_vl(_json.loads(_valley_a), _json.loads(_valley_b)))`));
         const part = (partner, side, master) => Object.assign({ partner, k: link.k, angle: link.angle, length: link.length, master }, side);
         (other.valleys = other.valleys || []).push(part(e, link.b, true));
         e.valleys.push(part(other, link.a, false));
-        found.push({ face: other, kind: link.kind === 'hip' ? 'hip' : 'valley' });
+        found.push({ face: other, kind: ROOF_JOINS.includes(link.kind) ? link.kind : 'valley' });
     });
     return found;
 }
 
 // A face's valleys as the engine and a saved state take them: each partner by name.
+// A raking corner is one corner whatever chains its two faces are in, so both are told the
+// same detail: Profile where either chain's corner is set to it (whichever was active when
+// it was chosen), else its master's. A corner profile needs both faces clad alike.
+function rakeDetail(master, other) {
+    const of = m => (m.chain && m.chain.settings) || (typeof formSettings === 'function' ? formSettings() : {}) || {};
+    const a = of(master), b = of(other);
+    const alike = ['cladding_type', 'plank_profile', 'panel_t', 'plank_t'].every(k => String(a[k]) === String(b[k]));
+    return { detail: [a.corner, b.corner].includes('profile') ? 'profile' : (a.corner || 'mitre'), match: alike };
+}
+
 function valleyRecords(e) {
     return (e.valleys || []).filter(v => v.partner && state.elevations.includes(v.partner) && v.partner.result && v.partner.result.ok)
-        .map(v => ({ kind: v.kind === 'hip' ? 'hip' : 'valley', with: v.partner.name, p1: v.p1, p2: v.p2, inside: v.inside, other_up: v.other_up, other_n: v.other_n,
+        .map(v => Object.assign(v.kind === 'rake' ? rakeDetail(v.master ? e : v.partner, v.master ? v.partner : e) : {}, { kind: ROOF_JOINS.includes(v.kind) ? v.kind : 'valley', with: v.partner.name, p1: v.p1, p2: v.p2, inside: v.inside, other_up: v.other_up, other_n: v.other_n,
                      k: v.k, angle: v.angle, length: v.length, master: !!v.master }));
 }
 
@@ -473,7 +488,7 @@ function relayoutChain(chain) {
 // cross. The tick adds them to the faces (as picked surface, so everything downstream sees
 // one face that reaches the line) and extracts both again, which is what joins them; the
 // cross leaves that pair alone from then on.
-const HEAL_KINDS = { corner: 'a corner', ridge: 'a ridge', hip: 'a hip', valley: 'a valley', abutment: 'an abutment (the other face runs on past it, and is left as it is)', edge: 'an edge (no junction is detailed between a wall and a pitched face yet)' };
+const HEAL_KINDS = { corner: 'a corner', ridge: 'a ridge', hip: 'a hip', valley: 'a valley', rake: 'a raking corner', edge: 'an edge (no junction is detailed between a roof and a wall)', abutment: 'an abutment (the other face runs on past it, and is left as it is)' };
 const healKey = (a, b) => [a.name, b.name].sort().join(' | ');
 function showHeals() {
     state.heals = (state.heals || []).filter(h => state.elevations.includes(h.a) && state.elevations.includes(h.b));
@@ -831,7 +846,8 @@ _json.dumps(_ex(_pl))`);
             const heals = await offerHeals(e);
             const met = kind => valleys.filter(v => v.kind === kind).map(v => v.face.name).join(' and ');
             const valley = (met('valley') ? ` · a valley with ${met('valley')}: the cladding stands back from it, over a valley gutter` : '')
-                + (met('hip') ? ` · a hip with ${met('hip')}: the cladding is cut to it, under a hip cap` : '');
+                + (met('hip') ? ` · a hip with ${met('hip')}: the cladding is cut to it, under a hip cap` : '')
+                + (met('rake') ? ` · a raking corner with ${met('rake')}: mitred, or under a corner profile where the job's corner is Profile` : '');
             const near = heals.length ? ` · nearly meets ${heals.map(h => (h.a === e ? h.b : h.a).name).join(' and ')}: tick the red strip to heal the junction` : '';
             setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley + near, 'ready');
             // The view stays where it was put: picking a face must not move the camera.
@@ -1966,7 +1982,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_rake', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

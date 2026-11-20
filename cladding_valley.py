@@ -52,13 +52,14 @@ def valleys_of(elev, kind="valley"):
             p1, p2 = [float(c) for c in v["p1"]], [float(c) for c in v["p2"]]
             k = float(v["k"])
             length = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
-            if k <= 0 or length < 1.0:
+            if (k <= 0 and kind != "rake") or k == 0 or length < 1.0:
                 continue
             m = [-(p2[1] - p1[1]) / length, (p2[0] - p1[0]) / length]
             inside = v.get("inside") or _inside(elev)
             if (inside[0] - p1[0]) * m[0] + (inside[1] - p1[1]) * m[1] < 0:
                 m = [-m[0], -m[1]]
             out.append({"with": v.get("with"), "p1": p1, "p2": p2, "k": k, "master": bool(v.get("master")),
+                        "detail": v.get("detail"), "match": v.get("match", True),
                         "other_up": [float(c) for c in v["other_up"]], "other_n": [float(c) for c in v["other_n"]],
                         "m": m, "length": length, "back": VALLEY_CLEAR / 2.0 * math.sqrt(1.0 + k * k)})
         except (KeyError, TypeError, ValueError):
