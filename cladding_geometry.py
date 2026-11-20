@@ -629,6 +629,7 @@ LOCK_CENTRES = "The panel bay sets the batten centres: change the panel width"
 LOCK_OPENING = "The structural opening sets this width"
 LOCK_BAYS = "Set out from the structural openings: the bays follow the jambs"
 LOCK_POSTS = "Set out from the model's columns: the battens follow the client's"
+LOCK_MATCHED = "Matched to the battens of %s %s: change them there, or switch matching off for this chain"
 LOCK_BASE_ROW = "Cut at this face's base: set this row on the face the chain's datum comes from"
 LOCK_UNDER_DATUM = "Under the chain's datum: rows here carry on down at the panel height"
 FIXED_TOP_ROW = "The top row is whatever is left under the top of the cladding, so its height is not typed: split it, or change the rows below"
@@ -655,6 +656,13 @@ def _batten_dims(name, battens, pitch, along_u, H_or_W, lock=None):
     return out
 
 
+def _post_lock(info):
+    """Why the battens of a face set out on given lines cannot be dragged: the client's
+    columns, or the chain above or below (cladding_match)."""
+    to = info.get("matched_to")
+    return LOCK_MATCHED % (to.get("chain") or to.get("name") or "the chain", to.get("side") or "beside") if to else LOCK_POSTS
+
+
 def _client_batten_dims(name, meshes, info, H):
     """On a face set out on the client's battens: a running string across the top from one
     client batten in use (on, drawn green in the 2D view) to the next, and, inside the panel
@@ -665,7 +673,8 @@ def _client_batten_dims(name, meshes, info, H):
     greens = sorted(q["u"] for q in posts if q["state"] == "on")
     if not greens:
         return []
-    out = _widths_string(name, list(zip(greens, greens[1:])), H)
+    lock = _post_lock(info)
+    out = _widths_string(name, list(zip(greens, greens[1:])), H, lock)
     ours = set()
     for m in meshes:
         if m.get("elevation") != name or m.get("ifc_type") not in ("batten", "counter_batten"):
@@ -683,7 +692,7 @@ def _client_batten_dims(name, meshes, info, H):
             continue
         v = H - (300.0 if k % 2 == 0 else 520.0)       # inside the layout, stepped
         out.append(_dim(name, [min(g, u), v], [max(g, u), v], "%.0f" % abs(u - g), 0.0, [0, 1],
-                        lock=LOCK_POSTS, ours=round(u, 1)))
+                        lock=lock, ours=round(u, 1)))
     return out
 
 
@@ -744,11 +753,19 @@ def _posts(p, elev, info):
     one toggled "fix" is a batten but takes no joint (_post_fixings). None if none are left.
     Every column and its state go to info["posts"] for the 2D view."""
     cols = sorted(elev.get("posts") or [], key=lambda q: q["u"]) if p.get("battens_from_model", True) else []
+    # No column of the client's in use: the lines of the chain directly above or below
+    # (cladding_match), which come the same way. The client's own come first.
+    matched = elev.get("matched_posts") or []
+    follow = bool(matched) and not any(post_state(elev, q["u"], q.get("default", "on")) != "off" for q in cols)
+    if follow:
+        cols = sorted(cols + list(matched), key=lambda q: q["u"])
     info["posts"] = [{"u": round(float(q["u"]), 1), "v0": q.get("v0"), "v1": q.get("v1"), "w": q.get("w"),
                       "state": post_state(elev, q["u"], q.get("default", "on")), "default": q.get("default", "on"),
                       "name": q.get("name", "")} for q in cols]
     us = [q["u"] for q in info["posts"] if q["state"] != "off"]
-    info["model_posts"] = len(us)
+    info["model_posts"] = 0 if follow else len(us)
+    count = sum(1 for q in matched if q.get("matched") and post_state(elev, q["u"], q.get("default", "on")) != "off")
+    info["matched_to"] = dict(elev["matched_to"], count=count) if follow and count and elev.get("matched_to") else None
     return us or None
 
 
@@ -893,7 +910,7 @@ def _horizontal_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, reg
     info.update(n_courses=len(courses), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=(H - courses[-1]) if courses else 0.0,
                 closing_cut_left=0.0, closing_cut_right=0.0)
-    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else None)
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=_post_lock(info) if posts else None)
     full = [v for v in courses if v >= v0 - 0.5]
     if full:
         dims.append(_dim(name, [W, full[0]], [W, full[0] + cover], "Course %.0f" % cover, 300, [1, 0],
@@ -1100,7 +1117,7 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
     info.update(n_courses=len(cols), cover=cover, batten_centres=p["batten_centres"],
                 closing_cut_top=0.0, closing_cut_left=left_cut, closing_cut_right=right_cut,
                 set_out_from_openings=from_openings, tray_widths=sorted({round(b - a) for a, b in cols if a >= 0 and b <= W}))
-    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else None)
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=_post_lock(info) if posts else None)
     if cols:
         u0, u1 = cols[0]
         lock = {"lock": LOCK_SEAMS} if from_openings else {}
@@ -1300,11 +1317,11 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
                 hjoints=joints, panel_joints=[q for q in joints if q["dissolved"]], joints_dropped=dropped,
                 set_out_from_openings=bool(jambs),
                 panel_widths=widths, min_panel=(widths[0] if widths else 0.0))
-    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=LOCK_POSTS if posts else LOCK_CENTRES)
+    dims += _batten_dims(name, battens, p["batten_centres"], True, W, lock=_post_lock(info) if posts else LOCK_CENTRES)
     # The left closing cut and the first full panel set out the face: typing a cut solves
     # for the offset, typing the panel sets the panel width. Set out from the openings,
     # the bays follow the jambs instead and both are read-only.
-    lock = {"lock": LOCK_POSTS} if posts else ({"lock": LOCK_BAYS} if jambs else {})
+    lock = {"lock": _post_lock(info)} if posts else ({"lock": LOCK_BAYS} if jambs else {})
     if fulls and fulls[0][0] > 1:
         dims.append(_dim(name, [0, H], [fulls[0][0], H], "Cut %.0f" % fulls[0][0], 300, [0, 1],
                          "cut_left", fulls[0][0], bay=p["panel_w"] + gap, **lock))

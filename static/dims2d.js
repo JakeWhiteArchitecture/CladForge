@@ -268,7 +268,7 @@ function postLines(e, layer) {
         line.dataset.kind = 'post';
         line.dataset.key = 'post:' + postKey(q.u);
         const title = document.createElementNS(ns, 'title');
-        title.textContent = `Client batten${q.name ? ' "' + q.name + '"' : ''} at ${Math.round(q.u)} — ${what}. Click for ${POST_LOOK[POST_NEXT[q.state]][3].split(':')[0].toLowerCase()}.`;
+        title.textContent = `${info.matched_to ? 'Matched batten' : 'Client batten'}${q.name ? ' "' + q.name + '"' : ''} at ${Math.round(q.u)} — ${what}. Click for ${POST_LOOK[POST_NEXT[q.state]][3].split(':')[0].toLowerCase()}.`;
         line.appendChild(title);
         line.addEventListener('click', ev => { ev.stopPropagation(); cyclePost(e, q); });
         svg.appendChild(line);

@@ -92,6 +92,7 @@
                     <div class="field"><label>C/B centres</label><input type="number" id="cb_centres" value="600" min="300" max="900" step="10" oninput="onNumeric()"></div>
                 </div>
                 <label class="chk"><input type="checkbox" id="battens_from_model" checked onchange="updatePreview()"> Battens on the model's columns <span class="unit">where it has them standing on the face; in the 2D view click one to cycle it on, fixing only (no joint on it), off</span></label>
+                <label class="chk"><input type="checkbox" id="match_battens" checked onchange="updatePreview()"> Match the battens of a chain directly above or below <span class="unit">this chain's uprights go on the lines of one already there on the same wall, so they run through</span></label>
                 <p class="hint">A client's model can carry its own battens, as columns set out to suit the frame behind. Where a face has them, the vertical layer goes on their centrelines (the battens, or under vertical planks the counter-battens) and the offset slider has nothing to move. Panel joints land on them, and each window's reveal line is a joint carried straight up and down past it, on a batten above and below the opening.</p>
                 <div class="field"><label>Splash zone above abutments <span class="unit">0–300 mm, 150 recommended</span></label>
                     <input type="number" id="splash" value="150" min="0" max="300" step="10" oninput="onNumeric()"></div>
