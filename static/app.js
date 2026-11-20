@@ -618,7 +618,35 @@ function toggle2D() {
     setStatus('2D elevation: click a dimension to type over it, a panel joint to dissolve it, a client batten to set it on, fixing only or off, a dashed stagger to put a joint on it · E or Esc for 3D', 'ready');
 }
 
+// Cavity barriers on all four sides, from the 2D view. The button sets the chain shown
+// (the sidebar's checkbox), and clears what its openings were set to one by one, so it
+// does what it says; an opening's own box (a click on its jamb or head) sets just that one.
+function toggleBarriers() {
+    const box = document.getElementById('barriers'), e = state.elevations[state.active];
+    box.checked = !box.checked;
+    for (const m of (e && e.chain ? e.chain.members : []))
+        for (const k of Object.keys(m.openingDetails || {})) delete m.openingDetails[k].barriers;
+    syncTypeUI();
+    setStatus(`Cavity barriers on all four sides of every opening${e && e.chain ? ' in ' + e.chain.name : ''}: ${box.checked ? 'on' : 'off'}`, 'ready');
+    updatePreview();
+}
+function setOpeningBarriers(e, key, on) {
+    e.openingDetails = e.openingDetails || {};
+    e.openingDetails[key] = Object.assign({}, e.openingDetails[key], { barriers: !!on });
+    renderElevationList();
+    onNumeric();
+}
+function updateBarriersButton() {
+    const b = document.getElementById('barriers-2d');
+    if (!b) return;
+    const on = document.getElementById('barriers').checked;
+    b.style.display = in2D() ? '' : 'none';
+    b.textContent = 'Cavity barriers: ' + (on ? 'on' : 'off');
+    b.classList.toggle('on', on);
+}
+
 function update2DButton() {
+    updateBarriersButton();
     for (const id of ['view-2d', 'edit-2d']) {
         const b = document.getElementById(id);
         if (!b) continue;
@@ -885,7 +913,7 @@ _json.dumps(_ex(_pl))`);
 const NUM = ['sheathing_t', 'insulation_t', 'batten_w', 'batten_d', 'batten_centres', 'cb_w', 'cb_d',
              'cb_centres', 'splash',
              'panel_t', 'panel_w', 'panel_h', 'panel_gap', 'plank_w', 'plank_t', 'plank_lap', 'plank_gap',
-             'plank_len', 'plank_min', 'plank_splice', 'closer_w', 'board_w', 'board_h', 'kerf', 'board_trim',
+             'plank_len', 'plank_min', 'plank_splice', 'closer_w', 'barrier_gap', 'board_w', 'board_h', 'kerf', 'board_trim',
              'seam_centres', 'seam_h', 'seam_t'];
 
 // The piece length the splices slider sets out to: the stock length at Fewer, the
@@ -903,7 +931,7 @@ function val(id) { return document.getElementById(id).value; }
 // face of another chain loads that chain's settings into it, and any edit is kept by the
 // chain shown (state.formChain), so one chain's choices never change another's. Live trim,
 // panels as walls and shared offcuts stay job-wide.
-const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model', 'seam_full_length'];
+const CHAIN_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'battens_from_model', 'seam_full_length', 'barriers'];
 function formSettings() {
     const s = { corner: toggleValue('corner-type') || 'mitre' };
     for (const k of NUM) { const v = parseFloat(val(k)); if (isFinite(v)) s[k] = v; }
@@ -1060,6 +1088,7 @@ function getParams() {
     p.insulation = document.getElementById('insulation').checked;
     p.reveals = document.getElementById('reveals').checked;
     p.set_out_from_openings = document.getElementById('set_out_from_openings').checked;
+    p.barriers = document.getElementById('barriers').checked;
     p.cladding_type = toggleValue('cladding-type');
     p.rotate = document.getElementById('rotate').checked;
     p.battens_from_model = document.getElementById('battens_from_model').checked;
@@ -1121,6 +1150,8 @@ function syncTypeUI() {
                                                             : 'End trim <span class="unit">mm off each end of a length</span>';
     document.getElementById('plank_splice_val').textContent = splicePiece();
     document.getElementById('batten_centres').readOnly = panel;
+    document.getElementById('barrier-gap-field').style.display = document.getElementById('barriers').checked ? '' : 'none';
+    updateBarriersButton();
 }
 
 function updateSliderRange() {
@@ -1278,7 +1309,7 @@ function setStatus(text, cls) {
 // (cladding_state.py); Load puts them all back. The surfaces travel in the file, so a
 // state loads without the IFC and without extracting again. Open the IFC first to see
 // the host model: opening a model starts afresh and clears the chains.
-const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls', 'seam_full_length'];
+const STATE_CHECKS = ['sheathing', 'insulation', 'reveals', 'set_out_from_openings', 'rotate', 'live-trim', 'penetrations', 'share_offcuts', 'battens_from_model', 'panels_as_walls', 'seam_full_length', 'barriers'];
 const STATE_TOGGLES = ['corner-type', 'cladding-type', 'plank-orient', 'plank-profile'];
 
 function snapshotState() {

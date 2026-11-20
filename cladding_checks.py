@@ -309,6 +309,18 @@ def check_rules(params, infos=None):
         add("Window frames", "warn" if notes else "pass",
             "; ".join(notes) if notes else "Linings run to the frame: %d from the model, %d set on the opening, %d at the "
             "chain's frame position" % (count["model"], count["set"], count["default"]), len(ops))
+    # Openings closed with cavity barriers on all four sides: the battens over and under
+    # each stop short, or the bays there would be shut pockets.
+    closed = [i["barriers"] for i in infos if i.get("barriers")]
+    if closed:
+        n, cut = sum(b["openings"] for b in closed), sum(b["cut"] for b in closed)
+        add("Cavity barriers", "pass" if cut else "warn",
+            "%d opening%s closed with solid timber cavity barriers on all four sides, a damp proof membrane on each%s" % (
+                n, "" if n == 1 else "s",
+                "; %d batten%s over and under stop%s %.0f mm short of the head and sill barriers, so those bays still drain "
+                "and vent sideways into the bays beside the opening" % (cut, "" if cut == 1 else "s", "s" if cut == 1 else "",
+                                                                        max(b["gap"] for b in closed))
+                if cut else ": no batten runs over or under them, so check the bays there are open to those beside"), n)
     bad = sum(i.get("unsupported_joints", 0) for i in infos)
     if bad:
         add("End joints", "warn", "%d board end joints fall between battens — shorten max length or adjust centres" % bad, bad)
