@@ -172,6 +172,11 @@ def test_the_cladding_on_a_slope_is_the_walls_turned_onto_it(kw, deg):
     leans out over the ground."""
     _p0, up = _build(0.0, kw)
     _p1, tipped = _build(deg, kw)
+    # the sill capping and head strip of a standing seam wall's windows (cladding_window) are an upright
+    # wall's only: an opening in a slope is a rooflight. Everything else is compared.
+    wall_only = lambda o: dict(o, geometry=[m for m in o["geometry"]                 # noqa: E731
+                                            if m["ifc_type"] not in ("window_flashing", "sill_board")])
+    up, tipped = wall_only(up), wall_only(tipped)
     assert [m["name"] for m in tipped["geometry"]] == [m["name"] for m in up["geometry"]]
     kinds = {m["ifc_type"] for m in up["geometry"]}
     assert {"reveal", "closer", "batten"} <= kinds

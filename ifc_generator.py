@@ -57,6 +57,8 @@ _IFC_TYPE_MAP = {
     "verge_strip":    ("IfcCovering", "ROOFING",     "Verge strip"),
     "valley_gutter":  ("IfcCovering", "ROOFING",     "Valley gutter"),
     "eaves_strip":    ("IfcCovering", "ROOFING",     "Eaves apron"),
+    "window_flashing": ("IfcCovering", "CLADDING",   "Window flashing"),
+    "sill_board":     ("IfcPlate",    "SHEET",       "Sill board"),
 }
 _MATERIALS = {
     "batten": ("Timber (softwood) batten", "wood"), "counter_batten": ("Timber (softwood) batten", "wood"),
@@ -71,6 +73,7 @@ _MATERIALS = {
     "seam": ("Standing seam sheet", "metal"),
     "ridge_cap": ("Ridge cap sheet", "metal"), "ridge_filler": ("Vented foam filler", "rubber"),
     "verge_strip": ("Verge strip sheet", "metal"), "valley_gutter": ("Valley gutter sheet", "metal"), "eaves_strip": ("Eaves apron sheet", "metal"),
+    "window_flashing": ("Window flashing sheet", "metal"), "sill_board": ("Plywood sill board", "wood"),
 }
 
 

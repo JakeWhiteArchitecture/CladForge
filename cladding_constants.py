@@ -25,7 +25,8 @@ COLORS = {  # ifc_type: (hex, opacity) — two batten tones, translucent layers,
     "dpm": ("#10233f", 1.0),        # the damp proof membrane on a cavity barrier
     "deck": ("#c9a46a", 1.0), "seam": ("#6b8fa3", 1.0),   # a seam is its trays' own metal
     "ridge_cap": ("#7d9bab", 1.0), "ridge_filler": ("#2b2b2b", 1.0), "verge_strip": ("#7d9bab", 1.0),
-    "valley_gutter": ("#8fa9b6", 1.0), "eaves_strip": ("#7d9bab", 1.0)}
+    "valley_gutter": ("#8fa9b6", 1.0), "eaves_strip": ("#7d9bab", 1.0),
+    "window_flashing": ("#7d9bab", 1.0), "sill_board": ("#c9a46a", 1.0)}
 # A standing seam as modelled: a closed double lock, sheet by sheet (cladding_geometry.
 # _double_lock), rolled, with the same air SEAM_AIR between every sheet and the one parallel to
 # it (the clip runs in it between the upstands), so the head comes out 5 sheets and 4 airs

@@ -21,6 +21,7 @@ from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts
 from cladding_rake import rake_ends, rake_parts
+from cladding_window import window_parts
 
 
 def _build_all(p):
@@ -126,6 +127,7 @@ def _preview_one(params):
     meshes = verge_parts(meshes, p, infos)   # a roof slope's free side edges: the last tray out over a verge strip
     meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
     meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays out over an eaves apron
+    meshes = window_parts(meshes, p, infos)  # a standing seam wall's openings: the sill capping and the head strip
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too
