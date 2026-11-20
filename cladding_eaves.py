@@ -137,20 +137,44 @@ def _joins(elev, roof):
         u0, u1 = sorted((j["p1"][0], j["p2"][0]))
         out.append(dict(j, u0=u0, u1=u1, v=(j["p1"][1] + j["p2"][1]) / 2.0, depth=float(v["other_depth"]),
                         soffit=float(v["other_soffit"]), top=float(v["other_top"]), trays=bool(v.get("other_trays")),
-                        seam=float(v.get("other_seam") or 0.0)))
+                        seam=float(v.get("other_seam") or 0.0),
+                        other_pitch=math.degrees(math.acos(max(0.0, min(1.0, abs(float(j["other_n"][2])))))),
+                        ))
+    for q in out:
+        q["mansard"] = roof and q["other_pitch"] < 89.0                # the face below the roof leans back under it
     return out
 
 
-def wall_stop(depth, soffit, top, pitch):
+def wall_stop(depth, soffit, top, pitch, lean=90.0):
     """Where a wall's cladding stops under a roof that comes down to its head, as a height
-    from the line the two meet on (negative: below it). *top* (the wall's top edge offset:
-    the ventilation gap) below the roof's soffit **at the outside surface of the wall's
-    cladding**, *depth* out from the wall (the tips of a standing seam's seams), where a
-    soffit that falls outward is lowest:
-    every layer of the wall is cut back level to that. Never above the line itself, where
-    the roof's own layers end."""
-    t, c = math.tan(math.radians(pitch)), math.cos(math.radians(pitch))
-    return min(0.0, soffit / c - depth * t) - top
+    from the line the two meet on (negative: below it), up the wall's face. *top* (the
+    wall's top edge offset: the ventilation gap) below the roof's soffit **at the outside
+    surface of the wall's cladding**, *depth* out from the wall (the tips of a standing
+    seam's seams), where a soffit that falls outward is lowest:
+    every layer of the wall is cut back to that, square to its face. The gap is plumb, as it
+    is on an upright wall. Never above the line itself, where the roof's own layers end. *pitch*: the roof's, in degrees; *lean*: the
+    wall's (90 upright; less, a mansard's lower slope, leaning back under the roof)."""
+    gap = math.radians(lean - pitch)                       # the angle the two faces make, less 90
+    meet = (soffit - depth * math.cos(gap)) / math.sin(gap)    # where the cladding's outside meets the soffit, up the wall
+    # *top* clear under the soffit, plumb: on a wall that leans back that is further down its face
+    return min(-top, meet - top * math.cos(math.radians(pitch)) / math.sin(gap))
+
+
+def over_wall(depth, soffit, top, pitch, lean=90.0, sheet=None):
+    """An eaves run on over a clad wall (or a mansard's lower slope) below it: (how far down
+    the slope the roof runs past the line the two meet on, how far below the roof's moved
+    edge the drop's foot hangs). *depth*: the outside of the wall's cladding (its seams'
+    tips); *sheet*: the outside of its sheets or boards, if less. The foot laps the top of
+    those by EAVES_WALL_LAP, plumb, and stands EAVES_OVER clear of the cladding's outside
+    there (a wall that leans back is furthest out at the foot)."""
+    sheet = depth if sheet is None else sheet
+    s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+    sl, cl = math.sin(math.radians(lean)), math.cos(math.radians(lean))
+    stop = wall_stop(depth, soffit, top, pitch, lean)         # up the wall's face, at its cladding's outside
+    y_foot = sheet * cl + stop * sl - EAVES_WALL_LAP          # x out from the line on plan, y up from it
+    x_foot = depth * sl - (y_foot - depth * cl) / sl * cl
+    run = max(0.0, (x_foot + EAVES_OVER - soffit * s) / c)
+    return run, -run * s - y_foot
 
 
 def _eaves_rings(tray, soffit, t, pitch, below=EAVES_DROP):
@@ -258,8 +282,7 @@ def eaves_parts(meshes, p, infos):
                 s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
                 if over:
                     # the drip's line EAVES_OVER beyond the outside of the wall's cladding (its seams' tips), on plan
-                    run = max(0.0, (over["depth"] + over["seam"] + EAVES_OVER - soffit * s) / c)
-                    below = EAVES_WALL_LAP - wall_stop(over["depth"] + over["seam"], soffit, over["top"], pitch) - run * s
+                    run, below = over_wall(over["depth"] + over["seam"], soffit, over["top"], pitch, over["other_pitch"], over["depth"])
                 ve = v - run
                 nose, drop_out, below = apron_drop(soffit, pitch, below)
                 end = ve - (drop_out - soffit * s) / c - nose           # the plywood's end, and the trays'
@@ -308,7 +331,8 @@ def eaves_parts(meshes, p, infos):
                 extra.extend(drips[1:])
                 apron["eaves_info"] = {"length": round(b - a, 1), "lap": EAVES_LAP, "nose": nose, "drop": round(below, 1),
                                        "clear": round(drop_out, 1), "tray": EAVES_TRAY, "thickness": t, "sheet": round(sheet, 1),
-                                       "over": over["with"] if over else None, "run": round(run, 1)}
+                                       "over": over["with"] if over else None, "run": round(run, 1),
+                                       "mansard": bool(over and over["mansard"])}
                 extra.append(apron)
                 for d in drips[1:]:
                     d["eaves_info"] = apron["eaves_info"]
@@ -335,7 +359,8 @@ def eaves_under(meshes, p, infos):
         for j in joins:
             nz = max(0.05, min(1.0, abs(j["other_n"][2])))
             pitch = math.degrees(math.acos(nz))
-            stop = j["v"] + wall_stop(depth, j["soffit"], top, pitch)
+            lean = min(90.0, float(elev.get("pitch") or 90.0))
+            stop = j["v"] + wall_stop(depth, j["soffit"], top, pitch, lean)
             for m in mine:
                 pts = m["profile"]
                 at = [j["u0"] - 60.0 <= q[0] <= j["u1"] + 60.0 and q[1] > stop + 0.01 for q in pts]
@@ -348,5 +373,5 @@ def eaves_under(meshes, p, infos):
                     if on:
                         q[1] = round(stop, 3)
             info.setdefault("eaves_under", []).append({"with": j["with"], "length": round(j["length"], 1), "stop": round(stop - j["v"], 1),
-                                                        "gap": top, "pitch": round(pitch, 1)})
+                                                        "gap": top, "pitch": round(pitch, 1), "mansard": lean < 89.0})
     return [m for m in meshes if id(m) not in gone]

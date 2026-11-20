@@ -182,7 +182,7 @@ function elevationCard(e, i) {
     const corners = [e.cornerLo, e.cornerHi].filter(k => k);
     const place = (e.chain.members.length > 1 && ok ? ` · run ${Math.round(e.start)}–${Math.round(e.start + cladWidth(e))}${e.rev ? ' ↺' : ''}` : '')
         + ROOF_JOINS.map(kind => { const with_ = ok ? valleyRecords(e).filter(v => v.kind === kind).map(v => v.with.replace('Elevation ', '')) : [];
-                                           return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind === 'eaves' ? 'eaves (no overhang)' : kind} with ${with_.join(', ')}` : ''; }).join('')
+                                           return with_.length ? ` · ${kind === 'rake' ? 'raking corner' : kind === 'eaves' ? (valleyRecords(e).some(v => v.kind === 'eaves' && isPitched(e) && isPitched(state.elevations.find(m => m.name === v.with) || {})) ? 'mansard' : 'eaves (no overhang)') : kind} with ${with_.join(', ')}` : ''; }).join('')
         + (ok && ridgeRecord(e) ? ` · ridge with ${e.ridge.partner.name.replace('Elevation ', '')}${e.ridge.master ? ' (carries the cap)' : ''}` : '')
         + (corners.length ? ` · ${corners.length} corner${corners.length > 1 ? 's' : ''}` : '')
         + (clipped ? ` · clad ${Math.round(e.clipLo)}–${Math.round(e.clipHi === null ? r.width : e.clipHi)}` : '')
@@ -877,7 +877,9 @@ _json.dumps(_ex(_pl))`);
             const valley = (met('valley') ? ` · a valley with ${met('valley')}: the cladding stands back from it, over a valley gutter` : '')
                 + (met('hip') ? ` · a hip with ${met('hip')}: the cladding is cut to it, under a hip cap` : '')
                 + (met('rake') ? ` · a raking corner with ${met('rake')}: mitred, or under a corner profile where the job's corner is Profile` : '')
-                + (met('eaves') ? ` · an eaves with ${met('eaves')}, no overhang: the roof runs on over the wall's cladding with a drip, and the wall stops under it` : '');
+                + (met('eaves') ? (isPitched(e) && valleys.filter(v => v.kind === 'eaves').every(v => isPitched(v.face))
+                    ? ` · a mansard with ${met('eaves')}: the flatter slope runs on over the steeper one's cladding with a drip, and the steeper one stops under it`
+                    : ` · an eaves with ${met('eaves')}, no overhang: the roof runs on over the wall's cladding with a drip, and the wall stops under it`) : '');
             const near = heals.length ? ` · nearly meets ${heals.map(h => (h.a === e ? h.b : h.a).name).join(' and ')}: tick the red strip to heal the junction` : '';
             setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley + near, 'ready');
             // The view stays where it was put: picking a face must not move the camera.
