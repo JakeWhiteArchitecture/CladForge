@@ -489,11 +489,20 @@ function relayoutChain(chain) {
 // one face that reaches the line) and extracts both again, which is what joins them; the
 // cross leaves that pair alone from then on.
 const HEAL_KINDS = { corner: 'a corner', ridge: 'a ridge', hip: 'a hip', valley: 'a valley', rake: 'a raking corner', edge: 'an edge (no junction is detailed between a roof and a wall)', abutment: 'an abutment (the other face runs on past it, and is left as it is)' };
-const healKey = (a, b) => [a.name, b.name].sort().join(' | ');
+//
+// Where a face runs on a little past the line instead (a wall drawn through its corner, a
+// roof's edge past the wall it lands on) the offer is the other way about: what is past the
+// line is ghosted in red, and the tick trims it off (h.trim: the outlines go to the face as
+// "trims", cut out of its surface when it is read again), bringing a face that is short
+// up to the line with it. A pair can have both offers; each is declined on its own.
+const healKey = (a, b, trim) => [a.name, b.name].sort().join(' | ') + (trim ? ' | trim' : '');
 function showHeals() {
     state.heals = (state.heals || []).filter(h => state.elevations.includes(h.a) && state.elevations.includes(h.b));
-    renderHeals(state.heals.map(h => ({ quads: h.quads.a.concat(h.quads.b),
-        title: `Heal ${h.a.name} and ${h.b.name}: extend ${h.quads.a.length && h.quads.b.length ? 'both' : (h.quads.a.length ? h.a.name : h.b.name)} by up to ${Math.round(h.gap)} mm so they meet at ${HEAL_KINDS[h.kind] || 'an edge'}` })),
+    renderHeals(state.heals.map(h => h.trim ? { quads: h.show.concat(h.quads.a, h.quads.b),
+        title: `Trim ${h.cut.a.length && h.cut.b.length ? h.a.name + ' and ' + h.b.name : (h.cut.a.length ? h.a.name : h.b.name)} back by up to ${Math.round(h.over)} mm, to the line ${h.a.name} and ${h.b.name} meet on, so they meet at ${HEAL_KINDS[h.kind] || 'an edge'}`
+            + (h.quads.a.length || h.quads.b.length ? `; ${h.quads.a.length ? h.a.name : h.b.name} is extended to it` : '') }
+        : { quads: h.quads.a.concat(h.quads.b),
+        title: `Heal ${h.a.name} and ${h.b.name}: extend ${h.quads.a.length && h.quads.b.length ? 'both' : (h.quads.a.length ? h.a.name : h.b.name)} by up to ${Math.round(h.gap)} mm so they meet at ${HEAL_KINDS[h.kind] || 'an edge'}` }),
         applyHeal, dismissHeal);
 }
 
@@ -513,8 +522,13 @@ _json.dumps(_hl(_json.loads(_heal_a), _json.loads(_heal_b)))`));
         } catch (err) { console.warn('heal check failed', err); }
         state.healNo = state.healNo || new Set();
         links.forEach((h, i) => {
-            if (!h || state.healNo.has(healKey(e, others[i]))) return;
-            state.heals.push({ a: e, b: others[i], kind: h.kind, gap: h.gap, length: h.length, quads: { a: h.a, b: h.b } });
+            if (!h) return;
+            if ((h.a.length || h.b.length) && !state.healNo.has(healKey(e, others[i])))
+                state.heals.push({ a: e, b: others[i], kind: h.kind, gap: h.gap, length: h.length, quads: { a: h.a, b: h.b } });
+            const t = h.trim;                     // one or both run on past the line: the overshoot, to trim
+            if (t && !state.healNo.has(healKey(e, others[i], true)))
+                state.heals.push({ a: e, b: others[i], kind: t.kind, trim: true, over: t.over, length: h.length, show: t.show,
+                                   cut: { a: t.a, b: t.b }, quads: { a: t.add.a, b: t.add.b } });
         });
     }
     showHeals();
@@ -524,8 +538,12 @@ _json.dumps(_hl(_json.loads(_heal_a), _json.loads(_heal_b)))`));
 async function applyHeal(i) {
     const h = state.heals[i];
     if (!h) return;
-    state.heals.splice(i, 1);
+    state.heals = state.heals.filter(x => !(x.a === h.a && x.b === h.b) && !(x.a === h.b && x.b === h.a));   // the pair's other offer goes with it
     showHeals();
+    if (h.trim) {                                 // what ran on past the line comes off each face's surface
+        h.a.trims = (h.a.trims || []).concat(h.cut.a);
+        h.b.trims = (h.b.trims || []).concat(h.cut.b);
+    }
     // a strip, and the elements it was healed to: those do not cut it, everything else does (fabric_extract._extract)
     const onto = m => m.picks.map(p => p.mesh.userData.index);
     h.a.heals = (h.a.heals || []).concat(h.quads.a.map(quad => ({ quad, through: onto(h.b) })));
@@ -550,7 +568,7 @@ async function applyHeal(i) {
 function dismissHeal(i) {
     const h = state.heals[i];
     if (!h) return;
-    (state.healNo = state.healNo || new Set()).add(healKey(h.a, h.b));
+    (state.healNo = state.healNo || new Set()).add(healKey(h.a, h.b, h.trim));
     state.heals.splice(i, 1);
     showHeals();
 }
@@ -770,7 +788,7 @@ function onViewportClick(event) {
     if (existing >= 0) e.picks.splice(existing, 1);
     else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal), point: toIfc(hit.point) });
     e.highlights.forEach(h => { highlightGroup.remove(h); h.geometry.dispose(); });
-    if (!e.picks.length) e.heals = [];         // nothing left to heal onto
+    if (!e.picks.length) { e.heals = []; e.trims = []; }     // nothing left to heal onto, or to trim
     e.highlights = pickHighlights(e);
     if (!e.storey) { const meta = meshMeta[hit.mesh.userData.index]; e.storey = meta && meta.storey ? meta.storey : null; }
     runExtraction(e);
@@ -840,7 +858,7 @@ async function extractOnce(e) {
     e.error = null;
     renderElevationList();
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
-    const payload = { name: e.name, faces: tris, heals: e.heals || [], outward: e.picks[0].normal, context,
+    const payload = { name: e.name, faces: tris, heals: e.heals || [], trims: e.trims || [], outward: e.picks[0].normal, context,
                       seeds: e.picks.map(p => p.point).filter(Boolean),
                       options: { penetrations: document.getElementById('penetrations').checked, wall_depth: wallDepth(e.picks) } };
     const json = JSON.stringify(payload);
@@ -876,7 +894,10 @@ _json.dumps(_ex(_pl))`);
             const valley = (met('valley') ? ` · a valley with ${met('valley')}: the cladding stands back from it, over a valley gutter` : '')
                 + (met('hip') ? ` · a hip with ${met('hip')}: the cladding is cut to it, under a hip cap` : '')
                 + (met('rake') ? ` · a raking corner with ${met('rake')}: mitred, or under a corner profile where the job's corner is Profile` : '');
-            const near = heals.length ? ` · nearly meets ${heals.map(h => (h.a === e ? h.b : h.a).name).join(' and ')}: tick the red strip to heal the junction` : '';
+            const withOf = hs => [...new Set(hs.map(h => (h.a === e ? h.b : h.a).name))].join(' and ');
+            const short = heals.filter(h => !h.trim), past = heals.filter(h => h.trim);
+            const near = (short.length ? ` · nearly meets ${withOf(short)}: tick the red strip to heal the junction` : '')
+                + (past.length ? ` · runs past where it meets ${withOf(past)}: tick the red area to trim it back to the line` : '');
             setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley + near, 'ready');
             // The view stays where it was put: picking a face must not move the camera.
         } else {
