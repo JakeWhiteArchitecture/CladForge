@@ -1542,11 +1542,12 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     const zi05 = await page.evaluate(() => {
         const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
         return { strips: names.filter(n => /Verge Strip/.test(n)).length, flashings: names.filter(n => /Verge Flashing/.test(n)).length,
-                 clips: names.filter(n => /Verge Clip/.test(n)).length, type: state.elevations[state.elevations.length - 1].chain.edges.vergeType,
+                 clips: names.filter(n => /Verge Clip/.test(n)).length, seams: names.filter(n => /Verge Seam/.test(n)).length, type: state.elevations[state.elevations.length - 1].chain.edges.vergeType,
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /verge flashing over the cladding/.test(t)).length };
     });
     console.log('verge with cladding:', JSON.stringify(zi05));
-    if (zi05.strips || zi05.flashings !== 4 || zi05.clips !== 4 || zi05.type !== 'cladding' || zi05.check < 1)
+    // each of the four verges is a true double-lock seam: eight sheets, as between two trays
+    if (zi05.strips || zi05.flashings !== 4 || zi05.clips !== 4 || zi05.seams !== 32 || zi05.type !== 'cladding' || zi05.check < 1)
         throw new Error('the verge with cladding was not built: ' + JSON.stringify(zi05));
     await page.selectOption('#edge-vergeType', 'g3');
     await settle();

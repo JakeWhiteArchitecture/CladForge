@@ -150,7 +150,7 @@ def test_the_verge_exports_to_ifc_and_dxf():
 # ── the verge with cladding (VMZ-SN-MA-ZI-05) ─────────────────────────────
 
 def _flashings(out):
-    return sorted((m for m in out["geometry"] if "Verge Flashing" in m["name"]), key=lambda m: m["name"])
+    return sorted((m for m in out["geometry"] if "Verge Flashing" in m["name"] and m["ifc_type"] == "verge_strip"), key=lambda m: m["name"])
 
 
 def _section(a, part, edge, out_sign):
@@ -159,28 +159,57 @@ def _section(a, part, edge, out_sign):
     return [(out_sign * (q[0] - edge), q[2]) for q in pts]
 
 
-def test_the_verge_with_cladding_is_a_seam_at_the_edge_and_a_flashing_down_over_the_wall():
-    from cladding_verge import VERGE_COVER, VERGE_GAP, VERGE_FACE, verge_type
+def test_the_verge_with_cladding_is_a_true_seam_at_the_edge_and_a_flashing_down_over_the_wall():
+    """The edge is a standing seam, the same closed double lock as between two trays: the
+    last tray turns up the undercloak on the roof's side, the flashing is the overcloak on
+    the outside and runs straight down from it to cover the head of the wall's cladding."""
+    from cladding_verge import VERGE_COVER, VERGE_GAP, VERGE_FACE, verge_type, verge_seam_out
+    from cladding_constants import SEAM_AIR
     params, out = _one(elev={"verge_type": "cladding"})
     a = params["elevations"][0]
     assert verge_type(a) == "cladding" and verge_type({}) == "g3" and verge_type({"verge_type": "nonsense"}) == "g3"
-    assert not _strips_named(out, "Verge Strip")
+    assert not _strips_named(out, "Verge Strip") and not _strips_named(out, "Verge Upstand")
     left, right = _flashings(out)
     clips = _strips_named(out, "Verge Clip")
     assert (left["name"], right["name"]) == ("Roof A Verge Flashing L", "Roof A Verge Flashing R") and len(clips) == 2
     deck = next(m for m in out["geometry"] if m["ifc_type"] == "deck")
     deck_top, t = deck["depth"] + deck["thickness"], left["verge_info"]["thickness"]
     trays = [m for m in out["geometry"] if m["ifc_type"] == "plank"]
-    tray_top = max(m["depth"] + m["thickness"] for m in trays)
-    seam_top = max(m["depth"] + m["thickness"] for m in out["geometry"] if m["ifc_type"] == "seam")
+    back, face = min(m["depth"] for m in trays), max(m["depth"] + m["thickness"] for m in trays)
+    seams = [m for m in out["geometry"] if m["ifc_type"] == "seam"]
+    field = [m for m in seams if not m.get("verge_seam")]
+    # a field seam, sheet by sheet: (which sheet, where it stands off its line, its depths)
+    one = sorted({m["seam_line"] for m in field})[0]
+    shape = lambda ms, line, turn: sorted((m["seam_part"], round(turn * (min(q[0] for q in m["profile"]) - line), 3)             # noqa: E731
+                                           if turn > 0 else round(turn * (max(q[0] for q in m["profile"]) - line), 3),
+                                           round(max(q[0] for q in m["profile"]) - min(q[0] for q in m["profile"]), 3),
+                                           round(m["depth"], 3), round(m["thickness"], 3)) for m in ms)
+    want = shape([m for m in field if m["seam_line"] == one], one, 1.0)
+    assert len(want) == 8
     for flashing, clip, edge, sign in ((left, clips[0], 0.0, -1.0), (right, clips[1], 8000.0, 1.0)):
+        mine = [m for m in seams if m.get("verge_seam") and abs(m["seam_line"] - edge) < 20.0]
+        line = edge + sign * (verge_seam_out() + SEAM_AIR / 2.0)
+        assert len(mine) == 8 and all(m["seam_line"] == pytest.approx(line) for m in mine)
+        # exactly the field seam: the same eight sheets, the same sizes and heights; mirrored on the right, so the
+        # head hangs on the roof's side at both verges
+        assert shape(mine, line, -sign) == want
+        under = [m for m in mine if m["seam_side"] == "+"]
+        assert len(under) == 3 and {m["of"] for m in under} <= {m["name"] for m in trays}          # the tray's own sheet
+        assert {m["of"] for m in mine if m["seam_side"] == "-"} == {flashing["name"]}               # the flashing's
+        up = next(m for m in under if m["seam_part"] == "under_up")
+        inner = [sign * (q[0] - edge) for q in up["profile"]]
+        assert max(inner) == pytest.approx(verge_seam_out(), abs=0.01)             # the tray's upstand stands on the tray's edge
+        assert max(sign * (q[0] - edge) for m in trays for q in m["profile"]) == pytest.approx(verge_seam_out(), abs=0.01)
+        assert all(max(q[1] for q in m["profile"]) - min(q[1] for q in m["profile"]) >= 3000.0 for m in mine)   # the slope long, and on to the eaves
+        # the flashing: straight down from the foot of its upstand in the seam, in line with it
         sec = _section(a, flashing, edge, sign)
-        # the seam's outer leaf: up to the height of the roof's seams, and welted over the tray's upstand
-        assert max(d for _x, d in sec) == pytest.approx(seam_top, abs=3.0)
-        assert min(x for x, _d in sec) < 0.0 and max(x for x, _d in sec) == pytest.approx(VERGE_FACE + 1.5 * t, abs=0.05)
+        over = next(m for m in mine if m["seam_part"] == "over_up")
+        stem = sorted(sign * (q[0] - edge) for q in over["profile"])
+        assert (min(x for x, _d in sec), max(x for x, _d in sec)) == pytest.approx((VERGE_FACE - 2.5 * t, VERGE_FACE + t), abs=0.01)   # its hem inward, its face in line with its upstand
+        assert (stem[0], stem[-1]) == pytest.approx((VERGE_FACE, VERGE_FACE + t), abs=0.01)
+        assert max(d for _x, d in sec) == pytest.approx(face, abs=0.01) == pytest.approx(over["depth"], abs=0.01)
         # down the face of the edge: past the plywood and the gap under it, to cover the wall's cladding by 60
         foot = min(d for _x, d in sec)
-        back = min(m["depth"] for m in trays)                                    # the trays' backs: the flashing is measured from just under them
         assert foot == pytest.approx(back - 1.0 - deck["thickness"] - VERGE_GAP - VERGE_COVER, abs=t)
         assert foot < deck["depth"] - VERGE_GAP - VERGE_COVER + 3.0              # below the plywood by the gap and the cover
         assert flashing["verge_info"]["drop"] == deck["thickness"] + VERGE_GAP + VERGE_COVER and flashing["verge_info"]["cover"] == 60.0
@@ -189,24 +218,18 @@ def test_the_verge_with_cladding_is_a_seam_at_the_edge_and_a_flashing_down_over_
         assert min(x for x, _d in strip) == pytest.approx(0.5, abs=0.05) and max(x for x, _d in strip) < VERGE_FACE + t
         assert min(d for _x, d in strip) >= foot and max(d for _x, d in strip) <= deck_top
         assert flashing["thickness"] == 3000.0 and clip["thickness"] == 3000.0     # the slope long
-        # the last tray's own edge, turned up inside the flashing: from the tray to just under the seam's top
-        (up,) = [m for m in _strips_named(out, "Verge Upstand") if m["name"].endswith("L" if sign < 0 else "R")]
-        leaf = _section(a, up, edge, sign)
-        assert max(x for x, _d in leaf) == pytest.approx(0.0, abs=0.01) and min(x for x, _d in leaf) == pytest.approx(-t, abs=0.01)
-        assert min(d for _x, d in leaf) == pytest.approx(back, abs=0.01) and seam_top - 2.0 * t <= max(d for _x, d in leaf) < seam_top
-        assert up["of"] in {m["name"] for m in trays}
-    assert tray_top < seam_top
 
 
 def _strips_named(out, text):
     return sorted((m for m in out["geometry"] if text in m["name"]), key=lambda m: m["name"])
 
 
-def test_the_last_tray_stops_at_the_edge_and_is_a_tray_between_two_seams():
+def test_the_last_tray_runs_just_to_its_seam_and_is_a_tray_between_two_seams():
+    from cladding_verge import verge_seam_out
     params, out = _one(elev={"verge_type": "cladding"})
     _p, g3 = _one()
     us = lambda o: sorted({round(q[0], 1) for m in o["geometry"] if m["ifc_type"] == "plank" for q in m["profile"]})   # noqa: E731
-    assert us(out)[0] == 0.0 and us(out)[-1] == 8000.0                       # not widened round a nose
+    assert us(out)[0] == -round(verge_seam_out(), 1) and us(out)[-1] == 8000.0 + round(verge_seam_out(), 1)   # to its seam, 3 mm out: no nose
     assert us(g3)[0] == -VERGE_TRAY and us(g3)[-1] == 8000.0 + VERGE_TRAY
     widths = sorted(max(q[0] for q in m["profile"]) - min(q[0] for q in m["profile"]) for m in out["geometry"] if m["ifc_type"] == "plank")
     assert widths[0] >= 100.0 and widths[-1] <= _parse_width(params) + 0.5   # every tray a tray: none over the seam centres
@@ -232,8 +255,12 @@ def test_the_verge_with_cladding_exports():
     params, out = _one(elev={"verge_type": "cladding"})
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     names = sorted(e.Name for e in ifc.by_type("IfcCovering") if "Verge" in (e.Name or ""))
-    # the flashing and its strip are elements of their own; the last tray's upstand is that tray's sheet, in its element
+    # the flashing and its strip are elements of their own; every sheet of the edge seam is in its owner's element,
+    # the last tray's or the flashing's
     assert names == ["Roof A Verge Clip L", "Roof A Verge Clip R", "Roof A Verge Flashing L", "Roof A Verge Flashing R"]
-    ups = [m for m in out["geometry"] if "Verge Upstand" in m["name"]]
-    assert len(ups) == 2 and all(m not in own_elements(out["geometry"]) for m in ups)
+    folds = [m for m in out["geometry"] if m.get("verge_seam")]
+    assert len(folds) == 16 and not [m for m in folds if any(m is x for x in own_elements(out["geometry"]))]
+    for e in ifc.by_type("IfcCovering"):
+        if "Verge Flashing" in e.Name:
+            assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5      # the flashing and its five sheets of the seam
     assert len(out["info"][0]["verge_strips"]) == 2 and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
