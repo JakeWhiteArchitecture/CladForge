@@ -157,7 +157,8 @@ def opening_details(elev, p):
     """[(rect, detail)] for every window and door, detail {"jamb", "jamb_master", "head",
     "head_master"} as chosen on the elevation (elev["opening_details"], by opening_key)
     or mitred by default. Both jambs of an opening share one detail and one arrangement,
-    mirrored; the head has its own. Master and Profile are panel details: with planks
+    mirrored; the head has its own. "barriers": closed with cavity barriers on all four
+    sides (cladding_geometry.barrier_zones), as the chain is set or as set on the opening. Master and Profile are panel details: with planks
     the corner stays mitred; Profile is offered with plank boards too (the Marley-type
     profile), not with standing seam."""
     chosen = elev.get("opening_details") or {}
@@ -166,6 +167,8 @@ def opening_details(elev, p):
     out = []
     for rect in openings(elev):
         d = dict(OPENING_DEFAULT, **(chosen.get(opening_key(rect)) or {}))
+        # cavity barriers on all four sides: the chain's setting, or this opening's own
+        d["barriers"] = bool(d["barriers"] if d.get("barriers") is not None else p.get("barriers"))
         for part in ("jamb", "head"):
             if d[part] not in DETAILS or (d[part] == "lap" and not panel) or (d[part] == "profile" and seam):
                 d[part] = "mitre"

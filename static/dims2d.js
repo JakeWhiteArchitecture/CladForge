@@ -435,7 +435,14 @@ function detailBlock(e, item, box) {
         const clear = document.getElementById('o2-frame-clear');
         if (clear) clear.onclick = () => { setOpeningFrame(e, o.key, null); closeDimEditor(); };
     };
-    const frameRow = `<div class="d2-row" title="${o.frame_note || ''}">Frame ${where} · ${source}</div>
+    const bindFrame = item.bind;
+    item.bind = () => {
+        bindFrame();
+        document.getElementById('o2-barriers').onclick = () => { setOpeningBarriers(e, o.key, !o.barriers); closeDimEditor(); };
+    };
+    const barrierRow = `<div class="d2-row" title="Solid timber over the head and under the sill as well as up the jambs; the battens over and under stop short of them">Cavity barriers, all four sides
+            <button class="mini" id="o2-barriers">${o.barriers ? 'On: turn off' : 'Off: turn on'}</button></div>`;
+    const frameRow = barrierRow + `<div class="d2-row" title="${o.frame_note || ''}">Frame ${where} · ${source}</div>
         <div class="d2-row">Set <input id="o2-frame" type="number" step="5" placeholder="mm behind" style="width:70px">
             ${o.frame_from === 'set' ? '<button class="mini" id="o2-frame-clear">Clear</button>' : ''}</div>`;
     return frameRow + `<div class="d2-row">${kind === 'jamb' ? 'Both jambs' : 'Head'} <select id="o2-detail">${cornerOptions(o[kind], !(toggleValue('cladding-type') !== 'panel' && toggleValue('plank-profile') === 'seam'), false)}</select></div>

@@ -347,8 +347,9 @@ def apply_boolean_ops(meshes, p):
         if poly is None or poly.is_empty:
             continue
         pre = prepared.get(mesh.get("elevation"))
+        clear = mesh.get("keep_clear")      # boxes it stays out of: cut short of a cavity barrier (cladding_geometry)
         try:
-            if pre is not None and pre.contains(poly):
+            if pre is not None and not clear and pre.contains(poly):
                 out.append(mesh)          # fast path: nothing to cut
                 continue
         except Exception:
@@ -363,6 +364,8 @@ def apply_boolean_ops(meshes, p):
             clipped = _intersection(poly, keep) if keep is not None else None
         else:
             clipped = _intersection(poly, region)
+        if clear and clipped is not None:
+            clipped = _difference(clipped, unary_union([box(*c) for c in clear]))
         parts = [pg for pg in iter_polygons(clipped) if pg.area > _MIN_AREA]
         if not parts:
             continue
