@@ -100,13 +100,14 @@ def chain_pieces(geometry, elevations, kind="panel"):
         far = near + float(m["thickness"])
         pts = ring_at(m, 0, near) + ring_at(m, 0, far)
         us, vs = [q[0] for q in pts], [q[1] for q in pts]
+        extra = float(m.get("cut_extra") or 0.0)           # a tray's sheet turned round the eaves and into the drip
         try:
             face = Polygon(ring_at(m, 0, far), [ring_at(m, k + 1, far) for k in range(len(m.get("holes") or []))])
             area = abs(face.area) if face.is_valid else abs(face.buffer(0).area)
         except Exception:   # noqa: BLE001 — a degenerate outline counts its rectangle
             area = (max(us) - min(us)) * (max(vs) - min(vs))
         out.append({"name": m.get("name", "Panel"), "w": round(max(us) - min(us), 1),
-                    "h": round(max(vs) - min(vs), 1), "area": area, "elevation": m.get("elevation"),
+                    "h": round(max(vs) - min(vs) + extra, 1), "area": area, "elevation": m.get("elevation"),
                     "u": round(min(us), 1), "v": round(min(vs), 1)})
     return out
 

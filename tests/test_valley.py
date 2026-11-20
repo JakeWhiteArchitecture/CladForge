@@ -19,7 +19,7 @@ from cladding_primitives import ring_at  # noqa: E402
 from cladding_valley import VALLEY_CLEAR, VALLEY_LAP  # noqa: E402
 from dxf_generator import meshes_to_dxf_string  # noqa: E402
 from fabric_extract import extract_elevation, valley_link, valley_links, chain_link  # noqa: E402
-from ifc_generator import meshes_to_ifc  # noqa: E402
+from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 
 SEAM = dict(cladding_type="plank", plank_profile="seam", plank_orient="vertical")
 
@@ -209,6 +209,6 @@ def test_the_valley_exports_to_ifc_and_dxf():
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     (gutter,) = [e for e in ifc.by_type("IfcCovering") if e.Name == "Roof A Valley Gutter"]
     assert gutter.PredefinedType == "ROOFING" and gutter.ObjectType == "Valley gutter"
-    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
+    assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
     assert all(len(i["valley_strips"]) == 1 for i in out["info"])
     assert "ROOF A" in meshes_to_dxf_string(out["geometry"], params, out["info"])
