@@ -1464,6 +1464,22 @@ def _barriers(p, elev, meshes, zones, cavity_start, cavity_t):
             meshes.append(_prism([list(q) for q in m["profile"]], float(m["depth"]) + float(m["thickness"]), DPM_T, frame, "dpm",
                                  "%s Barrier DPM %d%s" % (name, z["index"] + 1, tags[m["name"]]), name))
             dpm += 1
+        # And over the top of the two level timbers, the head's and the sill's, the full depth
+        # of the cavity: a level top is where water would otherwise stand.
+        for key, tag in (("head", "H"), ("sill", "S")):
+            if z[key]:
+                a, _lo, b, top = z[key]
+                meshes.append(_prism(_rect(a, top, b, top + DPM_T), cavity_start, cavity_t + DPM_T, frame, "dpm",
+                                     "%s Barrier DPM Top %d%s" % (name, z["index"] + 1, tag), name))
+                dpm += 1
+        # And down the window side of the two upright timbers, the jambs': the face that
+        # looks into the opening, behind the reveal lining.
+        for m in [m for m in meshes if m["ifc_type"] == "closer" and tags.get(m["name"]) in ("L", "R")]:
+            us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
+            at = max(us) if tags[m["name"]] == "L" else min(us) - DPM_T
+            meshes.append(_prism(_rect(at, min(vs), at + DPM_T, max(vs)), cavity_start, cavity_t + DPM_T, frame, "dpm",
+                                 "%s Barrier DPM Side %d%s" % (name, z["index"] + 1, tags[m["name"]]), name))
+            dpm += 1
         for m in meshes:
             if m.get("elevation") != name or m["ifc_type"] not in UPRIGHTS or m.get("clip_v_at"):
                 continue

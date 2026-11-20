@@ -90,7 +90,7 @@ def test_uprights_stop_short_of_the_head_and_sill_barriers(elevation, clad, gap)
     beside = [b for b in uprights if b not in over]
     assert any(b[2] < FRAME[2] and b[3] > FRAME[3] and b[1] <= FRAME[0] for b in beside)
     assert any(b[2] < FRAME[2] and b[3] > FRAME[3] and b[0] >= FRAME[1] for b in beside)
-    assert out["info"][0]["barriers"] == {"openings": 1, "gap": gap, "cut": out["info"][0]["barriers"]["cut"], "dpm": 4}
+    assert out["info"][0]["barriers"] == {"openings": 1, "gap": gap, "cut": out["info"][0]["barriers"]["cut"], "dpm": 8}
     assert out["info"][0]["barriers"]["cut"] >= 1
 
 
@@ -128,8 +128,24 @@ def test_an_upright_hard_beside_the_frame_counts_as_joining_it(elevation):
 def test_all_four_barriers_carry_a_damp_proof_membrane(elevation, clad):
     out = generate_preview(_params(elevation, **clad))
     timbers = {m["name"].split()[-1]: m for m in out["geometry"] if m["ifc_type"] == "closer"}
-    dpm = {m["name"].split()[-1]: m for m in out["geometry"] if m["ifc_type"] == "dpm"}
-    assert sorted(dpm) == ["1H", "1L", "1R", "1S"]
+    part = lambda word: {m["name"].split()[-1]: m for m in out["geometry"] if m["ifc_type"] == "dpm" and m["name"].split()[-2] == word}   # noqa: E731
+    dpm, tops, sides = part("DPM"), part("Top"), part("Side")
+    assert sorted(dpm) == ["1H", "1L", "1R", "1S"] and sorted(tops) == ["1H", "1S"] and sorted(sides) == ["1L", "1R"]
+    # down the window side of each jamb's timber: the face that looks into the opening
+    for tag, m in sides.items():
+        on = timbers[tag]
+        u0, u1, v0, v1 = _box(on)
+        left = tag.endswith("L")
+        assert _box(m) == ((u1, u1 + 1.0, v0, v1) if left else (u0 - 1.0, u0, v0, v1))
+        assert (u1 if left else u0) == (WINDOW[0] if left else WINDOW[1])
+        assert m["depth"] == pytest.approx(on["depth"]) and m["depth"] + m["thickness"] == pytest.approx(on["depth"] + on["thickness"] + 1.0)
+    # over the top of the head's and the sill's timber, where water would stand: the full
+    # depth of the cavity, and turned over the face membrane's edge
+    for tag, m in tops.items():
+        on = timbers[tag]
+        u0, u1, _v0, v1 = _box(on)
+        assert _box(m) == (u0, u1, v1, v1 + 1.0)
+        assert m["depth"] == pytest.approx(on["depth"]) and m["depth"] + m["thickness"] == pytest.approx(on["depth"] + on["thickness"] + 1.0)
     for tag, m in dpm.items():
         on = timbers[tag]
         assert _box(m) == _box(on), "the whole face of its timber"
@@ -220,5 +236,5 @@ def test_barriers_export(elevation):
     names = sorted(e.Name.split()[-1] for e in ifc.by_type("IfcMember") if "Cavity" in e.Name)
     assert names == ["1H", "1L", "1R", "1S"]
     membranes = [e for e in ifc.by_type("IfcCovering") if "Barrier DPM" in e.Name]
-    assert len(membranes) == 4 and {e.PredefinedType for e in membranes} == {"MEMBRANE"}
+    assert len(membranes) == 8 and {e.PredefinedType for e in membranes} == {"MEMBRANE"}
     assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])

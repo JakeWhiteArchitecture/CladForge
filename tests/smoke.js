@@ -542,7 +542,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
             const us = g.profile.map(q => q[0]), vs = g.profile.map(q => q[1]);
             if (Math.max(...vs) - Math.min(...vs) < Math.max(...us) - Math.min(...us)) return false;
             return zones.some(z => Math.min(...us) < z[1] && Math.max(...us) > z[0] && Math.min(...vs) < z[3] && Math.max(...vs) > z[2]); }).length;
-        return { closers: tags('closer'), dpm: tags('dpm'), near, cut: (info.barriers || {}).cut || 0,
+        return { closers: tags('closer'), dpm: tags('dpm'), tops: mine.filter(g => g.ifc_type === 'dpm' && / (Top|Side) /.test(g.name)).length, near, cut: (info.barriers || {}).cut || 0,
                  button: document.getElementById('barriers-2d').textContent, shown: document.getElementById('barriers-2d').style.display !== 'none',
                  box: document.getElementById('barriers').checked,
                  check: [...document.querySelectorAll('#checks-container > div')].some(x => /Cavity barriers/.test(x.textContent)) };
@@ -561,7 +561,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     console.log('cavity barriers:', JSON.stringify({ barriersOff, barriersOn, barriersOne, barriersBack }));
     if (!barriersOff.shown || barriersOff.box || /[HS]/.test(barriersOff.closers) || barriersOff.dpm
         || !barriersOn.box || !/on$/.test(barriersOn.button) || !/1H/.test(barriersOn.closers) || !/1S/.test(barriersOn.closers)
-        || barriersOn.dpm.split(',').length !== barriersOn.closers.split(',').length || barriersOn.near || !barriersOn.cut || !barriersOn.check
+        || barriersOn.dpm.split(',').length - barriersOn.tops !== barriersOn.closers.split(',').length || !barriersOn.tops || barriersOn.near || !barriersOn.cut || !barriersOn.check
         || barriersOne.closers.split(',').length >= barriersOn.closers.split(',').length || !barriersOne.box
         || barriersBack.box || barriersBack.closers !== barriersOff.closers || barriersBack.dpm || barriersBack.check)
         throw new Error('cavity barriers did not follow the 2D button: ' + JSON.stringify({ barriersOff, barriersOn, barriersOne, barriersBack }));
