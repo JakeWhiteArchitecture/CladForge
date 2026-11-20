@@ -52,7 +52,7 @@ def valleys_of(elev, kind="valley"):
             p1, p2 = [float(c) for c in v["p1"]], [float(c) for c in v["p2"]]
             k = float(v["k"])
             length = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
-            if k <= 0 or length < 1.0:
+            if (k <= 0 and kind != "rake") or k == 0 or length < 1.0:
                 continue
             m = [-(p2[1] - p1[1]) / length, (p2[0] - p1[0]) / length]
             inside = v.get("inside") or _inside(elev)

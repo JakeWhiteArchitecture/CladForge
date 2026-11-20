@@ -196,7 +196,21 @@ def check_rules(params, infos=None):
                 + ". The decompression strips and the ridge clips are not drawn", h["length"])
             if wide:
                 add("Hip", "warn", apart, spacing)
-    # An eaves: its sizes are assumed, no drawing of one having been supplied.
+    # A raking corner is reported once, by its master.
+    for i in infos:
+        for r in i.get("rakes") or []:
+            if not r.get("master"):
+                continue
+            what = "%s and %s meet at a raking corner %.2f m long (%s, %.0f°)" % (
+                i["elevation"], r["with"], r["length"] / 1000.0, "external" if r["external"] else "internal", r["angle"])
+            if r["detail"] == "profile":
+                add("Raking corner", "pass", what + ": the boards stop square against a corner profile run up the corner", r["length"])
+            else:
+                said = {"lap": "Master is", "butt": "Square is", "profile": "Profile is for external right-angled corners in boards or panels and is"}.get(r["asked"])
+                tail = ". %s not drawn on this raking corner: it is mitred" % said if said else ""
+                add("Raking corner", "warn" if said or p["seam"] else "pass",
+                    what + ": every layer is cut to the plane that bisects it, the boards %.0f mm apart across the mitre" % r["gap"] + tail
+                    + (". Agree a standing seam corner on a raking line with the supplier" if p["seam"] else ""), r["length"])
     for i in infos:
         eaves = i.get("eaves") or []
         if eaves:

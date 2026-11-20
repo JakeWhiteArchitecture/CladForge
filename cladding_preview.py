@@ -20,6 +20,7 @@ from cladding_verge import verge_parts
 from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts
+from cladding_rake import rake_ends, rake_parts
 
 
 def _build_all(p):
@@ -120,6 +121,8 @@ def _preview_one(params):
     meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
     meshes = hip_ends(meshes, p, infos)      # two slopes meeting at a hip: the same, along a sloping line
     meshes = hip_parts(meshes, p, infos)
+    meshes = rake_ends(meshes, p, infos)     # a leaning wall's corner with another wall: mitred, or under a corner profile
+    meshes = rake_parts(meshes, p, infos)
     meshes = verge_parts(meshes, p, infos)   # a roof slope's free side edges: the last tray out over a verge strip
     meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
     meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays out over an eaves apron

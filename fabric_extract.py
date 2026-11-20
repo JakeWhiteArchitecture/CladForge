@@ -821,10 +821,26 @@ def hip_link(a, b):
     return _roof_link(a, b, "hip")
 
 
+def rake_link(a, b):
+    """Do a pitched face and another (a wall, or a face pitched another way) meet at a
+    corner on a raking line? None if not, else what valley_link gives, its kind "rake" and
+    "external" True where the corner turns outward. *k* is tan of half the angle between
+    the normals, negative at an internal corner (as chain_link's is).
+
+    This is the corner two walls make when one or both of them lean, or a leaning wall
+    makes with an upright one: the planes meet on a line that is not plumb, so on at least
+    one of the faces the corner is a raking edge. Two upright walls are chain_link's, and
+    two roof slopes that both look up meet at a ridge, a hip or a valley."""
+    return _roof_link(a, b, "rake")
+
+
 def _roof_link(a, b, kind):
     fa, fb = a["frame"], b["frame"]
     na, nb = tuple(fa["n"]), tuple(fb["n"])
-    if na[2] < 1e-6 or nb[2] < 1e-6:
+    if kind == "rake":
+        if (abs(na[2]) < 1e-6 and abs(nb[2]) < 1e-6) or (na[2] > 1e-6 and nb[2] > 1e-6):
+            return None                               # two walls: a chain corner; two slopes: a roof junction
+    elif na[2] < 1e-6 or nb[2] < 1e-6:
         return None                                   # a wall, or a face that looks down
     line = _cross(na, nb)
     size = math.sqrt(_dot(line, line))
@@ -837,6 +853,9 @@ def _roof_link(a, b, kind):
         return None                                   # one lies behind the other: a ridge or a hip
     if kind == "hip" and (front_a >= 0 or front_b >= 0 or abs(line[2]) < HIP_SLOPE):
         return None                                   # a valley; or level, a ridge
+    if kind == "rake" and front_a * front_b <= 0:
+        return None                                   # one in front of the other, one behind: they do not turn a corner
+    external = front_a < 0
     # A point on both planes: from a's centre, straight down a's own slope to b's plane.
     down = _cross(na, line)
     step = _dot(nb, down)
@@ -861,14 +880,18 @@ def _roof_link(a, b, kind):
             up = tuple(-c for c in up)
         return {"kind": kind, "p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e)],
                 "other_up": [round(c, 9) for c in up], "other_n": [round(c, 9) for c in n_other]}
-    return {"kind": kind, "a": side(a, cb, b, nb), "b": side(b, ca, a, na),
-            "k": round(math.tan(beta / 2.0), 4), "angle": round(math.degrees(beta), 1), "length": round(t1 - t0, 1)}
+    k = math.tan(beta / 2.0)
+    out = {"kind": kind, "a": side(a, cb, b, nb), "b": side(b, ca, a, na),
+           "k": round(k if kind != "rake" or external else -k, 4), "angle": round(math.degrees(beta), 1), "length": round(t1 - t0, 1)}
+    if kind == "rake":
+        out["external"] = external
+    return out
 
 
 def valley_links(a, others):
-    """For each of *others*, in order: how it meets a, at a valley (valley_link) or a hip
-    (hip_link); None where it does neither."""
-    return [valley_link(a, b) or hip_link(a, b) for b in others]
+    """For each of *others*, in order: how it meets a, at a valley (valley_link), a hip
+    (hip_link) or a raking corner (rake_link); None where it does none of them."""
+    return [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) for b in others]
 
 
 HEAL_MAX = 500.0          # mm – an edge this far or less from the line two faces would meet on nearly touches it
@@ -878,7 +901,7 @@ HEAL_MIN = 300.0          # mm – the two have to run along at least this much 
 
 def _joined(a, b):
     """Are the two joined as they stand: at a corner or a ridge, a valley or a hip?"""
-    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b))
+    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b) or rake_link(a, b))
 
 
 def _reach(elev, other, line, base):
@@ -946,8 +969,8 @@ def heal_link(a, b):
     far apart, or cross), else {"a": the quads to add to a, in the world (none where it is
     on the line already), "b": the same for b, "gap": the widest strip, "length": the
     stretch of the line both would cover, "kind": what they would meet at once healed:
-    "corner" (two walls), "ridge", "hip" or "valley" (two roof slopes), or "edge" (a wall
-    and a pitched face: brought together, but no junction is detailed between them yet)}."""
+    "corner" (two walls), "ridge", "hip" or "valley" (two roof slopes), or "rake" (a raking
+    corner: a leaning wall and another wall)}."""
     fa, fb = a["frame"], b["frame"]
     na, nb = tuple(fa["n"]), tuple(fb["n"])
     line = _cross(na, nb)
@@ -971,7 +994,7 @@ def heal_link(a, b):
     if wall_a and wall_b:
         kind = "corner"
     elif wall_a or wall_b or na[2] < 0 or nb[2] < 0:
-        kind = "edge"
+        kind = "rake"                                 # a raking corner: a leaning wall and another
     else:
         cb = _at(fb, *_centre(b))
         front = _dot(nb, _sub(ca, fb["origin"])) > 0 and _dot(na, _sub(cb, fa["origin"])) > 0

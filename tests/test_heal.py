@@ -95,8 +95,8 @@ def test_a_valley_and_a_wall_corner_heal_too():
     assert a2["width"] == 4000.0 and b2["width"] == 3000.0 and chain_link(a2, b2)["external"]
 
 
-def test_a_leaning_wall_and_a_vertical_one_are_brought_together_as_an_edge():
-    """No junction is detailed between a wall and a pitched face yet: healed, they meet."""
+def test_a_leaning_wall_and_a_vertical_one_heal_to_a_raking_corner():
+    """A leaning wall and an upright one, each short of the corner they would turn."""
     lean = math.radians(15.0)
     dy = 3000.0 * math.tan(lean)
     a = _extract("Lean", [[[0, 0, 0], [5800, 0, 0], [5800, dy, 3000]], [[0, 0, 0], [5800, dy, 3000], [0, dy, 3000]]],
@@ -104,7 +104,7 @@ def test_a_leaning_wall_and_a_vertical_one_are_brought_together_as_an_edge():
     b = _extract("Vert", [[[6000, 200, 0], [6000, 4000, 0], [6000, 4000, 3000]], [[6000, 200, 0], [6000, 4000, 3000], [6000, dy + 200, 3000]]],
                  (1, 0, 0))
     heal = heal_link(a, b)
-    assert heal["kind"] == "edge" and heal["gap"] == pytest.approx(200.0, abs=0.5)
+    assert heal["kind"] == "rake" and heal["gap"] == pytest.approx(200.0, abs=0.5)
     on_line = [p for q in heal["a"] + heal["b"] for p in q if abs(p[0] - 6000.0) < 0.01 and abs(p[1] - p[2] * math.tan(lean)) < 0.01]
     assert len(on_line) == 4                                        # both strips end on the one line
 
