@@ -53,6 +53,7 @@ function deleteElevation() {
     if (!e.chain.members.length) state.chains = state.chains.filter(c => c !== e.chain);
     else relinkChain(e.chain);
     setActive(Math.min(state.active, state.elevations.length - 1));
+    showHeals();         // any offer to heal it goes with it
 }
 
 // The chain's course datum locks to the elevation where its first custom vertical input
@@ -464,6 +465,86 @@ function relayoutChain(chain) {
     chain.length = placed.length ? Math.max(...placed.map(m => m.start + cladWidth(m))) : 0;
 }
 
+// ─── HEALING NEAR MISSES ───
+// A face modelled a little short of its neighbour has no edge on the line the two would meet
+// on, so they are not joined: no corner, ridge, hip or valley. After each extraction the
+// engine is asked which other faces this one nearly meets (fabric_extract.heal_link) and
+// what each would have to be extended by. Those strips are ghosted in red with a tick and a
+// cross. The tick adds them to the faces (as picked surface, so everything downstream sees
+// one face that reaches the line) and extracts both again, which is what joins them; the
+// cross leaves that pair alone from then on.
+const HEAL_KINDS = { corner: 'a corner', ridge: 'a ridge', hip: 'a hip', valley: 'a valley', abutment: 'an abutment (the other face runs on past it, and is left as it is)', edge: 'an edge (no junction is detailed between a wall and a pitched face yet)' };
+const healKey = (a, b) => [a.name, b.name].sort().join(' | ');
+function showHeals() {
+    state.heals = (state.heals || []).filter(h => state.elevations.includes(h.a) && state.elevations.includes(h.b));
+    renderHeals(state.heals.map(h => ({ quads: h.quads.a.concat(h.quads.b),
+        title: `Heal ${h.a.name} and ${h.b.name}: extend ${h.quads.a.length && h.quads.b.length ? 'both' : (h.quads.a.length ? h.a.name : h.b.name)} by up to ${Math.round(h.gap)} mm so they meet at ${HEAL_KINDS[h.kind] || 'an edge'}` })),
+        applyHeal, dismissHeal);
+}
+
+async function offerHeals(e) {
+    state.heals = (state.heals || []).filter(h => h.a !== e && h.b !== e);
+    const others = state.elevations.filter(m => m !== e && m.result && m.result.ok && m.picks.length);
+    if (e.result && e.result.ok && e.picks.length && others.length) {
+        const slim = r => ({ frame: r.frame, width: r.width, height: r.height, polygons: r.polygons });
+        pyodide.globals.set('_heal_a', JSON.stringify(slim(e.result)));
+        pyodide.globals.set('_heal_b', JSON.stringify(others.map(m => slim(m.result))));
+        let links = [];
+        try {
+            links = JSON.parse(await enginePy(`
+import json as _json
+from fabric_extract import heal_links as _hl
+_json.dumps(_hl(_json.loads(_heal_a), _json.loads(_heal_b)))`));
+        } catch (err) { console.warn('heal check failed', err); }
+        state.healNo = state.healNo || new Set();
+        links.forEach((h, i) => {
+            if (!h || state.healNo.has(healKey(e, others[i]))) return;
+            state.heals.push({ a: e, b: others[i], kind: h.kind, gap: h.gap, length: h.length, quads: { a: h.a, b: h.b } });
+        });
+    }
+    showHeals();
+    return state.heals.filter(h => h.a === e || h.b === e);
+}
+
+async function applyHeal(i) {
+    const h = state.heals[i];
+    if (!h) return;
+    state.heals.splice(i, 1);
+    showHeals();
+    // a strip, and the elements it was healed to: those do not cut it, everything else does (fabric_extract._extract)
+    const onto = m => m.picks.map(p => p.mesh.userData.index);
+    h.a.heals = (h.a.heals || []).concat(h.quads.a.map(quad => ({ quad, through: onto(h.b) })));
+    h.b.heals = (h.b.heals || []).concat(h.quads.b.map(quad => ({ quad, through: onto(h.a) })));
+    // Two walls, or two slopes at a ridge, become one chain: a face that was given a chain
+    // of its own for want of a neighbour goes back into its partner's before it is re-read.
+    if ((h.kind === 'corner' || h.kind === 'ridge') && h.a.chain !== h.b.chain) {
+        const [lone, host] = h.a.chain.members.length === 1 ? [h.a, h.b] : (h.b.chain.members.length === 1 ? [h.b, h.a] : [null, null]);
+        if (lone && !lone.chain.built) {
+            state.chains = state.chains.filter(c => c !== lone.chain);
+            lone.chain = host.chain; host.chain.members.push(lone);
+        }
+    }
+    for (const e of [h.b, h.a]) {
+        e.highlights.forEach(x => { highlightGroup.remove(x); x.geometry.dispose(); });
+        e.highlights = pickHighlights(e);
+    }
+    await runExtraction(h.b);
+    await runExtraction(h.a);
+}
+
+function dismissHeal(i) {
+    const h = state.heals[i];
+    if (!h) return;
+    (state.healNo = state.healNo || new Set()).add(healKey(h.a, h.b));
+    state.heals.splice(i, 1);
+    showHeals();
+}
+
+// The picked surface, ghosted: the faces clicked and the strips healed onto them.
+function pickHighlights(e) {
+    return e.picks.map(p => highlightFaces(p.mesh, p.faces)).concat((e.heals || []).length ? [quadMesh(e.heals.map(h => h.quad), PICK_COLOR, highlightGroup)] : []);
+}
+
 async function linkIntoChain(e) {
     const chain = e.chain;
     const others = chain.members.filter(m => m !== e && m.result && m.result.ok).reverse();
@@ -646,7 +727,8 @@ function onViewportClick(event) {
     if (existing >= 0) e.picks.splice(existing, 1);
     else e.picks.push({ mesh: hit.mesh, faces, normal: toIfc(hit.normal), point: toIfc(hit.point) });
     e.highlights.forEach(h => { highlightGroup.remove(h); h.geometry.dispose(); });
-    e.highlights = e.picks.map(p => highlightFaces(p.mesh, p.faces));
+    if (!e.picks.length) e.heals = [];         // nothing left to heal onto
+    e.highlights = pickHighlights(e);
     if (!e.storey) { const meta = meshMeta[hit.mesh.userData.index]; e.storey = meta && meta.storey ? meta.storey : null; }
     runExtraction(e);
 }
@@ -703,15 +785,19 @@ function setOpeningFrame(e, key, value) {
 }
 
 async function extractOnce(e) {
+    state.heals = (state.heals || []).filter(h => h.a !== e && h.b !== e);     // offered for the surface as it was
+    showHeals();
     const tris = [];
     for (const p of e.picks) tris.push(...faceTriangles(p.mesh, p.faces));
-    const { elements: context, dropped, triangles: nTris } = contextFor(new Set(e.picks.map(p => p.mesh)), tris, 300, e.picks[0].normal);
+    // strips healed onto it (applyHeal) are sent apart: they count as its surface, but nothing is cut out of them
+    const healed = (e.heals || []).flatMap(({ quad: q }) => [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]);
+    const { elements: context, dropped, triangles: nTris } = contextFor(new Set(e.picks.map(p => p.mesh)), tris.concat(healed), 300, e.picks[0].normal);
     setStatus(`Extracting ${e.name}… ${tris.length} faces, ${context.length} nearby elements (${nTris} triangles)`
               + (dropped ? `, ${dropped} too far to fit` : ''), 'busy');
     e.error = null;
     renderElevationList();
     await new Promise(r => setTimeout(r, 30));   // let the status paint before Pyodide blocks the thread
-    const payload = { name: e.name, faces: tris, outward: e.picks[0].normal, context,
+    const payload = { name: e.name, faces: tris, heals: e.heals || [], outward: e.picks[0].normal, context,
                       seeds: e.picks.map(p => p.point).filter(Boolean),
                       options: { penetrations: document.getElementById('penetrations').checked, wall_depth: wallDepth(e.picks) } };
     const json = JSON.stringify(payload);
@@ -742,10 +828,12 @@ _json.dumps(_ex(_pl))`);
             const corner = !linked ? e.name + ' extracted'
                 : e.link.kind === 'ridge' ? `${e.name} joined ${e.chain.name} at a ridge with ${e.ridge.partner.name}: one setting-out over both slopes, and a ridge cap`
                 : `${e.name} joined ${e.chain.name} at a corner (${Math.abs(e.link.angle)}°)`;
+            const heals = await offerHeals(e);
             const met = kind => valleys.filter(v => v.kind === kind).map(v => v.face.name).join(' and ');
             const valley = (met('valley') ? ` · a valley with ${met('valley')}: the cladding stands back from it, over a valley gutter` : '')
                 + (met('hip') ? ` · a hip with ${met('hip')}: the cladding is cut to it, under a hip cap` : '');
-            setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley, 'ready');
+            const near = heals.length ? ` · nearly meets ${heals.map(h => (h.a === e ? h.b : h.a).name).join(' and ')}: tick the red strip to heal the junction` : '';
+            setStatus((e.chain.built ? corner : corner + ' — press Enter to build') + valley + near, 'ready');
             // The view stays where it was put: picking a face must not move the camera.
         } else {
             e.error = e.result.warnings.join('; ') || 'Extraction failed';
@@ -1311,6 +1399,7 @@ function restoreState(st, add) {
     const merged = add ? { chains: 0, elevations: 0, renamed: [], skipped: [], otherModel: null } : null;
     if (!add) {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
+        state.heals = []; state.healNo = new Set(); renderHeals([]);      // a new job: nothing offered, nothing declined
         state.elevations = []; state.chains = []; state.active = -1;
     }
     // Surfaces are stored in scene coordinates, which sit on the model offset they were
@@ -1426,6 +1515,7 @@ async function loadModel(file, force) {
     closeEditWidget();
     try {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
+        state.heals = []; state.healNo = new Set(); renderHeals([]);      // a new job: nothing offered, nothing declined
         state.elevations = []; state.chains = []; state.active = -1; state.seq = 0; renderElevationList();
         const summary = await loadIFC(file, t => setStatus(t, 'busy'), force);
         state.model = summary;

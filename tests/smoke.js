@@ -1634,6 +1634,51 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || hipped.ridgeCheck.join() !== '3.00')
         throw new Error('the hipped roof was not joined at its ridge and hips: ' + JSON.stringify(hipped));
 
+    // A fifth model: the hipped corner again, each slab modelled 150 mm short of the hip. The
+    // two slopes are not joined as picked; the strips that would join them are ghosted in red
+    // under a tick and a cross. The cross leaves the pair alone for good; the tick extends
+    // both faces to the hip line, and they are joined at a hip.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'hip_short_roof.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    await lookAt('Roof A', [0.05, 0.87, 0.5]);
+    await picked(1);
+    await seamRoof();
+    await settle();
+    await lookAt('Roof C', [-0.5, 0.87, 0.05]);
+    await picked(2);
+    await page.waitForFunction(() => (state.heals || []).length === 1, null, { timeout: 60000 });
+    const healOffer = () => page.evaluate(() => ({
+        offers: (state.heals || []).map(h => [h.a.name, h.b.name, h.kind, Math.round(h.gap), h.quads.a.length, h.quads.b.length].join()),
+        marks: document.querySelectorAll('.heal-mark').length, ghosts: healGroup.children.length,
+        hips: state.elevations.map(e => valleyRecords(e).length).join(), widths: state.elevations.map(e => e.result && e.result.width).join(),
+        status: document.getElementById('status-chip').textContent }));
+    const offered = await healOffer();
+    console.log('heal offered:', JSON.stringify(offered));
+    if (offered.offers.join() !== 'Elevation B,Elevation A,hip,113,1,1' || offered.marks !== 1 || offered.ghosts !== 1 || offered.hips !== '0,0'
+        || offered.widths !== '5850,5850' || !/nearly meets Elevation A/.test(offered.status))
+        throw new Error('the near miss was not offered for healing: ' + JSON.stringify(offered));
+    // the cross: gone, and not offered again when the face is read again
+    await page.evaluate(() => document.querySelector('.heal-mark .heal-no').click());
+    await page.evaluate(() => runExtraction(state.elevations[1]));
+    await page.waitForFunction(() => state.elevations.every(e => !e._running && e.result), null, { timeout: 60000 });
+    const declined = await healOffer();
+    if (declined.offers.length || declined.marks || declined.ghosts) throw new Error('a declined heal came back: ' + JSON.stringify(declined));
+    // asked again from scratch, then the tick
+    await page.evaluate(async () => { state.healNo.clear(); await offerHeals(state.elevations[1]); });
+    await page.evaluate(() => document.querySelector('.heal-mark .heal-yes').click());
+    await page.waitForFunction(() => state.elevations.length === 2 && state.elevations.every(e => !e._running && e.result && (e.heals || []).length === 1)
+                               && valleyRecords(state.elevations[1]).length === 1, null, { timeout: 120000 });
+    await seamRoof();
+    await settle();
+    const healed = await healOffer();
+    const healedCaps = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Hip Cap/.test(m.userData.name || '')).length);
+    console.log('healed:', JSON.stringify(healed), 'hip caps', healedCaps);
+    if (healed.offers.length || healed.marks || healed.hips !== '1,1' || healed.widths !== '6000,6000' || healedCaps !== 2)
+        throw new Error('the heal did not join the two slopes: ' + JSON.stringify(healed));
+
     console.log('SMOKE OK');
     await browser.close();
 }

@@ -6,7 +6,7 @@
 
 let scene, camera, renderer, controls, ifcApi = null;
 let gridHelper = null;
-let modelGroup = null, cladGroup = null, outlineGroup = null, dimGroup = null, highlightGroup = null, cornerGroup = null;
+let modelGroup = null, cladGroup = null, outlineGroup = null, dimGroup = null, highlightGroup = null, cornerGroup = null, healGroup = null;
 let allMeshes = [], meshMeta = [], modelContext = {};
 // The scene works near the origin; modelOffset (IFC mm) puts exports back on the host model.
 let modelOffset = [0, 0, 0];
@@ -45,7 +45,8 @@ function initThree() {
     scene.add(gridHelper);
     modelGroup = new THREE.Group(); cladGroup = new THREE.Group(); outlineGroup = new THREE.Group();
     dimGroup = new THREE.Group(); highlightGroup = new THREE.Group(); cornerGroup = new THREE.Group();
-    scene.add(modelGroup, cladGroup, outlineGroup, dimGroup, highlightGroup, cornerGroup);
+    healGroup = new THREE.Group();
+    scene.add(modelGroup, cladGroup, outlineGroup, dimGroup, highlightGroup, cornerGroup, healGroup);
     window.addEventListener('resize', () => {
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();
@@ -64,6 +65,7 @@ function initThree() {
         if (!(moved || _redraw.dirty || now < _redraw.until || cameraMoved() || now - _redraw.last > REDRAW_IDLE_MS)) return;
         _redraw.dirty = false; _redraw.last = now; _redraw.frames++;
         if (view2d.on && view2d.onFrame) view2d.onFrame();     // the 2D labels follow the view
+        placeHealMarks();                                       // and the ticks and crosses their ghosts
         renderer.render(scene, activeCamera());
     })();
 }
@@ -567,9 +569,64 @@ function contextFor(pickedMeshes, tris, margin, outward) {
         const t = meshTriangles(meta.mesh);
         if (used && used + t.length > CONTEXT_TRI_BUDGET) { dropped++; continue; }
         used += t.length;
-        elements.push({ type: meta.type, name: meta.name, tris: t });
+        elements.push({ type: meta.type, name: meta.name, id: meta.mesh.userData.index, tris: t });
     }
     return { elements, dropped, triangles: used };
+}
+
+// Quads given in IFC coordinates, as one flat translucent mesh in *group*.
+function quadMesh(quads, color, group, opacity = 0.45) {
+    const positions = [];
+    for (const q of quads) for (const k of [0, 1, 2, 0, 2, 3]) positions.push(q[k][0], q[k][2], -q[k][1]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthTest: false }));
+    group.add(mesh);
+    return mesh;
+}
+
+// ─── HEALING NEAR MISSES ───
+// Where two picked faces nearly meet, the strips that would bring them together are ghosted
+// in red, with a tick and a cross floating over them: heal the junction, or leave it. The
+// marks are page elements laid over the view, so a click on one never reaches the model.
+const HEAL_COLOR = 0xe2777a, HEAL_OPACITY = 0.4;     // a soft red, as light on the model as the picked faces' ghost
+const healMarks = [];
+function renderHeals(offers, onYes, onNo) {
+    clearGroup(healGroup);
+    healMarks.forEach(m => m.el.remove());
+    healMarks.length = 0;
+    const host = renderer.domElement.parentElement;
+    offers.forEach((o, i) => {
+        if (!o.quads.length) return;
+        quadMesh(o.quads, HEAL_COLOR, healGroup, HEAL_OPACITY);
+        const at = new THREE.Vector3();
+        let n = 0;
+        for (const q of o.quads) for (const p of q) { at.add(new THREE.Vector3(p[0], p[2], -p[1])); n++; }
+        const el = document.createElement('div');
+        el.className = 'heal-mark';
+        el.innerHTML = '<button type="button" class="heal-yes">&#10003;</button><button type="button" class="heal-no">&#10005;</button>';
+        const [yes, no] = el.children;
+        yes.title = o.title;
+        no.title = 'Leave these two as they are';
+        yes.addEventListener('click', ev => { ev.stopPropagation(); onYes(i); });
+        no.addEventListener('click', ev => { ev.stopPropagation(); onNo(i); });
+        host.appendChild(el);
+        healMarks.push({ el, at: at.multiplyScalar(1 / n) });
+    });
+    placeHealMarks();
+    requestRedraw();
+}
+
+function placeHealMarks() {
+    if (!healMarks.length) return;
+    const cam = activeCamera(), w = renderer.domElement.clientWidth, h = renderer.domElement.clientHeight;
+    for (const m of healMarks) {
+        const p = m.at.clone().project(cam);
+        const shown = !view2d.on && p.z < 1 && Math.abs(p.x) <= 1 && Math.abs(p.y) <= 1;
+        m.el.style.display = shown ? '' : 'none';
+        m.el.style.left = Math.round((p.x + 1) / 2 * w) + 'px';
+        m.el.style.top = Math.round((1 - p.y) / 2 * h) + 'px';
+    }
 }
 
 function highlightFaces(mesh, faceIndices, color = PICK_COLOR) {

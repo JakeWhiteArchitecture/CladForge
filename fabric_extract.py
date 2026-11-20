@@ -66,6 +66,8 @@ IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCAS
                           "IFCFURNISHINGELEMENT", "IFCCOVERING", "IFCRAILING", "IFCSTAIR",
                           "IFCSTAIRFLIGHT", "IFCVIRTUALELEMENT", "IFCGRID", "IFCANNOTATION",
                           "IFCCURTAINWALL", "IFCPLATE", "IFCMEMBER", "IFCBUILDINGELEMENTPROXY"})
+# Of those, the ones that still cut a healed strip they pass right through (_extract).
+HEAL_CUT_TYPES = frozenset({"IFCMEMBER", "IFCPLATE", "IFCBUILDINGELEMENTPROXY", "IFCCOVERING"})
 
 
 # ── vector helpers ────────────────────────────────────────────────────────
@@ -415,7 +417,21 @@ def _say(on, msg):
 
 def _extract(payload):
     name = payload.get("name") or "Elevation"
-    faces = _dedupe([[tuple(float(c) for c in v) for v in tri] for tri in payload.get("faces", [])])
+    # Strips healed onto the face (heal_link, the app's tick): each a quad in the world from
+    # the face's own edge (its first two corners) to the line it was healed to, with the
+    # elements it was healed to ("through", ids or names). A strip is part of the face, and
+    # what the model cuts out of the face it cuts out of the strip, with two differences. The
+    # elements it was healed to do not cut it: a wall healed up to a roof that oversails it
+    # passes through that roof's plywood, which would otherwise be cut out of it again and
+    # leave the same 20 mm to heal for ever. And anything else that cuts it cuts it right
+    # through to the line: no sliver of cladding is left between a rafter and the roof it
+    # carries. That includes the members, plates and generic objects that never cut a face
+    # as picked (HEAL_CUT_TYPES): a rafter is most often a member, and its tail does pass
+    # through a wall healed up to the roof.
+    heals = [h if isinstance(h, dict) else {"quad": h} for h in payload.get("heals") or []]
+    heals = [h for h in heals if len(h.get("quad") or []) == 4]
+    healed = [[tuple(float(c) for c in h["quad"][i]) for i in idx] for h in heals for idx in ((0, 1, 2), (0, 2, 3))]
+    faces = _dedupe([[tuple(float(c) for c in v) for v in tri] for tri in payload.get("faces", [])] + healed)
     result = {"ok": False, "name": name, "warnings": [], "n_faces": len(faces)}
     if not faces:
         result["warnings"].append("No faces picked")
@@ -448,6 +464,8 @@ def _extract(payload):
     passed = []          # batten-shaped elements passed over, and why (reported below)
     umin0, vmin0, umax0, vmax0 = region.bounds
     skipped = 0
+    strips = _heal_strips(heals, n, u)
+    strip_area = _union([s[0] for s in strips]) if strips else None
     for elem in payload.get("context", []):
         etype = (elem.get("type") or "").upper()
         # Members, plates and generic objects are otherwise left alone (they are not read as
@@ -484,6 +502,13 @@ def _extract(payload):
                 elif why and (etype in POST_TYPES or named):
                     passed.append((why, elem.get("name", "")))
             if ignored:
+                # Left alone on the face as picked; but one that passes right through a healed
+                # strip (a rafter's tail through a wall healed up to the roof) cuts that strip.
+                if strips and etype in HEAL_CUT_TYPES:
+                    crosses, _touches, poly, _pts = _section(tris, n, d, u)
+                    part = poly.intersection(strip_area) if crosses and poly is not None and strip_area is not None else None
+                    if part is not None and not part.is_empty and part.area > 1.0:
+                        cuts.append((part, elem))
                 clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
                 continue
             if etype in FRAME_TYPES:
@@ -506,9 +531,9 @@ def _extract(payload):
                         abutments.append({"line": line, "source": elem.get("type") or etype,
                                           "name": elem.get("name", "")})
                 if straddles:
-                    cuts.append(poly)
+                    cuts.append((poly, elem))
             elif straddles and options.get("penetrations", True):
-                cuts.append(poly)
+                cuts.append((poly, elem))
         except Exception:   # noqa: BLE001
             skipped += 1
         clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
@@ -518,8 +543,11 @@ def _extract(payload):
     result["posts_passed"] = _passed_report(passed)
     for line in result["posts_passed"]:
         result["warnings"].append(line)
-    for cut_poly in cuts:
+    for cut_poly, elem in cuts:
         try:
+            cut_poly = _cut_round_heals(cut_poly, elem, strips)
+            if cut_poly is None or cut_poly.is_empty:
+                continue
             if cut_poly.intersection(region).area > MIN_HOLE_AREA:
                 cut = _difference(region, cut_poly)
                 if cut is not None and not cut.is_empty:
@@ -527,6 +555,12 @@ def _extract(payload):
         except Exception:
             continue
 
+    if strips:
+        try:
+            tidy = region.simplify(0.01, preserve_topology=True)      # the seams between strip and face leave no vertices
+            region = tidy if tidy.is_valid and not tidy.is_empty else region
+        except Exception:   # noqa: BLE001
+            pass
     region, dropped = _seeded(region, payload.get("seeds"), u, n=n)
     if dropped:
         result["warnings"].append("%d patch(es) beyond the junction you clicked were left out" % dropped)
@@ -562,6 +596,49 @@ def _extract(payload):
     if any(a.get("pitched") for a in result["abutments"]):
         result["warnings"].append("Pitched abutment detected — the splash zone follows the roof line; check it")
     return result
+
+
+def _heal_strips(heals, n, u):
+    """[(the strip in the face's plane, the step from the face's edge to the line, what it
+    was healed to)] for the heals of a payload."""
+    out = []
+    for h in heals:
+        try:
+            pts = [_to_local(tuple(float(c) for c in p), n, u) for p in h["quad"]]
+            shape = Polygon(pts)
+            shape = shape if shape.is_valid else shape.buffer(0)
+            if shape.is_empty or shape.area < 1.0:
+                continue
+            step = ((pts[3][0] - pts[0][0] + pts[2][0] - pts[1][0]) / 2.0, (pts[3][1] - pts[0][1] + pts[2][1] - pts[1][1]) / 2.0)
+            out.append((shape, step, {str(x) for x in h.get("through") or []}))
+        except Exception:   # noqa: BLE001 — a strip that will not build is left to be cut like the face
+            continue
+    return out
+
+
+def _cut_round_heals(cut, elem, strips):
+    """What the section *cut* of the element *elem* takes out of a face with healed strips
+    (see _extract): nothing of a strip that was healed to that element, and of any other
+    strip it reaches, everything from the cut on to the line."""
+    keys = {str(elem.get("id")), str(elem.get("name"))} - {"None", ""}
+    for shape, step, through in strips:
+        try:
+            if not cut.intersects(shape):
+                continue
+            if keys & through:
+                cut = _difference(cut, shape)
+                if cut is None or cut.is_empty:
+                    return None
+                continue
+            part = cut.intersection(shape)
+            if part.is_empty or part.area < 1.0:
+                continue
+            on = _union([part, translate(part, step[0], step[1])]).convex_hull.intersection(shape)
+            if not on.is_empty:
+                cut = _union([cut, on])
+        except Exception:   # noqa: BLE001 — left as the plain cut
+            continue
+    return cut
 
 
 def _post_of(tris, n, d, u):
@@ -869,6 +946,145 @@ def valley_links(a, others):
     """For each of *others*, in order: how it meets a, at a valley (valley_link) or a hip
     (hip_link); None where it does neither."""
     return [valley_link(a, b) or hip_link(a, b) for b in others]
+
+
+HEAL_MAX = 500.0          # mm – an edge this far or less from the line two faces would meet on nearly touches it
+HEAL_ON = 2.0             # mm – and this close, it is on it already
+HEAL_MIN = 300.0          # mm – the two have to run along at least this much of the line together
+
+
+def _joined(a, b):
+    """Are the two joined as they stand: at a corner or a ridge, a valley or a hip?"""
+    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b))
+
+
+def _reach(elev, other, line, base):
+    """How *elev* stands to the line its plane meets *other*'s on. (strips, (t0, t1)):
+    for each edge of its outline that runs along the line within HEAL_MAX of it, short of
+    it, the quad between that edge and the line, in the world; and the stretch of the line
+    it covers, edges already on the line included. (None, None) where it has no such edge.
+    A face that runs on through the line (a roof oversailing a wall) has nothing to heal
+    but is there to be met: ("through", the stretch of the line that lies within it)."""
+    f, fo = elev["frame"], other["frame"]
+    n, no = tuple(f["n"]), tuple(fo["n"])
+    w = _cross(n, line)                               # in the face, square to the line
+    rate = _dot(no, w)
+    if abs(rate) < 1e-6:
+        return None, None
+    off = lambda P: -_dot(no, _sub(P, fo["origin"])) / rate          # noqa: E731 — how far along w to the line
+    strips, ts, reaches = [], [], False
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        try:
+            shape = Polygon(ring)
+        except Exception:   # noqa: BLE001
+            continue
+        m = len(ring)
+        wu, wv = _dot(w, f["u"]), _dot(w, f.get("v") or (0.0, 0.0, 1.0))
+
+        def carried(at, before, gap):
+            """The corner *at* carried on to the line along the edge that comes into it from
+            *before* (so an eaves or a top edge runs straight on), or square to the line
+            where that edge runs too nearly along it."""
+            du, dv = at[0] - before[0], at[1] - before[1]
+            toward = du * wu + dv * wv
+            if toward * gap > 1e-9:
+                k = gap / toward
+                if math.hypot(du, dv) * k <= 4.0 * abs(gap):
+                    return _at(f, at[0] + du * k, at[1] + dv * k)
+            return _at(f, at[0] + wu * gap, at[1] + wv * gap)
+        for i, (q, r) in enumerate(zip(ring, ring[1:] + ring[:1])):
+            P, Q = _at(f, q[0], q[1]), _at(f, r[0], r[1])
+            a, b = off(P), off(Q)
+            length = math.dist(P, Q)
+            if length < 50.0 or max(abs(a), abs(b)) > HEAL_MAX:
+                continue
+            on = max(abs(a), abs(b)) <= HEAL_ON
+            reaches = reaches or on
+            if not on:
+                if abs(a - b) > max(10.0, 0.15 * length) or a * b < 0:
+                    continue                          # not along the line, or across it
+                # the strip has to lie outside the face: a step from the edge towards the line leaves it
+                mid = ((q[0] + r[0]) / 2.0, (q[1] + r[1]) / 2.0)
+                step = 1.0 if a + b > 0 else -1.0
+                if shape.contains(Point(mid[0] + step * wu * 2.0, mid[1] + step * wv * 2.0)):
+                    continue
+                P2, Q2 = carried(q, ring[i - 1], a), carried(r, ring[(i + 2) % m], b)
+                strips.append({"quad": [list(P), list(Q), list(Q2), list(P2)], "gap": max(abs(a), abs(b))})
+            ts += [_dot(_sub(P, base), line), _dot(_sub(Q, base), line)]
+        # the face on both sides of the line: it runs on through the other plane
+        vs = [off(_at(f, q[0], q[1])) for q in ring]
+        if min(vs) < -HEAL_ON and max(vs) > HEAL_ON:
+            lu, lv = _dot(line, f["u"]), _dot(line, f.get("v") or (0.0, 0.0, 1.0))
+            at = (ring[0][0] + wu * vs[0], ring[0][1] + wv * vs[0])             # a point of the line, in the face
+            t_at = _dot(_sub(_at(f, at[0], at[1]), base), line)
+            reach = 1e6
+            try:
+                cut = shape.intersection(LineString([(at[0] - lu * reach, at[1] - lv * reach), (at[0] + lu * reach, at[1] + lv * reach)]))
+            except Exception:   # noqa: BLE001
+                return None, None
+            if cut.is_empty or cut.length < 1.0:
+                return None, None
+            along = [(x - at[0]) * lu + (y - at[1]) * lv for g in getattr(cut, "geoms", [cut]) for x, y in g.coords]
+            return "through", (t_at + min(along), t_at + max(along))
+    # A face with an edge on the line reaches it: what else of it stands back (the foot of a
+    # notch cut round a rafter) is not a near miss.
+    return ([] if reaches else strips, (min(ts), max(ts))) if ts else (None, None)
+
+
+def heal_link(a, b):
+    """Do faces a and b nearly meet, so that extending one or both to the line their planes
+    meet on would join them? None if not (they are joined already, are parallel, are too
+    far apart, or each runs through the other), else {"a": the quads to add to a, in the world (none where it is
+    on the line already), "b": the same for b, "gap": the widest strip, "length": the
+    stretch of the line both would cover, "kind": what they would meet at once healed:
+    "corner" (two walls), "ridge", "hip" or "valley" (two roof slopes), "edge" (a wall and
+    a pitched face: brought together, but no junction is detailed between them yet), or
+    "abutment": one of the two runs on through the line (a roof oversailing a wall, its
+    plywood carried over the wall's head), so only the other is extended, up to it and
+    through whatever it is made of; the one that runs on is left as it is}."""
+    fa, fb = a["frame"], b["frame"]
+    na, nb = tuple(fa["n"]), tuple(fb["n"])
+    line = _cross(na, nb)
+    size = math.sqrt(_dot(line, line))
+    if size < 0.05 or _joined(a, b):
+        return None
+    line = tuple(c / size for c in line)
+    ca = _at(fa, *_centre(a))
+    down = _cross(na, line)
+    step = _dot(nb, down)
+    if abs(step) < 1e-9:
+        return None
+    base = tuple(ca[i] - down[i] * _dot(nb, _sub(ca, fb["origin"])) / step for i in range(3))
+    (sa, ra), (sb, rb) = _reach(a, b, line, base), _reach(b, a, line, base)
+    through = sa == "through" or sb == "through"
+    if sa == "through" and sb == "through":
+        return None                                   # each runs through the other: nothing nearly meets
+    sa, sb = ([] if sa == "through" else sa), ([] if sb == "through" else sb)
+    if ra is None or rb is None or not (sa or sb):
+        return None
+    t0, t1 = max(ra[0], rb[0]), min(ra[1], rb[1])
+    if t1 - t0 < HEAL_MIN:
+        return None
+    wall_a, wall_b = abs(na[2]) < 1e-6, abs(nb[2]) < 1e-6
+    if through:
+        kind = "abutment"                             # one runs up to the other, which carries on past
+    elif wall_a and wall_b:
+        kind = "corner"
+    elif wall_a or wall_b or na[2] < 0 or nb[2] < 0:
+        kind = "edge"
+    else:
+        cb = _at(fb, *_centre(b))
+        front = _dot(nb, _sub(ca, fb["origin"])) > 0 and _dot(na, _sub(cb, fa["origin"])) > 0
+        kind = "valley" if front else ("ridge" if abs(line[2]) < HIP_SLOPE else "hip")
+    quads = lambda strips: [[[round(c, 2) for c in p] for p in s["quad"]] for s in strips or []]      # noqa: E731
+    return {"kind": kind, "a": quads(sa), "b": quads(sb), "length": round(t1 - t0, 1),
+            "gap": round(max(s["gap"] for s in (sa or []) + (sb or [])), 1)}
+
+
+def heal_links(a, others):
+    """heal_link(a, each of *others*), in order: None where the two do not nearly meet."""
+    return [heal_link(a, b) for b in others]
 
 
 def chain_link(a, b):
