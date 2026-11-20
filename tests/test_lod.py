@@ -13,7 +13,11 @@ import ifcopenshell.validate  # noqa: E402
 
 from synthetic import payload  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
-from cladding_lod import LODS, MASS_COLORS, MASS_T, PLAIN, at_lod, lod_of  # noqa: E402
+from shapely.geometry import Polygon  # noqa: E402
+from shapely.ops import unary_union  # noqa: E402
+
+from cladding_lod import LODS, MASS_COLORS, MASS_T, PLAIN, at_lod, lod_of, masses  # noqa: E402
+from cladding_primitives import ring_at  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
 from ifc_generator import meshes_to_ifc  # noqa: E402
 from test_ridge import _roof, SEAM  # noqa: E402
@@ -28,24 +32,55 @@ def _wall(**kw):
     return params, generate_preview(params)
 
 
+def _far(m, k=0):
+    return ring_at(m, k, m["depth"] + m["thickness"])
+
+
 @pytest.mark.parametrize("kind", sorted(KINDS))
-def test_lod_100_is_one_flat_sheet_on_the_picked_face_tinted_by_its_cladding(kind):
+def test_lod_100_is_one_plain_mass_per_face_exact_at_the_claddings_extremities(kind):
+    """No battens, layers, closers, corner profiles or seams: the cladding alone, as one mass
+    with no joints, its outer face, its edges and the edges of its openings where the real
+    cladding's are."""
     params, out = _wall(**KINDS[kind])
-    (sheet,) = at_lod(out["geometry"], out["masses"], 100)
-    a = params["elevations"][0]
-    assert sheet["ifc_type"] == "mass" and sheet["name"] == "Elevation A Cladding zone" and sheet["lod"] == 100
-    assert sheet["color"] == MASS_COLORS[kind] and sheet["mass_kind"] == kind
-    assert sheet["depth"] == 0.0 and sheet["thickness"] == MASS_T and sheet["frame"] == a["frame"]   # on the face itself
-    assert sheet["profile"] == a["polygons"][0]["exterior"]
-    assert sheet["holes"] == [] and a["polygons"][0]["holes"]                 # the openings are not cut out of it
+    (mass,) = at_lod(out["geometry"], out["masses"], 100)
+    assert mass["ifc_type"] == "mass" and mass["name"] == "Elevation A Cladding zone" and mass["lod"] == 100
+    assert mass["color"] == MASS_COLORS[kind] and mass["mass_kind"] == kind and mass["frame"] == params["elevations"][0]["frame"]
+    boards = [m for m in out["geometry"] if m["ifc_type"] in ("panel", "plank")]
+    assert len(boards) > 5
+    # the outer face, and the back of the cladding
+    assert mass["depth"] + mass["thickness"] == pytest.approx(max(m["depth"] + m["thickness"] for m in boards))
+    assert mass["depth"] == pytest.approx(min(m["depth"] for m in boards))
+    # the same ground covered, to the same edges: the boards' outlines together, less only their joints
+    whole = Polygon(_far(mass), [_far(mass, k + 1) for k in range(len(mass["holes"]))])
+    union = unary_union([Polygon(_far(m), [_far(m, k + 1) for k in range(len(m["holes"]))]).buffer(0) for m in boards])
+    assert whole.bounds == pytest.approx(union.bounds, abs=0.01)
+    assert whole.buffer(0.05).contains(union) and whole.difference(union.buffer(0.05)).area < 0.06 * whole.area   # only the joints are filled
+    assert union.buffer(8.0).buffer(-8.0).symmetric_difference(whole).area < 1e-4 * whole.area
+    assert len(mass["holes"]) == 2                                            # the window and the opening beside it: cut to the cladding's edge
     assert len({MASS_COLORS[k] for k in KINDS}) == 3                          # told apart at a glance
 
 
-def test_each_chain_is_tinted_by_its_own_cladding():
+@pytest.mark.parametrize("kind", sorted(KINDS))
+def test_at_a_corner_the_masses_keep_the_boards_own_mitres(kind):
+    from test_chains import _three_faces
+    out = generate_preview(dict(_three_faces(), trim=True, **KINDS[kind]))
+    assert [m["name"] for m in out["masses"]] == ["Elevation %s Cladding zone" % c for c in "ABC"]
+    for mass in out["masses"]:
+        boards = [m for m in out["geometry"] if m["elevation"] == mass["elevation"] and m["ifc_type"] in ("panel", "plank")]
+        for s in (mass["depth"], mass["depth"] + mass["thickness"]):          # at its back and at its outer face
+            us = [u for u, _v in ring_at(mass, 0, s)]
+            want = [u for m in boards if m["depth"] <= s <= m["depth"] + m["thickness"] + 1e-9 for u, _v in ring_at(m, 0, s)]
+            assert (min(us), max(us)) == pytest.approx((min(want), max(want)), abs=0.01)
+    b = next(m for m in out["masses"] if m["elevation"] == "Elevation B")
+    assert {"u_l", "u_r"} <= set(b["corner"])                                # a mitre at each end of the middle face
+
+
+def test_a_face_with_nothing_built_on_it_yet_is_a_flat_sheet_on_the_picked_surface():
     a = extract_elevation(dict(payload("Elevation A"), options={"debug": False, "clad_depth": 150.0}))
-    b = dict(a, name="Elevation B", settings=KINDS["seam"])
-    out = generate_preview({"elevations": [dict(a, offset=0, settings=KINDS["panel"]), dict(b, offset=0)], "trim": True})
-    assert {m["elevation"]: m["mass_kind"] for m in out["masses"]} == {"Elevation A": "panel", "Elevation B": "seam"}
+    groups = [(dict(KINDS["plank"]), [a])]
+    (sheet,) = masses([], groups)
+    assert sheet["depth"] == 0.0 and sheet["thickness"] == MASS_T and sheet["profile"] == a["polygons"][0]["exterior"]
+    assert sheet["holes"] == [] and sheet["mass_kind"] == "plank"
 
 
 @pytest.mark.parametrize("kind", sorted(KINDS))

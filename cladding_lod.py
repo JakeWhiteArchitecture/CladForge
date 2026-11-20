@@ -1,8 +1,9 @@
 """CladForge — level of development: the same job shown, and exported, at LOD 100, 200 or 300.
 
-  * **LOD 100**: the cladding only signified. One flat coloured sheet on each picked face,
-    tinted by what it is to be clad in (panels, planks, standing seam). Openings are not
-    cut out of it. (masses)
+  * **LOD 100**: the cladding only signified, but **exact at its extremities**. One plain
+    mass per face, tinted by what it is clad in (panels, planks, standing seam): the
+    cladding's own outer face, edges, corners and opening edges, with no joints, battens,
+    layers, closers, corner profiles, seams or junction metalwork. (masses)
   * **LOD 200**: approximate quantity, size, shape and location. The individual boards,
     panels and trays, the battens and the layers behind them, each where it will be, but
     plain: a standing seam is one plain upstand with no folds, a profiled plank is its
@@ -14,14 +15,23 @@ Every mesh the engine builds is tagged with the lowest level it appears at ("lod
 300; tag), so the app and the exporters choose with one rule (at_lod). The cutting list,
 the checks and the setting-out always come from the full build, whatever is shown."""
 
+from shapely.geometry import Polygon
+from shapely.geometry.polygon import orient
+from shapely.ops import unary_union
+
 from cladding_constants import _parse, _prism
+from cladding_primitives import ring_at
 
 LODS = (100, 200, 300)
-MASS_T = 2.0            # mm – a sheet's thickness: enough to be a solid in the IFC and to stand clear of the wall's face
+MASS_T = 2.0            # mm – the sheet on a face nothing is built on yet: enough to be a solid in the IFC
 MASS_COLORS = {"panel": "#6b8fa3", "plank": "#c08552", "seam": "#9aa7b1"}
 MASS_LABELS = {"panel": "panel cladding", "plank": "plank cladding", "seam": "standing seam"}
 # The parts that are a board, a batten or a layer: there at LOD 200.
 PLAIN = ("sheathing", "insulation", "counter_batten", "batten", "cross_batten", "panel", "plank", "deck", "reveal")
+
+
+def _same_frame(a, b):
+    return all(abs(x - y) < 1e-6 for k in ("origin", "u", "n") for x, y in zip(a[k], b[k]))
 
 
 def lod_of(mesh):
@@ -44,23 +54,73 @@ def clad_kind(p):
     return "seam" if p.get("seam") else ("plank" if p.get("cladding_type") == "plank" else "panel")
 
 
-def masses(groups):
-    """LOD 100's sheets: one per outline of each picked face. *groups*: [(params for the
-    group, its elevation records)], as cladding_preview.setting_groups gives them."""
+def _sheet(e, kind):
+    """A face nothing is built on yet: a flat sheet on the picked surface itself."""
+    out = []
+    for k, poly in enumerate(e["polygons"]):
+        ring = poly.get("exterior") or []
+        if len(ring) >= 3:
+            out.append((ring, [], 0.0, MASS_T, None))
+    return out
+
+
+def _skin(e, pieces, gap):
+    """The face's cladding as one mass: the outline its boards, panels or trays make
+    together at their outer faces, the joints between them closed, from the back of the
+    cladding to its outer face. Its edges, its corners (it carries the boards' own corner
+    mitre, cladding_primitives.corner_ring) and the edges of its openings are the
+    cladding's own, exactly."""
+    back = min(float(m["depth"]) for m in pieces)
+    far = max(float(m["depth"]) + float(m["thickness"]) for m in pieces)
+    shapes = []
+    for m in pieces:
+        flat = dict(m, corner=None)                           # the corner's shear goes on the mass, by position
+        t = float(m["depth"]) + float(m["thickness"])
+        try:
+            g = Polygon(ring_at(flat, 0, t), [ring_at(flat, k + 1, t) for k in range(len(m.get("holes") or []))])
+            shapes.append(g if g.is_valid else g.buffer(0))
+        except Exception:   # noqa: BLE001 — a degenerate outline adds nothing to the mass
+            continue
+    close = gap / 2.0 + 1.0                                   # across a joint, and back: the outer edges stay put
+    whole = unary_union([g.buffer(close, join_style=2, mitre_limit=5.0) for g in shapes if not g.is_empty])
+    whole = whole.buffer(-close, join_style=2, mitre_limit=5.0)
+    corner = {}
+    for m in pieces:                                          # each end's boards carry that end's mitre: the mass has both
+        corner.update(m.get("corner") or {})
+    out = []
+    for g in getattr(whole, "geoms", [whole]):
+        if g.is_empty or g.geom_type != "Polygon" or g.area < 1.0:
+            continue
+        g = orient(g.simplify(0.01), 1.0)
+        tidy = lambda ring: [[round(x, 3), round(y, 3)] for x, y in list(ring.coords)[:-1]]   # noqa: E731
+        out.append((tidy(g.exterior), [tidy(h) for h in g.interiors if Polygon(h).area > 1.0], back, far - back, corner))
+    return out
+
+
+def masses(geometry, groups):
+    """LOD 100: one plain mass per face, the cladding only signified but **exact at its
+    extremities** (_skin). No battens, layers, closers, corner profiles, seams or junction
+    metalwork. A face with nothing built on it yet gets a flat sheet on the picked surface.
+    *groups*: [(params for the group, its elevation records)], as
+    cladding_preview.setting_groups gives them."""
     out = []
     for sub, elevs in groups:
-        kind = clad_kind(_parse(dict(sub, elevations=[])))
+        p = _parse(dict(sub, elevations=[]))
+        kind = clad_kind(p)
+        gap = max(float(p.get("panel_gap") or 0.0), float(p.get("plank_gap") or 0.0), 0.0)
         for e in elevs:
             if not e.get("ok", True) or not e.get("polygons"):
                 continue
-            many = len(e["polygons"]) > 1
-            for k, poly in enumerate(e["polygons"]):
-                ring = poly.get("exterior") or []
-                if len(ring) < 3:
-                    continue
-                name = "%s Cladding zone%s" % (e.get("name", "Elevation"), " %d" % (k + 1) if many else "")
-                m = _prism(ring, 0.0, MASS_T, e["frame"], "mass", name, e.get("name", ""))
-                m.update(color=MASS_COLORS[kind], opacity=0.9, lod=100, mass_kind=kind, mass_label=MASS_LABELS[kind])
+            name = e.get("name", "Elevation")
+            pieces = [m for m in geometry if m.get("elevation") == name and m.get("ifc_type") in ("panel", "plank")
+                      and _same_frame(m["frame"], e["frame"])]
+            parts = (_skin(e, pieces, gap) if pieces else []) or _sheet(e, kind)
+            for k, (ring, holes, depth, thickness, corner) in enumerate(parts):
+                title = "%s Cladding zone%s" % (name, " %d" % (k + 1) if len(parts) > 1 else "")
+                m = _prism(ring, depth, thickness, e["frame"], "mass", title, name, holes)
+                m.update(color=MASS_COLORS[kind], opacity=1.0, lod=100, mass_kind=kind, mass_label=MASS_LABELS[kind])
+                if corner:
+                    m["corner"] = corner
                 out.append(m)
     return out
 

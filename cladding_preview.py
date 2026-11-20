@@ -106,8 +106,8 @@ def generate_preview(params):
         meshes, dims, infos = meshes + m, dims + d, infos + i
     # Each mesh says the lowest level of development it is there at, and LOD 100's sheets
     # go with them (cladding_lod): the app and the exporters choose, the build is always whole.
-    return {"geometry": tag(_ensure_unique_names(meshes)), "dimensions": dims, "info": infos,
-            "masses": masses(setting_groups(params))}
+    meshes = tag(_ensure_unique_names(meshes))
+    return {"geometry": meshes, "dimensions": dims, "info": infos, "masses": masses(meshes, setting_groups(params))}
 
 
 def _preview_one(params):

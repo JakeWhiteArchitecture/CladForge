@@ -1584,7 +1584,7 @@ function busy(btn, on, label) {
 }
 
 // ─── LEVEL OF DEVELOPMENT ───
-// The same build shown at LOD 100 (a flat coloured sheet on each picked face), 200 (the
+// The same build shown at LOD 100 (one plain mass per face, exact at its extremities), 200 (the
 // boards, battens and layers, plain: no seam folds or junction metalwork) or 300 (everything).
 // The engine tags every mesh with the lowest level it is there at and sends LOD 100's sheets
 // beside them (cladding_lod.py: this is its at_lod), so switching redraws without rebuilding.
