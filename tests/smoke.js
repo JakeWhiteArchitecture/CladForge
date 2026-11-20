@@ -1803,11 +1803,11 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                                && state.elevations.length === 1 && !state.elevations[0].picks.length
                                && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
     await page.evaluate(() => setPickMode('pick'));
-    await lookAt('Lower', [0.02, -0.94, 0.34]);
+    await lookAt('Lower', [0.02, 0.34, 0.94]);
     await picked(1);
     await seamRoof();
     await settle();
-    await lookAt('Upper', [0.02, -0.26, 0.97]);
+    await lookAt('Upper', [0.02, 0.97, 0.26]);
     await picked(2);
     const mansardStatus = await page.evaluate(() => document.getElementById('status-chip').textContent);
     await seamRoof();
