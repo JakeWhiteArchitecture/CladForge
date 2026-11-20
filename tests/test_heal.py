@@ -118,25 +118,36 @@ def test_faces_that_cross_or_run_parallel_or_stand_apart_are_left_alone():
     assert [h and h["kind"] for h in heal_links(_hip(200.0)[0], [c, a])] == ["hip", None]
 
 
-def test_a_wall_is_healed_up_through_plywood_that_oversails_it():
-    """An eaves in 3D: a wall to its plate, and pitched plywood sheathing that oversails the
-    wall's face. The plywood runs on through the wall's plane, so it has nothing to heal;
-    the wall is offered up to the roof's plane. The strip passes through the plywood, which
-    is not cut out of it again as the model's other sections are: healed once, it is done."""
+def _box(x0, x1, y0, y1, top, thick):
+    """A sloping prism between two plan lines y0..y1 and x0..x1: its top at top(y), *thick* deep plumb."""
     quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]         # noqa: E731
-    z = lambda y: 2900.0 + y * T                                      # noqa: E731 — the plywood's top; 2900 at the wall's face
-    t_ply = 18.0 / C
-    top = [[0, -400, z(-400)], [6000, -400, z(-400)], [6000, 3000, z(3000)], [0, 3000, z(3000)]]
-    under = [[x, y, h - t_ply] for x, y, h in top]
-    ply = quad(top) + quad(under[::-1])
+    up = [[x0, y0, top(y0)], [x1, y0, top(y0)], [x1, y1, top(y1)], [x0, y1, top(y1)]]
+    down = [[x, y, h - thick] for x, y, h in up]
+    tris = quad(up) + quad(down[::-1])
     for i in range(4):
         j = (i + 1) % 4
-        ply += quad([top[j], top[i], under[i], under[j]])
+        tris += quad([up[j], up[i], down[i], down[j]])
+    return up, tris
 
-    def wall(heals=()):
-        return extract_elevation({"name": "Wall", "faces": quad([[0, 0, 0], [6000, 0, 0], [6000, 0, 2700], [0, 0, 2700]]),
-                                  "heals": list(heals), "outward": [0, -1, 0], "seeds": [[3000, 0, 1350]],
-                                  "context": [{"type": "IFCROOF", "name": "Plywood sheathing", "tris": ply}],
+
+def test_a_wall_is_healed_up_through_plywood_that_oversails_it():
+    """An eaves in 3D: a wall to its plate, rafters on it, and pitched plywood sheathing on
+    them that oversails the wall's face. The plywood runs on through the wall's plane, so
+    it has nothing to heal; the wall is offered up to the roof's plane. The strip passes
+    through the plywood it was healed to (which as picked face would be cut out of it again
+    and leave the same 21 mm to heal for ever), but the rafters still cut it, each right
+    through to the top: the cladding is notched round every rafter tail."""
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]         # noqa: E731
+    z = lambda y: 2900.0 + y * T                                      # noqa: E731 — the plywood's top; 2900 at the wall's face
+    t_ply, t_raft = 18.0 / C, 150.0 / C
+    top, ply = _box(0, 6000, -400, 3000, z, t_ply)
+    rafters = [{"type": "IFCMEMBER", "name": "Rafter %d" % i, "id": 10 + i,
+                "tris": _box(x - 25, x + 25, -400, 3000, lambda y: z(y) - t_ply, t_raft)[1]} for i, x in enumerate((900, 3000, 5100))]
+    context = [{"type": "IFCROOF", "name": "Plywood sheathing", "id": 7, "tris": ply}] + rafters
+
+    def wall(heals=(), faces=()):
+        return extract_elevation({"name": "Wall", "faces": quad([[0, 0, 0], [6000, 0, 0], [6000, 0, 2700], [0, 0, 2700]]) + list(faces),
+                                  "heals": list(heals), "outward": [0, -1, 0], "seeds": [[3000, 0, 1350]], "context": context,
                                   "options": {"debug": False, "clad_depth": 150.0, "penetrations": True}})
     roof = _extract("Roof", quad(top), (0, -S, C))
     plain = wall()
@@ -144,12 +155,17 @@ def test_a_wall_is_healed_up_through_plywood_that_oversails_it():
     assert heal["kind"] == "abutment" and heal["gap"] == 200.0 and heal["length"] == 6000.0
     assert len(heal["a"]) == 1 and heal["b"] == []                     # the wall alone is extended
     assert heal_link(roof, plain)["a"] == [] and heal_link(roof, plain)["b"] == heal["a"]
-    healed = wall(heal["a"])
-    assert healed["height"] == 2900.0 and len(healed["polygons"][0]["exterior"]) == 4      # to the roof's plane, one clean outline
+    healed = wall([{"quad": heal["a"][0], "through": [7]}])            # healed to the plywood, by its id as the app sends it
+    assert healed["height"] == 2900.0                                  # to the roof's plane, through the plywood
     assert heal_link(healed, roof) is None                             # and it is not offered again
-    # as picked faces instead, the same strip would be cut back to the plywood's underside
-    cut = extract_elevation({"name": "Wall", "faces": quad([[0, 0, 0], [6000, 0, 0], [6000, 0, 2700], [0, 0, 2700]]) + _strips(heal["a"]),
-                             "outward": [0, -1, 0], "seeds": [[3000, 0, 1350]],
-                             "context": [{"type": "IFCROOF", "name": "Plywood sheathing", "tris": ply}],
-                             "options": {"debug": False, "clad_depth": 150.0, "penetrations": True}})
-    assert cut["height"] == pytest.approx(2900.0 - t_ply, abs=0.1)
+    # a notch for each rafter, as wide as it, from its underside at the wall's face right through to the top
+    (outline,) = healed["polygons"]
+    under = z(0.0) - t_ply - t_raft
+    notch_feet = sorted(q[0] for q in outline["exterior"] if abs(q[1] - under) < 0.5)
+    assert notch_feet == pytest.approx([875, 925, 2975, 3025, 5075, 5125], abs=0.5)
+    area = 6000.0 * 2900.0 - 3 * 50.0 * (2900.0 - under)
+    assert healed["area"] == pytest.approx(area, abs=2.0) and not outline["holes"]
+    # the same by name; and with nothing said about what it was healed to, the plywood cuts it as it cuts a picked face
+    assert wall([{"quad": heal["a"][0], "through": ["Plywood sheathing"]}])["area"] == pytest.approx(area, abs=2.0)
+    for cut in (wall([heal["a"][0]]), wall(faces=_strips(heal["a"]))):
+        assert cut["height"] == pytest.approx(2900.0 - t_ply, abs=0.1)

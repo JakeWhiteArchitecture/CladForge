@@ -66,6 +66,8 @@ IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCAS
                           "IFCFURNISHINGELEMENT", "IFCCOVERING", "IFCRAILING", "IFCSTAIR",
                           "IFCSTAIRFLIGHT", "IFCVIRTUALELEMENT", "IFCGRID", "IFCANNOTATION",
                           "IFCCURTAINWALL", "IFCPLATE", "IFCMEMBER", "IFCBUILDINGELEMENTPROXY"})
+# Of those, the ones that still cut a healed strip they pass right through (_extract).
+HEAL_CUT_TYPES = frozenset({"IFCMEMBER", "IFCPLATE", "IFCBUILDINGELEMENTPROXY", "IFCCOVERING"})
 
 
 # ── vector helpers ────────────────────────────────────────────────────────
@@ -415,12 +417,20 @@ def _say(on, msg):
 
 def _extract(payload):
     name = payload.get("name") or "Elevation"
-    # Strips healed onto the face (heal_link, the app's tick): quads in the world. They are
-    # part of the face for its plane, its extent and what counts as near it, but nothing in
-    # the model is cut out of them: a wall healed up to a roof that oversails it passes
-    # through the roof's plywood, which would otherwise be cut out of it again as a section.
-    healed = [[tuple(float(c) for c in q[i]) for i in idx] for q in payload.get("heals") or [] if len(q) == 4
-              for idx in ((0, 1, 2), (0, 2, 3))]
+    # Strips healed onto the face (heal_link, the app's tick): each a quad in the world from
+    # the face's own edge (its first two corners) to the line it was healed to, with the
+    # elements it was healed to ("through", ids or names). A strip is part of the face, and
+    # what the model cuts out of the face it cuts out of the strip, with two differences. The
+    # elements it was healed to do not cut it: a wall healed up to a roof that oversails it
+    # passes through that roof's plywood, which would otherwise be cut out of it again and
+    # leave the same 20 mm to heal for ever. And anything else that cuts it cuts it right
+    # through to the line: no sliver of cladding is left between a rafter and the roof it
+    # carries. That includes the members, plates and generic objects that never cut a face
+    # as picked (HEAL_CUT_TYPES): a rafter is most often a member, and its tail does pass
+    # through a wall healed up to the roof.
+    heals = [h if isinstance(h, dict) else {"quad": h} for h in payload.get("heals") or []]
+    heals = [h for h in heals if len(h.get("quad") or []) == 4]
+    healed = [[tuple(float(c) for c in h["quad"][i]) for i in idx] for h in heals for idx in ((0, 1, 2), (0, 2, 3))]
     faces = _dedupe([[tuple(float(c) for c in v) for v in tri] for tri in payload.get("faces", [])] + healed)
     result = {"ok": False, "name": name, "warnings": [], "n_faces": len(faces)}
     if not faces:
@@ -454,6 +464,8 @@ def _extract(payload):
     passed = []          # batten-shaped elements passed over, and why (reported below)
     umin0, vmin0, umax0, vmax0 = region.bounds
     skipped = 0
+    strips = _heal_strips(heals, n, u)
+    strip_area = _union([s[0] for s in strips]) if strips else None
     for elem in payload.get("context", []):
         etype = (elem.get("type") or "").upper()
         # Members, plates and generic objects are otherwise left alone (they are not read as
@@ -490,6 +502,13 @@ def _extract(payload):
                 elif why and (etype in POST_TYPES or named):
                     passed.append((why, elem.get("name", "")))
             if ignored:
+                # Left alone on the face as picked; but one that passes right through a healed
+                # strip (a rafter's tail through a wall healed up to the roof) cuts that strip.
+                if strips and etype in HEAL_CUT_TYPES:
+                    crosses, _touches, poly, _pts = _section(tris, n, d, u)
+                    part = poly.intersection(strip_area) if crosses and poly is not None and strip_area is not None else None
+                    if part is not None and not part.is_empty and part.area > 1.0:
+                        cuts.append((part, elem))
                 clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
                 continue
             if etype in FRAME_TYPES:
@@ -512,9 +531,9 @@ def _extract(payload):
                         abutments.append({"line": line, "source": elem.get("type") or etype,
                                           "name": elem.get("name", "")})
                 if straddles:
-                    cuts.append(poly)
+                    cuts.append((poly, elem))
             elif straddles and options.get("penetrations", True):
-                cuts.append(poly)
+                cuts.append((poly, elem))
         except Exception:   # noqa: BLE001
             skipped += 1
         clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
@@ -524,8 +543,11 @@ def _extract(payload):
     result["posts_passed"] = _passed_report(passed)
     for line in result["posts_passed"]:
         result["warnings"].append(line)
-    for cut_poly in cuts:
+    for cut_poly, elem in cuts:
         try:
+            cut_poly = _cut_round_heals(cut_poly, elem, strips)
+            if cut_poly is None or cut_poly.is_empty:
+                continue
             if cut_poly.intersection(region).area > MIN_HOLE_AREA:
                 cut = _difference(region, cut_poly)
                 if cut is not None and not cut.is_empty:
@@ -533,14 +555,11 @@ def _extract(payload):
         except Exception:
             continue
 
-    if healed:
+    if strips:
         try:
-            strips = _union_faces(_dedupe(healed), n, u)
-            if strips is not None and not strips.is_empty:
-                joined = _union([region, strips])
-                tidy = joined.simplify(0.01, preserve_topology=True)      # the seams between strip and face leave no vertices
-                region = tidy if tidy.is_valid and not tidy.is_empty else joined
-        except Exception:   # noqa: BLE001 — a strip that will not union leaves the face as it was cut
+            tidy = region.simplify(0.01, preserve_topology=True)      # the seams between strip and face leave no vertices
+            region = tidy if tidy.is_valid and not tidy.is_empty else region
+        except Exception:   # noqa: BLE001
             pass
     region, dropped = _seeded(region, payload.get("seeds"), u, n=n)
     if dropped:
@@ -577,6 +596,49 @@ def _extract(payload):
     if any(a.get("pitched") for a in result["abutments"]):
         result["warnings"].append("Pitched abutment detected — the splash zone follows the roof line; check it")
     return result
+
+
+def _heal_strips(heals, n, u):
+    """[(the strip in the face's plane, the step from the face's edge to the line, what it
+    was healed to)] for the heals of a payload."""
+    out = []
+    for h in heals:
+        try:
+            pts = [_to_local(tuple(float(c) for c in p), n, u) for p in h["quad"]]
+            shape = Polygon(pts)
+            shape = shape if shape.is_valid else shape.buffer(0)
+            if shape.is_empty or shape.area < 1.0:
+                continue
+            step = ((pts[3][0] - pts[0][0] + pts[2][0] - pts[1][0]) / 2.0, (pts[3][1] - pts[0][1] + pts[2][1] - pts[1][1]) / 2.0)
+            out.append((shape, step, {str(x) for x in h.get("through") or []}))
+        except Exception:   # noqa: BLE001 — a strip that will not build is left to be cut like the face
+            continue
+    return out
+
+
+def _cut_round_heals(cut, elem, strips):
+    """What the section *cut* of the element *elem* takes out of a face with healed strips
+    (see _extract): nothing of a strip that was healed to that element, and of any other
+    strip it reaches, everything from the cut on to the line."""
+    keys = {str(elem.get("id")), str(elem.get("name"))} - {"None", ""}
+    for shape, step, through in strips:
+        try:
+            if not cut.intersects(shape):
+                continue
+            if keys & through:
+                cut = _difference(cut, shape)
+                if cut is None or cut.is_empty:
+                    return None
+                continue
+            part = cut.intersection(shape)
+            if part.is_empty or part.area < 1.0:
+                continue
+            on = _union([part, translate(part, step[0], step[1])]).convex_hull.intersection(shape)
+            if not on.is_empty:
+                cut = _union([cut, on])
+        except Exception:   # noqa: BLE001 — left as the plain cut
+            continue
+    return cut
 
 
 def _post_of(tris, n, d, u):
@@ -910,7 +972,7 @@ def _reach(elev, other, line, base):
     if abs(rate) < 1e-6:
         return None, None
     off = lambda P: -_dot(no, _sub(P, fo["origin"])) / rate          # noqa: E731 — how far along w to the line
-    strips, ts = [], []
+    strips, ts, reaches = [], [], False
     for pg in elev.get("polygons") or []:
         ring = pg["exterior"]
         try:
@@ -938,6 +1000,7 @@ def _reach(elev, other, line, base):
             if length < 50.0 or max(abs(a), abs(b)) > HEAL_MAX:
                 continue
             on = max(abs(a), abs(b)) <= HEAL_ON
+            reaches = reaches or on
             if not on:
                 if abs(a - b) > max(10.0, 0.15 * length) or a * b < 0:
                     continue                          # not along the line, or across it
@@ -964,7 +1027,9 @@ def _reach(elev, other, line, base):
                 return None, None
             along = [(x - at[0]) * lu + (y - at[1]) * lv for g in getattr(cut, "geoms", [cut]) for x, y in g.coords]
             return "through", (t_at + min(along), t_at + max(along))
-    return (strips, (min(ts), max(ts))) if ts else (None, None)
+    # A face with an edge on the line reaches it: what else of it stands back (the foot of a
+    # notch cut round a rafter) is not a near miss.
+    return ([] if reaches else strips, (min(ts), max(ts))) if ts else (None, None)
 
 
 def heal_link(a, b):
