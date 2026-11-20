@@ -13,7 +13,7 @@ from cladding_profiles import profile_planks
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
 from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
-from cladding_edges import mitre_to_linings, finish_seams
+from cladding_edges import mitre_to_linings, finish_seams, break_at_seams
 from cladding_checks import check_rules as _check_rules
 from cladding_ridge import ridge_ends, ridge_parts
 from cladding_verge import verge_parts
@@ -129,6 +129,7 @@ def _preview_one(params):
     meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
     meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
     meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
+    meshes = break_at_seams(meshes, p)       # last: each tray's flat drawn back to its own upstand, clear of the next tray's
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too

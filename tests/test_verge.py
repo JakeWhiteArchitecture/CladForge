@@ -123,9 +123,9 @@ def test_the_setting_out_keeps_the_last_seam_150_to_370_from_the_trays_edge():
         assert row["status"] == "pass", (offset, row["message"])
     # with no verge that end is set out as before: the closer is whatever the offset leaves
     _p, plain = _one(elev={"offset": 0.0, "verge": "none"})
-    widths = sorted({round(max(q[0] for q in m["profile"]) - min(q[0] for q in m["profile"]), 1)
+    widths = sorted({round(max(q[0] for q in m["profile"]) - min(q[0] for q in m["profile"]) + (m.get("cut_grow") or (0.0, 0.0))[0], 1)
                      for m in plain["geometry"] if m["ifc_type"] == "plank"})
-    assert widths == [25.0, 530.0]
+    assert widths == [25.0, 530.0]                               # seam to seam (each flat stands back from its seams' lines)
 
 
 def test_the_verge_check_still_warns_when_the_tray_is_narrower_than_the_rule_allows():
