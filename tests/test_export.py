@@ -43,9 +43,10 @@ def test_ifc_export(design):
     plates = ifc.by_type("IfcPlate")
     assert members and coverings and plates
     assert len(members) + len(coverings) + len(plates) == len(out["geometry"])
-    # voids survive: the sheathing carries the window hole
-    voided = [e for e in ifc.by_type("IfcArbitraryProfileDefWithVoids")]
-    assert voided
+    # voids survive: the sheathing carries the window hole, as a face with an inner bound
+    assert any(len(face.Bounds) > 1 for face in ifc.by_type("IfcFace"))
+    # and no 2D outline curve is left loose in the file for a viewer to draw beside the model
+    assert not ifc.by_type("IfcPolyline") and ifc.by_type("IfcRectangleProfileDef")
     psets = {ps.Name for ps in ifc.by_type("IfcPropertySet")}
     assert {"Pset_CoveringCommon", "Pset_MemberCommon", "CladForge_SettingOut", "CladForge_Disclaimer"} <= psets
     guids = [e.GlobalId for e in ifc.by_type("IfcRoot")]

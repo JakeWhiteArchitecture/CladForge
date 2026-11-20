@@ -22,7 +22,7 @@ import ifcopenshell.api
 import ifcopenshell.api.owner.settings
 import ifcopenshell.guid
 
-from cladding_constants import (_parse, chain_params, TOOL_NAME, TOOL_URL, IFC_SCHEMA_LABEL, SCOPE_NOTE,
+from cladding_constants import (_parse, frame_v, chain_params, TOOL_NAME, TOOL_URL, IFC_SCHEMA_LABEL, SCOPE_NOTE,
                                 QUANTITY_NOTE, DISCLAIMER, frame_to_world)
 from cladding_primitives import corner_ring, ring_at
 
@@ -129,21 +129,65 @@ def _polyline(ifc, ring):
     return ifc.createIfcPolyline(pts)
 
 
-def _prism_solid(ifc, mesh):
-    """Solid for a prism. A square-ended one is an IfcExtrudedAreaSolid: the profile in
-    the elevation frame, extruded along the wall normal. A mitred one is an explicit
-    brep, because its end faces slope with depth; booleans against an infinite half
-    space are not dependable enough to cut a joint people will build from."""
+def _handed(frame):
+    """+1 where the frame's own v is n × u, which is the Y an IfcAxis2Placement3D works out
+    from its axis (n) and its reference direction (u); -1 where it is the mirror of that
+    (the reveal lining on one side of every opening: its normal faces into the opening
+    whichever side it is on); 0 where v is neither, and no placement can carry the frame."""
+    u, v, n = frame["u"], frame_v(frame), frame["n"]
+    y = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]]
+    dot = sum(float(a) * float(b) for a, b in zip(y, v))
+    return 1 if dot > 0.999 else (-1 if dot < -0.999 else 0)
+
+
+def _rectangle(ring):
+    """(u0, v0, u1, v1) of a ring that is a rectangle square to its axes, else None."""
+    if len(ring) != 4:
+        return None
+    pts = {(round(float(a), 4), round(float(b), 4)) for a, b in ring}
+    us, vs = sorted({a for a, _b in pts}), sorted({b for _a, b in pts})
+    if len(us) != 2 or len(vs) != 2 or pts != {(a, b) for a in us for b in vs}:
+        return None
+    return us[0], vs[0], us[1], vs[1]
+
+
+def _prism_solid(ifc, mesh, outline=False):
+    """Solid for a prism. A square-ended rectangle (most battens, boards, trays and
+    linings) is an IfcExtrudedAreaSolid of an IfcRectangleProfileDef: the profile in the
+    elevation frame, extruded along the wall normal. Anything else is an explicit brep:
+    a mitred part because its end faces slope with depth (booleans against an infinite
+    half space are not dependable enough to cut a joint people will build from), and a
+    part cut to another outline (notched round an opening, raked under a roof) so that
+    the file carries no loose 2D outline curves, which some viewers draw as well as the
+    solid: every part again, flat, beside the model.
+
+    The placement's Y is worked out by the reader as n × u. In a mirrored frame (_handed)
+    that is the frame's v turned round, so the rectangle is placed with its v negated;
+    left as it was, the part is drawn upside down about its frame's origin: a jamb lining
+    hanging below its opening.
+
+    *outline* True keeps a square-ended part of any outline an extrusion, of its outline
+    as a curve: the board a profiled plank's sweep is cut with (_section_solid), which
+    the geometry kernel will not cut with a brep."""
     corner = mesh.get("corner")
-    if (corner and (corner.get("k_l") or corner.get("k_r"))) or mesh.get("vshift"):
-        return _corner_brep(ifc, mesh), "Brep"      # end faces slope with depth
-    outer = _polyline(ifc, corner_ring(mesh["profile"], corner, 0.0))
-    holes = [_polyline(ifc, h) for h in (mesh.get("holes") or []) if len(h) >= 3]
-    if holes:
-        profile = ifc.createIfcArbitraryProfileDefWithVoids("AREA", None, outer, holes)
-    else:
-        profile = ifc.createIfcArbitraryClosedProfileDef("AREA", None, outer)
     frame = mesh["frame"]
+    hand = _handed(frame)
+    mitred = (corner and (corner.get("k_l") or corner.get("k_r"))) or mesh.get("vshift")
+    ring = corner_ring(mesh["profile"], corner, 0.0)
+    box = None if (mitred or not hand or mesh.get("holes")) else _rectangle(ring)
+    if box is not None:
+        u0, v0, u1, v1 = box
+        centre = ifc.createIfcAxis2Placement2D(ifc.createIfcCartesianPoint(((u0 + u1) / 2.0, hand * (v0 + v1) / 2.0)), None)
+        profile = ifc.createIfcRectangleProfileDef("AREA", None, centre, u1 - u0, v1 - v0)
+    elif outline and hand and not mitred:
+        turn = (lambda r: r) if hand > 0 else (lambda r: [(a, -b) for a, b in reversed(list(r))])   # noqa: E731
+        holes = [_polyline(ifc, turn(h)) for h in (mesh.get("holes") or []) if len(h) >= 3]
+        if holes:
+            profile = ifc.createIfcArbitraryProfileDefWithVoids("AREA", None, _polyline(ifc, turn(ring)), holes)
+        else:
+            profile = ifc.createIfcArbitraryClosedProfileDef("AREA", None, _polyline(ifc, turn(ring)))
+    else:
+        return _corner_brep(ifc, mesh), "Brep"
     loc = frame_to_world(frame, 0.0, 0.0, float(mesh["depth"]))
     placement = ifc.createIfcAxis2Placement3D(
         ifc.createIfcCartesianPoint(tuple(float(c) for c in loc)),
@@ -198,7 +242,7 @@ def _section_solid(ifc, mesh):
     sweep = ifc.createIfcExtrudedAreaSolid(profile, placement, ifc.createIfcDirection((0.0, 0.0, 1.0)), r1 - r0)
     if whole:
         return [sweep], "SweptSolid"
-    board, _kind = _prism_solid(ifc, mesh)
+    board, _kind = _prism_solid(ifc, mesh, outline=True)
     return [ifc.createIfcBooleanResult("INTERSECTION", sweep, board)], "CSG"
 
 
@@ -228,8 +272,11 @@ def _face(ifc, outer, inner=()):
 def _corner_brep(ifc, mesh):
     """Closed shell of a prism whose ends slope with depth. Profile rings run
     anticlockwise in (u, v) and u x v = the outward normal, so the outer ring as given
-    faces outwards on the far cap and is reversed on the near one."""
+    faces outwards on the far cap and is reversed on the near one. In a mirrored frame
+    (_handed) every face is turned over, so the shell still faces outwards."""
     frame = mesh["frame"]
+    mirrored = _handed(frame) < 0
+    turn = (lambda r: list(reversed(r))) if mirrored else (lambda r: r)     # noqa: E731
     near = float(mesh["depth"])
     far = near + float(mesh["thickness"])
     cache, faces, layers = {}, [], []
@@ -243,10 +290,10 @@ def _corner_brep(ifc, mesh):
         for i in range(len(lo)):                       # side faces, one quad per edge
             j = (i + 1) % len(lo)
             if lo[i] is not lo[j] or hi[i] is not hi[j]:
-                faces.append(_face(ifc, [lo[i], lo[j], hi[j], hi[i]]))
+                faces.append(_face(ifc, turn([lo[i], lo[j], hi[j], hi[i]])))
     outer_lo, outer_hi = layers[0]
-    faces.append(_face(ifc, list(reversed(outer_lo)), [list(reversed(r)) for r, _h in layers[1:]]))
-    faces.append(_face(ifc, outer_hi, [h for _l, h in layers[1:]]))
+    faces.append(_face(ifc, turn(list(reversed(outer_lo))), [turn(list(reversed(r))) for r, _h in layers[1:]]))
+    faces.append(_face(ifc, turn(outer_hi), [turn(h) for _l, h in layers[1:]]))
     return ifc.createIfcFacetedBrep(ifc.createIfcClosedShell([f for f in faces if f is not None]))
 
 
