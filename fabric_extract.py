@@ -35,7 +35,7 @@ from shapely import union_all
 from shapely.ops import unary_union, polygonize
 from shapely.affinity import translate
 
-from cladding_booleans import iter_polygons, polygon_to_rings, _difference, near_misses, ROBUST_GRID
+from cladding_booleans import iter_polygons, polygon_to_rings, _difference, _intersection, near_misses, ROBUST_GRID
 
 PLANE_TOL = 25.0          # mm – off-plane distance still treated as on the face
 VERTICAL_TOL = math.sin(math.radians(1.0))   # a face this close to vertical is a wall, and is stood up
@@ -1097,9 +1097,12 @@ def _overshoot(elev, other, line):
         at = (q0[0] + wu * d0, q0[1] + wv * d0)                # a point of the line, in the face
         R = 1e6
         ends = [(at[0] - lu * R, at[1] - lv * R), (at[0] + lu * R, at[1] + lv * R)]
-        sides = [shape.intersection(Polygon(ends + [(ends[1][0] + s * wu * R, ends[1][1] + s * wv * R),
-                                                    (ends[0][0] + s * wu * R, ends[0][1] + s * wv * R)])) for s in (1.0, -1.0)]
+        # each side of the line, by an operation that cannot kill the engine (cladding_booleans._safe)
+        sides = [_intersection(shape, Polygon(ends + [(ends[1][0] + s * wu * R, ends[1][1] + s * wv * R),
+                                                      (ends[0][0] + s * wu * R, ends[0][1] + s * wv * R)])) for s in (1.0, -1.0)]
     except Exception:   # noqa: BLE001 — a face that will not split is left alone
+        return None
+    if any(g is None for g in sides):
         return None
     small, big = sorted(sides, key=lambda g: g.area)
     if small.is_empty or small.area < 100.0 or small.area > HEAL_TRIM_SHARE * big.area:
