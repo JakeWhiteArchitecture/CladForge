@@ -319,15 +319,24 @@ def _make_element(ifc, body, ifc_class, name, solid, predefined=None, object_typ
 
 
 def tray_owners(group):
-    """{id(mesh): the tray it is part of} for one elevation's meshes. Everything that is
+    """{id(mesh): the part it belongs to} for one elevation's meshes. Everything that is
     one standing seam tray's own sheet is one element with it: the folds of its seams and
     its turned-up ends (ifc_type "seam", named "<tray> ..."), and a drip its end is turned
     into at the eaves (which says whose it is: "of")."""
     trays = {m["name"]: m for m in group if m.get("ifc_type") == "plank" and m.get("name")}
     out = {}
+    # A sheet that says whose it is goes with that part, tray or not: the seam a verge
+    # flashing turns up into is the flashing's own (cladding_verge._edge_seam).
+    named = {m["name"]: m for m in group if m.get("name") and not m.get("of")}
+    for m in group:
+        owner = named.get(m.get("of"))
+        if owner is not None and owner is not m and m.get("of") not in trays:
+            out[id(m)] = owner
     if not trays:
         return out
     for m in group:
+        if id(m) in out:
+            continue
         name = m.get("of")
         if name not in trays and m.get("ifc_type") == "seam":
             mine = m.get("name") or ""

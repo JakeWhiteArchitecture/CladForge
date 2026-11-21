@@ -13,10 +13,10 @@ from cladding_profiles import profile_planks
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
 from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
-from cladding_edges import mitre_to_linings, finish_seams
+from cladding_edges import mitre_to_linings, finish_seams, break_at_seams
 from cladding_checks import check_rules as _check_rules
 from cladding_ridge import ridge_ends, ridge_parts
-from cladding_verge import verge_parts
+from cladding_verge import verge_parts, join_verges
 from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
@@ -152,6 +152,7 @@ def build_all_groups(params):
     """(meshes, dims, infos) for every face, each group with its chain's settings, untrimmed:
     the exporters' quick source of dimensions and setting-out info."""
     meshes, dims, infos = [], [], []
+    join_verges(params)      # a verge over a clad wall: how far its plywood oversails
     join_eaves(params)
     join_abuts(params)
     link_seams(params)
@@ -163,6 +164,7 @@ def build_all_groups(params):
 
 def generate_preview(params):
     meshes, dims, infos = [], [], []
+    join_verges(params)      # a verge over a clad wall: how far its plywood oversails
     join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
     join_abuts(params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
     link_seams(params)       # faces whose seams follow another's are given its seam lines
@@ -201,6 +203,7 @@ def _preview_one(p, ready=None):
     meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
     meshes = abut_parts(meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
     meshes = abut_over(meshes, p, infos)     # and that wall's layers stop above the roof
+    meshes = break_at_seams(meshes, p)       # last: each tray's flat drawn back to its own upstand, clear of the next tray's
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too

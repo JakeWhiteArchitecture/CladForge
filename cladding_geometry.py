@@ -169,23 +169,29 @@ def _tray_reach(p, elev, depth):
     so the tray at the end is never wider than a tray. With them, the least and most that
     end tray may be, ((least, most) left, (least, most) right): at a verge the last seam
     stands 150 to 370 mm in from the tray's edge (cladding_verge.VERGE_SEAM); at a corner
-    the tray is at least SEAM_MIN_CLOSE, and clear of the turn."""
-    from cladding_verge import verge_sides, VERGE_TRAY, VERGE_SEAM
+    the tray is at least SEAM_MIN_CLOSE, and clear of the turn. Last, which ends are held to
+    their limits though the trays do not run on past them: a verge whose edge is itself a
+    seam (cladding_verge, "Verge with cladding"), where the last tray stops at the edge."""
+    from cladding_verge import verge_sides, verge_type, verge_seam_out, verge_over, VERGE_TRAY, VERGE_SEAM
     left, right, (d_left, d_right) = corner_ends(elev, p)
     verges = verge_sides(elev, p)
-    reach, limits = [], []
+    reach, limits, held = [], [], []
     for (k, _ext), detail, side in ((left, d_left, "l"), (right, d_right, "r")):
+        held.append(side in verges and not k and verge_type(elev) == "cladding")
         if k and k > 0 and detail != "butt":
             k_end, ext = _seam_end(p, elev, depth + p["plank_t"], k, detail, side)
             reach.append(max(0.0, ext + k_end * depth))
             limits.append((max(SEAM_MIN_CLOSE, reach[-1] + 20.0), p["plank_w"]))
+        elif side in verges and not k and verge_type(elev) == "cladding":
+            reach.append(verge_over(elev, side) + verge_seam_out())     # out over the cladding below, to the seam at the plywood's edge
+            limits.append((SEAM_MIN_CLOSE, p["plank_w"]))
         elif side in verges and not k:
             reach.append(VERGE_TRAY)
             limits.append((VERGE_SEAM[0], min(VERGE_SEAM[1], p["plank_w"])))
         else:
             reach.append(0.0)
             limits.append((0.0, p["plank_w"]))
-    return tuple(reach), tuple(limits)
+    return tuple(reach), tuple(limits), tuple(held)
 
 
 def _seam_corners(p, elev, meshes, info, face, ends):
@@ -992,7 +998,7 @@ SEAM_JAMB_MERGE = 100.0     # mm – jambs closer than this share one seam line
 SEAM_MIN_CLOSE = 100.0      # mm – a closing tray at a corner or a verge is never narrower than this
 
 
-def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=None):
+def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=None, held=(False, False)):
     """The tray columns (u0, u1) across a face *W* wide. Set out from the openings, each
     jamb is a seam line, carried straight up and down past the opening, and each span between
     jambs (and the face's ends) is split into equal trays no wider than *cover*: no narrow
@@ -1002,10 +1008,12 @@ def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=No
     each of its ends (round a corner, over a verge strip: _tray_reach). An end with a reach
     is set out to where the tray really ends, so that tray is never wider than *cover*.
     *limits* is the least and most its end tray may be: narrower, the last two trays share
-    their width equally instead; wider (a verge takes at most 370), it is halved."""
+    their width equally instead; wider (a verge takes at most 370), it is halved. An end
+    that is *held* is set out to in the same way though nothing runs on past it."""
     lo, hi = ends if ends else (0.0, W)
     limits = limits or ((SEAM_MIN_CLOSE, cover), (SEAM_MIN_CLOSE, cover))
     a_dev, b_dev = lo - reach[0], hi + reach[1]
+    reach = (reach[0] or bool(held[0]), reach[1] or bool(held[1]))     # from here on: is this end set out to?
     lines = []
     for u in sorted(jambs):
         if 1.0 < u < W - 1.0 and not (lines and u - lines[-1] < SEAM_JAMB_MERGE):
@@ -1119,8 +1127,8 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
     stops = [v0 + SEAM_STOPS * k for k in range(1, int((H - v0) / SEAM_STOPS))]
     cover = p["plank_w"]
     jambs = [u for o in openings(elev) for u in (o[0], o[1])] if p["set_out_from_openings"] else []
-    reach, limits = _tray_reach(p, elev, depth)
-    cols = seam_columns(W, cover, offset, jambs, clip_bounds(elev), reach, limits)
+    reach, limits, held = _tray_reach(p, elev, depth)
+    cols = seam_columns(W, cover, offset, jambs, clip_bounds(elev), reach, limits, held)
     link = elev.get("seam_lines") or {}
     follow = followed_columns(cols, link, cover, clip_bounds(elev), reach, limits) if link.get("lines") else None
     if follow:                                   # its seams are another face's, carried on to it

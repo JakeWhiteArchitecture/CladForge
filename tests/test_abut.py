@@ -15,7 +15,7 @@ import ifcopenshell  # noqa: E402
 from cladding_abut import (ABUT_CHASE, ABUT_COVER, ABUT_EDGE, ABUT_HOOK, ABUT_LAP, ABUT_PLY, ABUT_SADDLE, ABUT_UP, ABUT_UPSTAND,  # noqa: E402
                            abuts_of)
 from cladding_checks import check_rules  # noqa: E402
-from cladding_constants import _parse, frame_to_world  # noqa: E402
+from cladding_constants import SEAM_AIR, _parse, frame_to_world  # noqa: E402
 from cladding_head import HEAD_COVER  # noqa: E402
 from cladding_nesting import chain_pieces  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
@@ -185,7 +185,8 @@ def test_under_standing_seam_the_trays_turn_up_behind_the_wall_s_cladding(pitch,
     ups = [m for m in out["geometry"] if m["name"].endswith("Abutment Upstand")]
     assert len(ups) == ab["trays"] > 5 and not [m for m in out["geometry"] if m["name"].endswith("Ridge Upstand")]
     assert all(m["of"] == m["name"][:-len(" Abutment Upstand")] and m["tray_sheet"] and m["ifc_type"] == "seam" for m in ups)
-    assert sum(m["thickness"] for m in ups) == pytest.approx(6000.0, abs=1.0), "one to a tray, the whole length between them"
+    # one to a tray, seam to seam, each drawn back half the seam's air at a seam (the break in the field sheets)
+    assert sum(m["thickness"] for m in ups) == pytest.approx(6000.0 - ab["saddles"] * SEAM_AIR, abs=1.0)
     sec = _section(out, _named("Abutment Upstand"))
     assert max(z for _x, z in sec) == pytest.approx(tray + ABUT_UPSTAND, abs=1.0)
     assert min(x for x, _z in sec) == pytest.approx(ABUT_PLY, abs=0.1) and min(z for _x, z in sec) == pytest.approx(tray - 1.5 * sheet, abs=1.0)
