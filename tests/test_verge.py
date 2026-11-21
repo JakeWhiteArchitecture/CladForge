@@ -381,8 +381,8 @@ def test_the_verge_with_cladding_exports():
     assert len(folds) == 16 and not [m for m in folds if any(m is x for x in own_elements(out["geometry"]))]
     for e in ifc.by_type("IfcCovering"):
         if "Verge Flashing" in e.Name:
-            # the flashing, its five sheets of the seam, and its two end pieces at the eaves corner
-            assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5 + 2
+            # the flashing, its five sheets of the seam, and its end piece at the eaves corner
+            assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5 + 1
     assert len(out["info"][0]["verge_strips"]) == 2 and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
 
 
@@ -539,13 +539,11 @@ def test_with_cladding_the_eaves_corner_is_closed_as_the_g3_one():
     geo = out["geometry"]
     names = sorted(m["name"] for m in geo if m.get("drip_end") and m.get("ifc_type") == "verge_strip")
     assert names == ["Roof A Verge Clip L Drop End", "Roof A Verge Clip R Drop End",
-                     "Roof A Verge Flashing L Bullnose End", "Roof A Verge Flashing L Drop End",
-                     "Roof A Verge Flashing R Bullnose End", "Roof A Verge Flashing R Drop End"]
+                     "Roof A Verge Flashing L Eaves End", "Roof A Verge Flashing R Eaves End"]
     assert all(m["of"] in (m["name"].rsplit(" ", 2)[0],) for m in geo if m.get("drip_end") and m.get("ifc_type") == "verge_strip")
-    eaves_ends = [m for m in geo if m.get("drip_end") and " Eaves Drip " in m["name"]]
-    assert len(eaves_ends) == 4                                          # bullnose and drop, at each verge
-    # the flashing's drop runs on out to a plumb cut at the front of the eaves drip's bullnose, so it
-    # closes the side of the eaves drip and the space under its bullnose
+    assert not [m for m in geo if m.get("drip_end") and " Eaves Drip " in m["name"]]   # the eaves drip ends square, behind the flashing
+    # the flashing runs on out to one plumb cut at the front of the eaves drip's bullnose, so it closes
+    # the side of the eaves drip and the space under its bullnose, and the eaves drip stops at its inside face
     from cladding_constants import frame_v
     from cladding_primitives import ring_at
     V = frame_v(params["elevations"][0]["frame"])
@@ -555,6 +553,16 @@ def test_with_cladding_the_eaves_corner_is_closed_as_the_g3_one():
                      for x, y in ring_at(m, 0, d)]
     reach = lambda ms: min(sum(a * b for a, b in zip(q, up)) for m in ms for q in pts(m))   # noqa: E731
     for side, tray in (("L", "C1-1"), ("R", "C17-1")):
-        (drop,) = [m for m in geo if m["name"] == "Roof A Verge Flashing %s Drop End" % side]
+        (end,) = [m for m in geo if m["name"] == "Roof A Verge Flashing %s Eaves End" % side]
         drip = [m for m in geo if m["name"].startswith("Roof A Tray %s Eaves Drip" % tray)]
-        assert abs(reach([drop]) - reach(drip)) < 0.5
+        assert abs(reach([end]) - reach(drip)) < 0.5
+        on = [sum(a * b for a, b in zip(q, up)) for q in pts(end)]
+        assert sum(1 for x in on if abs(x - min(on)) < 0.05) >= len(end["profile"])      # its whole end in the one plumb plane
+        (flash,) = [m for m in geo if m["name"] == "Roof A Verge Flashing %s" % side]
+        U = params["elevations"][0]["frame"]["u"]
+        across = lambda ms: [sum(a * b for a, b in zip(q, U)) for m in ms for q in pts(m)]   # noqa: E731
+        f, d = across([flash, end]), across(drip)
+        if side == "L":
+            assert min(d) >= max(f) - 0.01                                     # the drip stops at the flashing's inside face
+        else:
+            assert max(d) <= min(f) + 0.01

@@ -408,11 +408,11 @@ def join_drips(meshes, p):
     the eaves drip** (the inside face of its drop), cut on that face, so the two meet with
     no gap. Both are their trays' own sheet. Records nothing: the two lengths are longer.
 
-    With a verge with cladding (ZI-05) the flashing takes the verge drip's place, split at
-    the plywood's underside: the part over the edge mitres to the eaves bullnose, and its
-    drop runs on past the eaves drip to a plumb cut at the front of the eaves drip's
-    bullnose, closing the side of the eaves drip and the space under its bullnose; the eaves drip's drop stops behind it, at the flashing's
-    inside face, and the clip is cut at the back of the eaves drip's drop."""
+    With a verge with cladding (ZI-05) the flashing takes the verge drip's place: it runs
+    on past the eaves drip to one plumb cut, top to bottom, at the front of the eaves
+    drip's bullnose (under the edge seam's end), closing the side of the eaves drip and
+    the space under its bullnose. The eaves drip, bullnose and drop, stops behind it at
+    the flashing's inside face, and the clip is cut at the back of the eaves drip's drop."""
     dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
     out_meshes = list(meshes)
     for elev in p.get("elevations", []):
@@ -473,8 +473,11 @@ def join_drips(meshes, p):
             a, b = end_u(near)
             if min(abs(a - ue), abs(b - ue)) > VERGE_TRAY + 60.0:
                 continue                                                   # this eaves does not reach the verge
-            # run the eaves drip on out to the outside of the verge's drip
-            target = ue + side * (reach + 1.0)
+            # run the eaves drip on out to the outside of the verge's drip; with cladding (ZI-05)
+            # only to the flashing's inside face, the flashing's end closing it
+            clad = bool(extras) or " Verge Flashing " in low.get("name", "") + " "
+            inside = min(x for x, _y in low["profile"])
+            target = ue + side * ((inside - 0.5) if clad else (reach + 1.0))
             fwd = dot(near["frame"]["n"], U) > 0
             at_start = (side < 0) == fwd                                   # the verge is at the eaves drip's start
             if at_start:
@@ -498,11 +501,7 @@ def join_drips(meshes, p):
             mitre = [side * U[i] + V[i] for i in range(3)]
             # where the eaves drip's drop stops: the outside of the G3 verge drip's drop; with
             # cladding (ZI-05) the inside of the flashing's drop, which runs on over its end
-            clad = bool(extras) or " Verge Flashing " in low.get("name", "") + " "
-            if clad and runs and runs[1]:
-                v_drop = min(x for x, _y in runs[1]) - 0.5
-            else:
-                v_drop = max(x for x, _y in runs[1]) if runs and runs[1] else VERGE_CLEAR
+            v_drop = max(x for x, _y in runs[1]) if runs and runs[1] else VERGE_CLEAR
             stop = frame_to_world(frame, ue + side * v_drop, 0.0, 0.0)
             # with cladding the flashing's drop runs on out to the front of the eaves drip (its
             # bullnose, under the edge seam's end), and is cut plumb there, closing the side of
@@ -516,11 +515,15 @@ def join_drips(meshes, p):
                 if v_start < pv:
                     piece["frame"] = dict(piece["frame"], origin=frame_to_world(frame, pu, v_start, 0.0))
                     piece["thickness"] = float(piece["thickness"]) + (pv - v_start)
-            for piece, cuts, first in [
-                    (low, [(runs[0], corner, mitre, "Bullnose"), (runs[1], front if clad else back, up, "Drop")], True),
-                    (near, [((near.get("drip_runs") or [None, None])[0], corner, mitre, "Bullnose"),
-                            ((near.get("drip_runs") or [None, None])[1], stop, U, "Drop")], at_start)] + [
-                    (x, [(None, back, up, "Drop")], True) for x in extras]:
+            if clad:
+                # the flashing ends in one plumb cut, top to bottom, at the front of the eaves drip
+                # (over its end, which stops behind it), and the clip at the back of its drop
+                todo = [(low, [(None, front, up, "Eaves")], True)] + [(x, [(None, back, up, "Drop")], True) for x in extras]
+            else:
+                todo = [(low, [(runs[0], corner, mitre, "Bullnose"), (runs[1], back, up, "Drop")], True),
+                        (near, [((near.get("drip_runs") or [None, None])[0], corner, mitre, "Bullnose"),
+                                ((near.get("drip_runs") or [None, None])[1], stop, U, "Drop")], at_start)]
+            for piece, cuts, first in todo:
                 pieces = _cut_end(piece, cuts, at_start=first)
                 if pieces:
                     i = out_meshes.index(piece)
