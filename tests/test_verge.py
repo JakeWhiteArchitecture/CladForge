@@ -334,8 +334,9 @@ def test_the_verge_with_cladding_is_a_true_seam_at_the_edge_and_a_flashing_down_
         mid = sign * (sum(q[0] for q in batten["profile"]) / len(batten["profile"]) - edge)
         assert min(x for x, _d in strip) < mid < 0.0                              # it reaches over the batten at the roof's edge
         assert min(d for _x, d in strip) >= foot and max(d for _x, d in strip) <= back
-        # the slope long: carried down to the back of the eaves drip at the corner (join_drips), its end pieces beyond
-        assert abs(flashing["thickness"] - 3000.0) < 10.0 and abs(clip["thickness"] - 3000.0) < 10.0
+        # the slope long: carried down to the eaves at the corner (join_drips), its end pieces beyond; the
+        # flashing to its mitre with the eaves bullnose, its drop running on out over the eaves drip's end
+        assert 0.0 <= flashing["thickness"] - 3000.0 < 60.0 and abs(clip["thickness"] - 3000.0) < 10.0
 
 
 def _strips_named(out, text):
@@ -543,3 +544,17 @@ def test_with_cladding_the_eaves_corner_is_closed_as_the_g3_one():
     assert all(m["of"] in (m["name"].rsplit(" ", 2)[0],) for m in geo if m.get("drip_end") and m.get("ifc_type") == "verge_strip")
     eaves_ends = [m for m in geo if m.get("drip_end") and " Eaves Drip " in m["name"]]
     assert len(eaves_ends) == 4                                          # bullnose and drop, at each verge
+    # the flashing's drop runs on out to a plumb cut at the front of the eaves drip's bullnose, so it
+    # closes the side of the eaves drip and the space under its bullnose
+    from cladding_constants import frame_v
+    from cladding_primitives import ring_at
+    V = frame_v(params["elevations"][0]["frame"])
+    size = math.hypot(V[0], V[1])
+    up = [V[0] / size, V[1] / size, 0.0]                                  # level, up the slope
+    pts = lambda m: [frame_to_world(m["frame"], x, y, d) for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"]))   # noqa: E731
+                     for x, y in ring_at(m, 0, d)]
+    reach = lambda ms: min(sum(a * b for a, b in zip(q, up)) for m in ms for q in pts(m))   # noqa: E731
+    for side, tray in (("L", "C1-1"), ("R", "C17-1")):
+        (drop,) = [m for m in geo if m["name"] == "Roof A Verge Flashing %s Drop End" % side]
+        drip = [m for m in geo if m["name"].startswith("Roof A Tray %s Eaves Drip" % tray)]
+        assert abs(reach([drop]) - reach(drip)) < 0.5
