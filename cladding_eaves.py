@@ -154,6 +154,12 @@ def wall_stop(depth, soffit, top, pitch):
 
 
 def _eaves_rings(tray, soffit, t, pitch, below=EAVES_DROP):
+    roll, drop, support, length = eaves_paths(tray, soffit, t, pitch, below)
+    zinc = LineString(roll + drop[1:]).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0)
+    return list(zinc.exterior.coords)[:-1], support, length
+
+
+def eaves_paths(tray, soffit, t, pitch, below=EAVES_DROP):
     """The eaves in section, as (the zinc's ring, the support profile's ring, the zinc's
     developed length): x out from the edge the roof runs to, down the slope, y the depth
     from the face.
@@ -165,7 +171,12 @@ def _eaves_rings(tray, soffit, t, pitch, below=EAVES_DROP):
     drops plumb and is hooked back under at its foot: the drip. **The support profile** is
     what it is dressed over: an angle, one leg fixed up under the plywood and one hanging
     plumb, the zinc lying on the outside of that and hooked round its foot. *pitch*: the
-    slope, in degrees from level."""
+    slope, in degrees from level.
+
+    eaves_paths gives the zinc as its two runs, (the bullnose: from the tray's flat round the
+    plywood's end and back under it to the drop's line; the drop: from there down and
+    hooked), the support's ring and the zinc's developed length; _eaves_rings, the zinc's
+    ring whole."""
     s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
     nose, out, below = apron_drop(soffit, pitch, below)
     down, away = (s, -c), (c, s)                           # plumb down, and level out from the building, as (x, y)
@@ -187,11 +198,11 @@ def _eaves_rings(tray, soffit, t, pitch, below=EAVES_DROP):
     under = (line[0] + down[0] * k, yb) if k > 0 else (line[0], yb)
     foot = (line[0] + down[0] * (fall + off * s / c + 2.0 * t), line[1] + down[1] * (fall + off * s / c + 2.0 * t))
     hook = (foot[0] - away[0] * (ts + 3.0 * t), foot[1] - away[1] * (ts + 3.0 * t))
-    path = [(end, yt)] + arc + [(end, yb), under, foot, hook, (hook[0] - down[0] * EAVES_HOOK, hook[1] - down[1] * EAVES_HOOK)]
-    zinc = LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0)
+    roll = [(end, yt)] + arc + [(end, yb), under]
+    drop = [under, foot, hook, (hook[0] - down[0] * EAVES_HOOK, hook[1] - down[1] * EAVES_HOOK)]
     ring = lambda g: list(g.exterior.coords)[:-1]          # noqa: E731
-    return (ring(zinc), ring(support if support.geom_type == "Polygon" else max(support.geoms, key=lambda g: g.area)),
-            LineString(path).length)
+    return (roll, drop, ring(support if support.geom_type == "Polygon" else max(support.geoms, key=lambda g: g.area)),
+            LineString(roll + drop[1:]).length)
 
 
 def _fold_back(m, at):
@@ -283,6 +294,8 @@ def eaves_parts(meshes, p, infos):
                                     list(orient(Polygon([(x, sign * y) for x, y in pts]), 1.0).exterior.coords)[:-1]]
                 place = {"origin": frame_to_world(frame, a, ve, 0.0), "u": toward, "v": across, "n": along}
                 zinc, support, sheet = _eaves_rings(back, soffit, t, pitch, below)
+                runs = [ring(list(LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1])
+                        for path in eaves_paths(back, soffit, t, pitch, below)[:2]]
                 n += 1
                 prop = _prism(ring(support), 0.0, b - a, dict(place), "eaves_strip", "%s Eaves Support %d" % (name, n), name)
                 prop.update(eaves_support=True, color="#eab308")
@@ -298,7 +311,9 @@ def eaves_parts(meshes, p, infos):
                         continue
                     drip = _prism(ring(zinc), 0.0, m1 - m0, dict(place, origin=frame_to_world(frame, m0, ve, 0.0)),
                                   "eaves_strip", "%s Eaves Drip" % m["name"], name)
-                    drip.update(tray_sheet=True, of=m["name"], color=m.get("color", drip["color"]))
+                    drip.update(tray_sheet=True, of=m["name"], color=m.get("color", drip["color"]), drip_runs=runs,
+                                drip_under=[round(eaves_paths(back, soffit, t, pitch, below)[1][0][0], 3),
+                                            round(sign * eaves_paths(back, soffit, t, pitch, below)[1][0][1], 3)])
                     drips.append(drip)
                 if not drips:                              # no tray reaches this length of the eaves: nothing to turn
                     extra.pop()

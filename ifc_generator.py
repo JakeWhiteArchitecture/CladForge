@@ -533,6 +533,8 @@ def meshes_to_ifc(meshes, params, infos=None):
                 label = "Standing seam tray"
             elif mesh.get("eaves_support"):
                 label = "Eaves support profile"
+            elif mesh.get("verge_support"):
+                label = "Verge support profile"
             elif mesh.get("ifc_type") == "plank" and pe.get("section"):
                 label = "Cladding plank (%s)" % pe["section"]["name"]
             if mesh.get("ifc_type") == "panel" and pe["panels_as_walls"]:

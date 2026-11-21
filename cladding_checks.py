@@ -261,15 +261,26 @@ def check_rules(params, infos=None):
         verges = [v for v in verges if v.get("type") != "cladding"]
         if not verges:
             continue
-        off = [v for v in verges if v.get("last_seam") is not None and not (lo - 0.5 <= v["last_seam"] <= hi + 0.5)]
+        wide = [v for v in verges if v.get("wide") and v.get("last_seam") is not None and v["last_seam"] > hi + 0.5]
+        if wide:
+            add("Verge", "warn", "%s: the last seam is %s from the tray's edge at the verge, past the %.0f mm most on VMZINC's "
+                "G3 verge (Verge last tray: up to a full tray). The verge is the windiest edge of the roof: agree the wider "
+                "tray with the supplier for the site's wind exposure, or set it back to 370" % (
+                    i["elevation"], " and ".join("%.0f mm (%s)" % (v["last_seam"], side[v["side"]]) for v in wide), hi),
+                wide[0]["last_seam"])
+        off = [v for v in verges if v.get("last_seam") is not None and not v.get("wide") and not (lo - 0.5 <= v["last_seam"] <= hi + 0.5)]
         if off:
             add("Verge", "warn", "%s: the last seam is %s from the tray's edge at the verge; the detail takes %.0f to %.0f mm. "
                 "Move the setting-out (the offset) or change the tray width" % (
                     i["elevation"], " and ".join("%.0f mm (%s)" % (v["last_seam"], side[v["side"]]) for v in off), lo, hi),
                 off[0]["last_seam"])
-        else:
-            add("Verge", "pass", "%s: a verge strip on the %s, the last seam %s from the tray's edge (%.0f to %.0f mm)" % (
-                i["elevation"], " and ".join(side[v["side"]] for v in verges),
+        elif not wide:
+            add("Verge", "pass", "%s: a G3 verge on the %s, drawn as the eaves: the plywood runs on %.0f mm past the edge and the last "
+                "tray's own sheet turns round its end, comes back under it and drops %.0f mm clear of the edge over a support "
+                "profile, hooked under at its foot (each tray at the verge is cut %.0f mm wider for it); the last seam %s from the "
+                "tray's edge (%.0f to %.0f mm)" % (
+                i["elevation"], " and ".join(side[v["side"]] for v in verges), verges[0]["nose"], verges[0]["clear"],
+                max(v.get("sheet") or 0.0 for v in verges),
                 " and ".join("%.0f mm" % v["last_seam"] for v in verges if v.get("last_seam") is not None) or "none", lo, hi),
                 len(verges))
     # Each corner end carries its own detail, so count the ends per detail.

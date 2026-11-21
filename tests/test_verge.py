@@ -1,6 +1,7 @@
-"""The verge: the free side edge of a roof slope in standing seam. The last tray runs out
-over a verge strip and its last seam stands 150 to 370 mm from the tray's edge (VMZINC's
-verge junction G3)."""
+"""The verge: the free side edge of a roof slope in standing seam. Drawn as the eaves: the
+plywood runs on, the last tray's own sheet turns round its end into a drip over a support
+profile, and its last seam stands 150 to 370 mm from the tray's edge (VMZINC's verge
+junction G3)."""
 
 import math
 import os
@@ -18,7 +19,8 @@ from cladding_checks import check_rules  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
 from cladding_constants import frame_to_world, world_to_frame  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
-from cladding_verge import VERGE_TRAY, VERGE_NOSE, VERGE_LAP, VERGE_CLEAR, VERGE_DROP, verge_sides  # noqa: E402
+from cladding_verge import VERGE_TRAY, VERGE_CLEAR, VERGE_BELOW, verge_sides  # noqa: E402
+from cladding_nesting import chain_pieces  # noqa: E402
 from dxf_generator import meshes_to_dxf_string  # noqa: E402
 from ifc_generator import meshes_to_ifc, own_elements  # noqa: E402
 
@@ -29,48 +31,71 @@ def _one(elev=None, **kw):
     return params, generate_preview(params)
 
 
-def _strips(out):
-    return [m for m in out["geometry"] if m["ifc_type"] == "verge_strip"]
+def _strips(out, what=None):
+    return [m for m in out["geometry"] if m["ifc_type"] == "verge_strip" and (what is None or what in m["name"])]
 
 
-def test_a_roof_slope_gets_a_strip_up_each_free_side():
+def _drips(out, side=None):
+    return [m for m in out["geometry"] if m.get("verge_drip") and (side is None or m["name"].startswith("Roof A Tray C%s" % side))]
+
+
+def _section(a, m, edge, out_sign):
+    """A verge part's corners: (out from the roof's edge, depth off the face)."""
+    pts = [world_to_frame(a["frame"], frame_to_world(m["frame"], x, y, 0.0)) for x, y in m["profile"]]
+    return [(out_sign * (q[0] - edge), q[2]) for q in pts]
+
+
+def test_a_roof_slope_gets_a_support_and_the_trays_own_sheet_as_a_drip_up_each_free_side():
     params, out = _one()
-    left, right = sorted(_strips(out), key=lambda m: m["name"])
-    assert (left["name"], right["name"]) == ("Roof A Verge Strip L", "Roof A Verge Strip R")
-    assert left["thickness"] == 3000.0 and right["thickness"] == 3000.0          # the slope long
+    left, right = sorted(_strips(out, "Support"), key=lambda m: m["name"])
+    assert (left["name"], right["name"]) == ("Roof A Verge Support L", "Roof A Verge Support R")
+    assert left["thickness"] == 3000.0 and right["thickness"] == 3000.0 and left["verge_support"]   # the slope long
     a = params["elevations"][0]
     deck = next(m for m in out["geometry"] if m["ifc_type"] == "deck")
-    deck_top = deck["depth"] + deck["thickness"]
+    soffit = deck["depth"]
+    trays = {m["name"]: m for m in out["geometry"] if m["ifc_type"] == "plank"}
+    drips = _drips(out)
+    assert drips and all(m["tray_sheet"] and m["of"] in trays and m["name"].startswith(m["of"] + " Verge Drip") for m in drips)
     for strip, edge, out_sign in ((left, 0.0, -1.0), (right, 8000.0, 1.0)):
-        pts = [world_to_frame(a["frame"], frame_to_world(strip["frame"], x, y, 0.0)) for x, y in strip["profile"]]
-        across = [out_sign * (q[0] - edge) for q in pts]                         # out from the roof's edge
-        depth = [q[2] for q in pts]
+        mine = [m for m in drips if abs(min(q[0] for q in trays[m["of"]]["profile"]) - edge) < VERGE_TRAY + 1.0
+                or abs(max(q[0] for q in trays[m["of"]]["profile"]) - edge) < VERGE_TRAY + 1.0]
+        length = sum(m["thickness"] for m in mine)
+        assert length >= strip["thickness"] - 25.0, "a drip to each tray at the edge, the verge long (and on down to the eaves drip)"
+        pts = [q for m in mine for q in _section(a, m, edge, out_sign)]
         t = strip["verge_info"]["thickness"]
-        assert abs(min(across) + VERGE_LAP) < 0.01                               # 70 back on the deck
-        assert abs(max(across) - VERGE_NOSE - t / 2) < 0.01                      # its nose 36 out
-        assert deck_top <= max(depth) <= deck_top + 2.0                          # lying on the deck, under the tray
-        assert abs(min(depth) - (deck_top + 1.0 - VERGE_DROP) + t / 2) < 0.01    # the drop
-        drop = [x for x, d in zip(across, depth) if d < deck_top - 10.0]
-        assert VERGE_CLEAR - 1.5 <= min(drop) and max(drop) <= VERGE_CLEAR + 1.5 # 10 clear of the edge's face
+        assert max(x for x, _d in pts) > VERGE_TRAY + 5.0, "round the plywood's end"
+        drop = [x for x, d in pts if d < soffit - 10.0]
+        assert drop and VERGE_CLEAR <= max(drop) <= VERGE_CLEAR + 4.0, "the drop 10 clear of the edge's face (its hook turns back behind)"
+        assert min(d for _x, d in pts) == pytest.approx(-VERGE_BELOW, abs=4.0), "its foot below the roof's surface"
+        prop = _section(a, strip, edge, out_sign)
+        assert min(x for x, _d in prop) < 0.0 < max(x for x, _d in prop) <= VERGE_TRAY, "under the plywood, its leg behind the drop"
+        assert strip["verge_info"]["sheet"] > 100.0 and strip["verge_info"]["drips"] == len([m for m in mine if not m["name"].endswith(" End")])
 
 
-def test_the_last_tray_runs_out_over_the_strip_and_is_as_wide_in_the_cutting_list():
+def test_the_plywood_and_the_last_tray_run_on_and_the_tray_is_as_wide_in_the_cutting_list():
     _params, out = _one()
     _p0, plain = _one(elev={"verge": "none"})
-    us = [q[0] for m in out["geometry"] if m["ifc_type"] == "plank" for q in m["profile"]]
-    assert (min(us), max(us)) == (-VERGE_TRAY, 8000.0 + VERGE_TRAY)
+    for kind in ("plank", "deck"):
+        us = [q[0] for m in out["geometry"] if m["ifc_type"] == kind for q in m["profile"]]
+        assert (min(us), max(us)) == (-VERGE_TRAY, 8000.0 + VERGE_TRAY), kind
     us0 = [q[0] for m in plain["geometry"] if m["ifc_type"] == "plank" for q in m["profile"]]
     assert (min(us0), max(us0)) == (0.0, 8000.0) and not _strips(plain)
-    # nothing else moves: the deck and the battens stop at the roof's edge
-    for kind in ("deck", "batten"):
-        us = [q[0] for m in out["geometry"] if m["ifc_type"] == kind for q in m["profile"]]
-        assert min(us) >= 0.0 and max(us) <= 8000.0
+    # the battens stop at the roof's edge
+    us = [q[0] for m in out["geometry"] if m["ifc_type"] == "batten" for q in m["profile"]]
+    assert min(us) >= 0.0 and max(us) <= 8000.0
+    # each tray at the edge is cut as wide as the coil it takes, drip and all
+    sheet = _strips(out, "Support")[0]["verge_info"]["sheet"]
+    edge = [m for m in out["geometry"] if m.get("cut_extra_w")]
+    assert edge and all(m["cut_extra_w"] == sheet for m in edge)
+    pieces = {q["name"]: q for q in chain_pieces(out["geometry"], ["Roof A"], "plank")}
+    plain_w = {q["name"]: q for q in chain_pieces([dict(m, cut_extra_w=0.0) for m in edge], ["Roof A"], "plank")}
+    assert all(pieces[m["name"]]["w"] == pytest.approx(plain_w[m["name"]]["w"] + sheet, abs=0.2) for m in edge)
 
 
 @pytest.mark.parametrize("want, sides", [("both", "LR"), ("start", "L"), ("end", "R"), ("none", "")])
 def test_the_chain_says_which_sides_are_verges(want, sides):
     _params, out = _one(elev={"verge": want})
-    assert "".join(sorted(m["name"][-1] for m in _strips(out))) == sides
+    assert "".join(sorted(m["name"][-1] for m in _strips(out, "Support"))) == sides
     assert [v["side"] for v in out["info"][0].get("verges", [])] == [c.lower() for c in sides]
 
 
@@ -79,7 +104,7 @@ def test_start_and_end_are_the_same_ends_of_the_roof_on_both_slopes_of_a_ridge()
     "start" must still be one end of the roof, not one on each."""
     _link, params, out = _roof(elev={"verge": "start"}, **SEAM)
     a, b = params["elevations"]
-    strips = {m["elevation"]: m for m in _strips(out)}
+    strips = {m["elevation"]: m for m in _strips(out, "Support")}
     assert strips["Roof A"]["name"].endswith("L") and strips["Roof B"]["name"].endswith("R")
     ends = [frame_to_world(m["frame"], 0.0, 0.0, 0.0) for m in strips.values()]
     from synthetic import U
@@ -87,7 +112,7 @@ def test_start_and_end_are_the_same_ends_of_the_roof_on_both_slopes_of_a_ridge()
     assert abs(along[1]) < 0.01                                                 # both at the one gable
     # at the ridge each strip stops square, under the cap, the foot of its drop clear of the other slope's
     k = math.tan(math.radians(31.4))
-    assert 2960.0 < strips["Roof A"]["thickness"] < 3000.0
+    assert 2930.0 < strips["Roof A"]["thickness"] < 3000.0
     foot = strips["Roof A"]["thickness"] - 3000.0 - k * min(
         world_to_frame(a["frame"], frame_to_world(strips["Roof A"]["frame"], x, y, 0.0))[2] for x, y in strips["Roof A"]["profile"])
     assert foot <= -15.0 * math.sqrt(1 + k * k) + 0.5
@@ -141,8 +166,9 @@ def test_the_verge_check_still_warns_when_the_tray_is_narrower_than_the_rule_all
 def test_the_verge_exports_to_ifc_and_dxf():
     params, out = _one()
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
-    strips = [e for e in ifc.by_type("IfcCovering") if "Verge Strip" in (e.Name or "")]
-    assert len(strips) == 2 and all(e.PredefinedType == "ROOFING" and e.ObjectType == "Verge strip" for e in strips)
+    strips = [e for e in ifc.by_type("IfcCovering") if "Verge Support" in (e.Name or "")]
+    assert len(strips) == 2 and all(e.PredefinedType == "ROOFING" and e.ObjectType == "Verge support profile" for e in strips)
+    assert not [e for e in ifc.by_type("IfcElement") if "Verge Drip" in (e.Name or "")], "each drip is in its tray's element"
     assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
     assert len(out["info"][0]["verge_strips"]) == 2
     assert "ROOF A" in meshes_to_dxf_string(out["geometry"], params, out["info"])
@@ -255,7 +281,7 @@ def test_the_check_says_which_verge_and_does_not_hold_it_to_the_g3_seam_rule():
     assert row["status"] == "pass" and "VMZ-SN-MA-ZI-05" in row["message"] and "by 60 mm" in row["message"]
     _p, g3 = _one()
     (plain,) = [r for r in check_rules(_p, g3["info"]) if r["name"].endswith("Verge")]
-    assert "verge strip" in plain["message"] and "ZI-05" not in plain["message"]
+    assert "a G3 verge" in plain["message"] and "ZI-05" not in plain["message"]
 
 
 def test_the_verge_with_cladding_exports():
@@ -341,3 +367,78 @@ def test_what_the_modelled_roof_already_oversails_comes_off_and_the_chain_can_se
     g3 = {"elevations": [dict(roof, verge_type="g3"), _gable(roof, cladding_type="panel")]}  # the G3 strip is not moved
     join_verges(g3)
     assert "verge_over" not in g3["elevations"][0]
+
+
+def test_at_the_eaves_the_verge_drip_comes_down_to_the_back_of_the_eaves_drip_and_the_bullnoses_mitre():
+    params, out = _one()
+    a = params["elevations"][0]
+    f = a["frame"]
+    geo = out["geometry"]
+    for side, edge, letter in ((-1.0, 0.0, "l"), (1.0, 8000.0, "r")):
+        ends = [m for m in geo if m.get("drip_end") and m.get("verge_drip")
+                and (world_to_frame(f, m["frame"]["origin"])[0] - edge) * side > -60.0]
+        eaves_ends = [m for m in geo if m.get("drip_end") and m.get("eaves_info")
+                      and (world_to_frame(f, m["frame"]["origin"])[0] - edge) * side > -60.0]
+        assert sorted(m["name"].split(" Verge Drip ")[1] for m in ends) == ["Bullnose End", "Drop End"], letter
+        assert sorted(m["name"].split(" Eaves Drip ")[1] for m in eaves_ends) == ["Bullnose End", "Drop End"], letter
+        # every end piece is its tray's own sheet, sheared to end in its plane
+        assert all(m["tray_sheet"] and m.get("of") and m.get("vshift") for m in ends + eaves_ends)
+        bull_v = next(m for m in ends if "Bullnose" in m["name"])
+        bull_e = next(m for m in eaves_ends if "Bullnose" in m["name"])
+        # the two bullnoses end in one plane, square to the roof, between the eaves and the verge
+        for m in (bull_v, bull_e):
+            assert abs(sum(x * y for x, y in zip(m["frame"]["n"], f["n"]))) < 1e-6, "square to the roof"
+        n1, n2 = bull_v["frame"]["n"], bull_e["frame"]["n"]
+        assert abs(abs(sum(x * y for x, y in zip(n1, n2))) - 1.0) < 1e-6, "one plane"
+        # level, up the slope; and along the eaves
+        hv = [f["v"][0], f["v"][1], 0.0]
+        hl = (hv[0] ** 2 + hv[1] ** 2) ** 0.5
+        hv = [c / hl for c in hv]
+        level = lambda m: [sum(p[i] * hv[i] for i in range(3)) for p in _points(m)]          # noqa: E731
+        along = lambda m: [(world_to_frame(f, p)[0] - edge) * side for p in _points(m)]      # noqa: E731
+        drop_v = next(m for m in ends if "Drop" in m["name"])
+        drop_e = next(m for m in eaves_ends if "Drop" in m["name"])
+        # the verge drop stops on the back of the eaves drop: no gap, and it does not pass through it
+        face = min(level(drop_e))
+        assert 0.0 < min(level(drop_v)) - face <= 1.5, "down to the back of the eaves drip (zinc is under 1.5 mm)"
+        # the eaves drop runs out to the verge drop's outside face, covering its end
+        assert max(along(drop_e)) == pytest.approx(max(along(drop_v)), abs=1.0), "the eaves drop covers its end"
+
+
+def _points(m):
+    from cladding_primitives import ring_at
+    d = float(m["depth"])
+    return [frame_to_world(m["frame"], u, v, s) for s in (0.0, d) for u, v in ring_at(m, 0, s)]
+
+
+def test_the_setting_out_slides_so_each_verge_has_one_tray_in_range_not_two_narrow_ones():
+    from cladding_geometry import seam_columns
+    both = ((150.0, 370.0), (150.0, 370.0))
+    # centred, 556 mm would be left at each verge: the run slides to 340 | 14 x 430 | 340, not 278 + 278
+    w = [round(b - a) for a, b in seam_columns(6600.0, 430.0, 0.0, [], (0.0, 6600.0), (50.0, 50.0), both)]
+    assert w == [340] + [430] * 14 + [340]
+    # one verge: that end's tray is as wide as the detail allows
+    w = [round(b - a) for a, b in seam_columns(6600.0, 430.0, 0.0, [], (0.0, 6600.0), (50.0, 0.0), ((150.0, 370.0), (0.0, 430.0)))]
+    assert w[0] == 370 and w[1] == 430
+    # whatever the width, every end tray at a verge is one tray in range
+    for width in range(3000, 9000, 37):
+        w = [b - a for a, b in seam_columns(float(width), 430.0, 0.0, [], (0.0, float(width)), (50.0, 50.0), both)]
+        assert 149.5 <= w[0] <= 370.5 and 149.5 <= w[-1] <= 370.5, width
+        assert all(abs(x - 430.0) < 0.5 for x in w[1:-1]) or len(w) <= 3, width
+
+
+def test_verge_last_tray_full_lets_the_last_seam_stand_further_in_and_the_check_warns():
+    found = False
+    for offset in range(0, 430, 25):
+        params, out = _one(elev={"verge_last": "full", "offset": float(offset)})
+        infos = out["info"][0]["verges"]
+        assert infos and all(v["wide"] for v in infos)
+        seams = [v["last_seam"] for v in infos if v.get("last_seam") is not None]
+        (row,) = [c for c in check_rules(params, out["info"]) if c["name"].endswith("Verge")]
+        if any(x > 370.5 for x in seams):
+            found = True
+            assert row["status"] == "warn" and "supplier" in row["message"], row["message"]
+            assert max(seams) <= 530.0 + 0.5               # never more than a whole tray (the default 530)
+        else:
+            assert row["status"] == "pass", row["message"]
+    assert found, "some offset puts the last seam past 370 with a full tray allowed"

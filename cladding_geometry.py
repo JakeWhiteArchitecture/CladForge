@@ -172,7 +172,7 @@ def _tray_reach(p, elev, depth):
     the tray is at least SEAM_MIN_CLOSE, and clear of the turn. Last, which ends are held to
     their limits though the trays do not run on past them: a verge whose edge is itself a
     seam (cladding_verge, "Verge with cladding"), where the last tray stops at the edge."""
-    from cladding_verge import verge_sides, verge_type, verge_seam_out, verge_over, VERGE_TRAY, VERGE_SEAM
+    from cladding_verge import verge_sides, verge_type, verge_seam_out, verge_over, verge_most, VERGE_TRAY, VERGE_SEAM
     left, right, (d_left, d_right) = corner_ends(elev, p)
     verges = verge_sides(elev, p)
     reach, limits, held = [], [], []
@@ -187,7 +187,7 @@ def _tray_reach(p, elev, depth):
             limits.append((SEAM_MIN_CLOSE, p["plank_w"]))
         elif side in verges and not k:
             reach.append(VERGE_TRAY)
-            limits.append((VERGE_SEAM[0], min(VERGE_SEAM[1], p["plank_w"])))
+            limits.append((VERGE_SEAM[0], verge_most(elev, p)))
         else:
             reach.append(0.0)
             limits.append((0.0, p["plank_w"]))
@@ -998,6 +998,39 @@ SEAM_JAMB_MERGE = 100.0     # mm – jambs closer than this share one seam line
 SEAM_MIN_CLOSE = 100.0      # mm – a closing tray at a corner or a verge is never narrower than this
 
 
+def _rephase(seams, cover, offset, a_dev, b_dev, reach, limits):
+    """Slide the seams so that each end held to a narrower limit than a tray (a verge: the last
+    seam at most 370 in) gets one tray in its range, as wide as it may be, rather than the
+    last two trays split. Both ends that way: the run is centred (plus *offset*), with the
+    fewest full trays that bring both end trays within their most; one end: that end's tray
+    is set to its most. None if nothing needs moving or no layout fits."""
+    ends = [i for i in (0, 1) if reach[i]]
+    narrow = [i for i in ends if limits[i][1] < cover - 1e-6]
+    if not narrow or not seams:
+        return None
+    gaps = (seams[0] - a_dev, b_dev - seams[-1])
+    if all(limits[i][0] - 1e-6 <= gaps[i] <= limits[i][1] + 1e-6 for i in ends):
+        return None
+    if len(ends) == 2:
+        span = b_dev - a_dev
+        n = max(0, int((span - limits[0][1] - limits[1][1]) // cover))
+        while n * cover < span:
+            e = (span - n * cover) / 2.0
+            left, right = e + offset, e - offset
+            if left > limits[0][1] + 1e-6 or right > limits[1][1] + 1e-6:
+                n += 1
+                continue
+            if left < limits[0][0] - 1e-6 or right < limits[1][0] - 1e-6:
+                return None
+            return [a_dev + left + k * cover for k in range(n + 1)]
+        return None
+    i = ends[0]
+    if i not in narrow:
+        return None
+    shift = gaps[i] - limits[i][1]                       # that end's tray set to its most
+    return [u - shift for u in seams] if i == 0 else [u + shift for u in seams]
+
+
 def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=None, held=(False, False)):
     """The tray columns (u0, u1) across a face *W* wide. Set out from the openings, each
     jamb is a seam line, carried straight up and down past the opening, and each span between
@@ -1031,6 +1064,7 @@ def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=No
     while reach[1] and (seams[-1] if seams else cols[0][0]) + cover < b_dev - 1e-6:
         seams.append((seams[-1] if seams else cols[0][0]) + cover)
     seams = [u for u in seams if (a_dev < u if reach[0] else True) and (u < b_dev if reach[1] else True)]
+    seams = _rephase(seams, cover, offset, a_dev, b_dev, reach, limits) or seams
     if reach[0] and seams:
         least, most = limits[0]
         if seams[0] - a_dev < least - 1e-6:               # too close to that end: the two end trays share

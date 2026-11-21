@@ -1603,7 +1603,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  cards: [...document.querySelectorAll('.elev-meta')].slice(-2).map(c => c.textContent.replace(/^.*openings?/, '')),
                  caps: named(a, /Ridge Cap/).length + named(b, /Ridge Cap/).length,
                  fillers: [named(a, /Ridge Filler/).length, named(b, /Ridge Filler/).length],
-                 upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Strip/).length + named(b, /Verge Strip/).length,
+                 upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Support/).length + named(b, /Verge Support/).length,
                  seams: [seams(a), seams(b)],
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)) };
     });
@@ -1621,7 +1621,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     await settle();
     const zi05 = await page.evaluate(() => {
         const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
-        return { strips: names.filter(n => /Verge Strip/.test(n)).length, flashings: names.filter(n => /Verge Flashing/.test(n)).length,
+        return { strips: names.filter(n => /Verge Support/.test(n)).length, flashings: names.filter(n => /Verge Flashing/.test(n)).length,
                  clips: names.filter(n => /Verge Clip/.test(n)).length, seams: names.filter(n => /Verge Seam/.test(n)).length, type: state.elevations[state.elevations.length - 1].chain.edges.vergeType,
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /verge flashing over the cladding/.test(t)).length };
     });
@@ -1631,7 +1631,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         throw new Error('the verge with cladding was not built: ' + JSON.stringify(zi05));
     await page.selectOption('#edge-vergeType', 'g3');
     await settle();
-    const g3Again = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Verge Strip/.test(m.userData.name || '')).length);
+    const g3Again = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Verge Support/.test(m.userData.name || '')).length);
     if (g3Again !== 4) throw new Error('the G3 verge strips did not come back: ' + g3Again);
     await page.evaluate(async () => { for (let k = 0; k < 2; k++) { setActive(state.elevations.length - 1); deleteElevation(); await settled(); } });
 

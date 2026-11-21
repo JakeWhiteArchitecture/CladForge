@@ -11,7 +11,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // folded or flat.
 const HEADS = ['auto', 'g3', 'none'];       // a monopitch's head verge: over a picked wall, on every level top edge, or not at all
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', eaves: 'on', head: 'auto', capEnds: 'edge' };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', vergeLast: 'vmz', eaves: 'on', head: 'auto', capEnds: 'edge' };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -91,6 +91,8 @@ function syncEdgeFields() {
     }
     document.getElementById('edge-verge').value = VERGES.includes(ed.verge) ? ed.verge : 'both';
     document.getElementById('edge-vergeType').value = VERGE_TYPES.includes(ed.vergeType) ? ed.vergeType : 'g3';
+    document.getElementById('edge-vergeLast').value = ed.vergeLast === 'full' ? 'full' : 'vmz';
+    document.getElementById('edge-vergeLast').disabled = ed.vergeType === 'cladding';
     const over = document.getElementById('edge-vergeOver');           // blank: taken from the cladding on the wall below
     if (document.activeElement !== over) over.value = ed.vergeOver == null ? '' : ed.vergeOver;
     over.disabled = ed.vergeType !== 'cladding';
@@ -108,6 +110,7 @@ function setEdge(e, key, value) {
     else if (key === 'seamTop' || key === 'seamBottom') e.chain.edges[key] = value === 'flat' ? 'flat' : 'folded';
     else if (key === 'verge') e.chain.edges.verge = VERGES.includes(value) ? value : 'both';
     else if (key === 'vergeType') e.chain.edges.vergeType = VERGE_TYPES.includes(value) ? value : 'g3';
+    else if (key === 'vergeLast') e.chain.edges.vergeLast = value === 'full' ? 'full' : 'vmz';
     else if (key === 'vergeOver') { const v = parseFloat(value); e.chain.edges.vergeOver = isFinite(v) ? Math.max(0, Math.min(400, v)) : null; }
     else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
     else if (key === 'head') e.chain.edges.head = HEADS.includes(value) ? value : 'auto';
@@ -1079,6 +1082,7 @@ function elevationRecords() {
                                                    seam_fold: chain.edges.fold !== 'off',
                                                    verge: VERGES.includes(chain.edges.verge) ? chain.edges.verge : 'both',
                                                    verge_type: VERGE_TYPES.includes(chain.edges.vergeType) ? chain.edges.vergeType : 'g3',
+                                                   verge_last: chain.edges.vergeLast === 'full' ? 'full' : 'vmz',
                                                    verge_oversail: chain.edges.vergeOver == null ? null : chain.edges.vergeOver,
                                                    eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
                                                    head: HEADS.includes(chain.edges.head) ? chain.edges.head : 'auto',
