@@ -40,6 +40,12 @@ def _span(m, k):
     return min(q[k] for q in m["profile"]), max(q[k] for q in m["profile"])
 
 
+def _wide(m, k):
+    """A tray's width seam to seam: its flat, and what it stands back from its seams' lines by
+    (cladding_edges.break_at_seams, "cut_grow")."""
+    return _span(m, k)[1] - _span(m, k)[0] + (m.get("cut_grow") or (0.0, 0.0))[k]
+
+
 def test_only_the_standard_centres_and_seam_heights():
     assert _parse({"plank_profile": "seam", "seam_centres": 470})["plank_w"] == 430
     assert _parse({"plank_profile": "seam", "seam_centres": 500})["plank_w"] == 530
@@ -64,8 +70,8 @@ def test_vertical_trays_on_a_deck_on_vertical_battens(wall, centres):
     params, out = _build(wall, plank_orient="vertical", seam_centres=centres, set_out_from_openings=False)
     p = _parse(params)
     trays = _of(out, "plank")
-    assert {round(_span(m, 0)[1] - _span(m, 0)[0]) for m in trays} <= {float(centres)} | {round(w) for w in range(1, centres)}
-    assert max(round(_span(m, 0)[1] - _span(m, 0)[0]) for m in trays) == centres
+    assert {round(_wide(m, 0)) for m in trays} <= {float(centres)} | {round(w) for w in range(1, centres)}
+    assert max(round(_wide(m, 0)) for m in trays) == centres
     assert all("Tray" in m["name"] for m in trays)
     assert all(m["opacity"] == 1.0 for m in trays)                       # metal: not see-through
     assert all(m["opacity"] == 1.0 for m in _of(out, "reveal"))
@@ -153,7 +159,7 @@ def test_seams_on_the_reveal_corners_run_on_past_the_opening(wall):
     t, air, so = 0.6, 1.8, 2.0
     _params, out = _build(wall, plank_orient="vertical", seam_centres=430, trim=True)
     assert out["info"][0]["set_out_from_openings"]
-    widths = sorted({round(_span(m, 0)[1] - _span(m, 0)[0], 1) for m in _of(out, "plank")})
+    widths = sorted({round(_wide(m, 0), 1) for m in _of(out, "plank")})
     assert max(widths) <= 430 and widths == [400.0]           # 2000 = 5 x 400, 1200 = 3 x 400, 4800 = 12 x 400
     seams = [m for m in _of(out, "seam") if m.get("seam_part")]
     linings = {m["name"][-1]: m for m in _of(out, "reveal") if m["name"][-1] in "LR"}
@@ -195,7 +201,7 @@ def test_one_metal_one_colour(wall):
 def test_horizontal_trays_seam_along_the_tray_below(wall):
     _params, out = _build(wall, plank_orient="horizontal", seam_centres=430)
     trays = _of(out, "plank")
-    assert max(round(_span(m, 1)[1] - _span(m, 1)[0]) for m in trays) == 430
+    assert max(round(_wide(m, 1)) for m in trays) == 430
     stems = _parts(out, "over_up")
     assert stems and all(round(_span(m, 1)[1] - _span(m, 1)[0], 3) == 0.6 for m in stems)     # running along u
     # no seam along the bottom edge of the bottom course
@@ -474,3 +480,48 @@ def test_the_cavity_closer_stops_under_the_deck(wall):
     assert closers
     for c in closers:
         assert c["depth"] + c["thickness"] == pytest.approx(deck["depth"])
+
+
+# ── the break under a seam: every tray is its own sheet ───────────────────
+
+@pytest.mark.parametrize("orient, k", [("vertical", 0), ("horizontal", 1)])
+def test_the_flats_of_two_trays_do_not_meet_under_their_seam(wall, orient, k):
+    """A double lock's two upstands stand SEAM_AIR apart either side of the seam's line. Each
+    tray's flat stops at the foot of its own upstand, so there is a break between one sheet
+    and the next under every seam; at the face's own edges, where there is no seam, nothing
+    moves; and the cutting list still has each tray seam to seam."""
+    from cladding_constants import SEAM_AIR
+    from cladding_nesting import plank_pieces
+    params, out = _build(wall, plank_orient=orient, seam_centres=430, set_out_from_openings=False, trim=True)
+    trays = _of(out, "plank")
+    lines = sorted({m["seam_line"] for m in _parts(out, "over_up")})
+    assert len(lines) > 5
+    edges = sorted({round(c, 3) for m in trays for c in _span(m, k)})
+    for line in lines:
+        over, under = [next(m for m in _parts(out, part) if m["seam_line"] == line) for part in ("over_up", "under_up")]
+        # the upstands, either side of the line; and the two flats, each to the face of its own
+        assert _span(over, k)[1] == pytest.approx(line - SEAM_AIR / 2.0) and _span(under, k)[0] == pytest.approx(line + SEAM_AIR / 2.0)
+        assert round(line - SEAM_AIR / 2.0, 3) in edges and round(line + SEAM_AIR / 2.0, 3) in edges
+        assert not [c for c in edges if abs(c - line) < SEAM_AIR / 2.0 - 1e-6], "nothing of a tray lies under the seam, between its upstands"
+    # no two trays overlap or touch across a seam: SEAM_AIR between each and the next
+    def beside(a, b):
+        (a0, a1), (b0, b1) = _span(a, 1 - k), _span(b, 1 - k)
+        return min(a1, b1) - max(a0, b0) > 1.0
+    gaps = [round(_span(b, k)[0] - _span(a, k)[1], 3) for a in trays for b in trays
+            if a is not b and beside(a, b) and 0.0 <= _span(b, k)[0] - _span(a, k)[1] < 5.0]
+    assert gaps and set(gaps) == {SEAM_AIR}
+    # the face's own edges: no seam, no break
+    W = wall["width"] if k == 0 else None
+    if W:
+        assert edges[0] == 0.0 and edges[-1] == W
+    # and what is cut is the tray seam to seam
+    widths = {round(q["width"], 1) for q in plank_pieces(out["geometry"], {wall["name"]}, orient)}
+    assert max(widths) == 430.0 and all(m.get("cut_grow") for m in trays if _wide(m, k) == pytest.approx(430.0))
+
+
+def test_planks_and_panels_are_left_as_they_are(wall):
+    for kw in (dict(cladding_type="panel"), dict(cladding_type="plank", plank_profile="open", plank_orient="horizontal")):
+        params = dict({"elevations": [wall], "trim": True}, **kw)
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = generate_preview(params)
+        assert not [m for m in out["geometry"] if m.get("cut_grow")]

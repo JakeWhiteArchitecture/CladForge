@@ -234,6 +234,16 @@ def check_rules(params, infos=None):
                 % (i["elevation"], sum(e["length"] for e in eaves) / 1000.0, eaves[0]["nose"], min(e["drop"] for e in eaves), max(e["sheet"] for e in eaves),
                    "; over %s, which it comes down to with no overhang, the roof runs on %.0f mm so the drip stands clear of the wall's "
                    "cladding and laps it" % (" and ".join(over), max(e.get("run") or 0.0 for e in eaves)) if over else ""), len(eaves))
+        hv = i.get("head")
+        if hv:
+            add("Head verge", "pass" if hv["standard"] else "warn",
+                "%s: a G3 head verge %.2f m long%s. The trays stop %.0f mm short of each other's line and are turned up, the cap lies %.0f mm "
+                "across and turns down %.0f mm %s%s" % (
+                    i["elevation"], hv["length"] / 1000.0,
+                    " over %s, which the roof runs on %.0f mm over" % (hv["over"], hv["run"]) if hv["over"] else "",
+                    hv["gap"] / 2.0, hv["width"], hv["drop"], "over the top of that wall's cladding" if hv["over"] else "over the roof's edge",
+                    "" if hv["standard"] else ". That is wider than the G3 piece is made (185 mm): the wall's build-up is deep, and a purpose-made "
+                    "head flashing is needed"), hv["length"])
         for u in i.get("eaves_under") or []:
             add("Eaves", "pass", "%s: under the eaves of %s (no overhang) for %.2f m. Every layer stops level, %.0f mm below the line the two "
                 "meet on: the %.0f mm top offset under the roof's plywood where that is lowest, at the outside of this wall's cladding. "
@@ -246,6 +256,20 @@ def check_rules(params, infos=None):
             continue
         lo, hi = VERGE_SEAM
         side = {"l": "left", "r": "right"}
+        over = [v for v in verges if v.get("type") == "cladding"]
+        if over:
+            add("Verge", "pass", "%s: a verge flashing over the cladding on the %s (VMZ-SN-MA-ZI-05): a seam at the roof's edge, "
+                "the flashing down %.0f mm from the deck to cover the head of the wall's cladding by %.0f mm, on a continuous "
+                "folded strip; %s. Only the %.0f is dimensioned on the sheet: agree the rest with the supplier" % (
+                    i["elevation"], " and ".join(side[v["side"]] for v in over), over[0]["drop"], over[0]["cover"],
+                    " and ".join(("the plywood oversails the roof's edge by %.0f mm on the %s, %s" % (
+                        v["over"], side[v["side"]], "as set" if v.get("over_from") == "set" else "the cladding on %s below" % v["over_from"]))
+                        if v.get("over") else ("no clad wall was found under the %s edge, so the plywood stops at it: pick the wall, or set "
+                                               "the oversail (Edges)" % side[v["side"]]) for v in over), over[0]["cover"]),
+                len(over))
+        verges = [v for v in verges if v.get("type") != "cladding"]
+        if not verges:
+            continue
         off = [v for v in verges if v.get("last_seam") is not None and not (lo - 0.5 <= v["last_seam"] <= hi + 0.5)]
         if off:
             add("Verge", "warn", "%s: the last seam is %s from the tray's edge at the verge; the detail takes %.0f to %.0f mm. "

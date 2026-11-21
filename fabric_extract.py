@@ -992,7 +992,7 @@ def _roof_link(a, b, kind):
             return None                               # two walls: a chain corner; two slopes: a roof junction
         if max(abs(na[2]), abs(nb[2])) > RAKE_LEAN:
             return None                               # one of them is a roof, not a leaning wall: an eaves, not a corner
-    elif kind == "eaves":
+    elif kind in ("eaves", "head"):
         wall, roof = sorted((na, nb), key=lambda v: abs(v[2]))
         if abs(wall[2]) > EAVES_PLUMB or roof[2] <= RAKE_LEAN:
             return None                               # an upright wall under a roof slope, or it is something else
@@ -1011,7 +1011,7 @@ def _roof_link(a, b, kind):
         return None                                   # a valley; or level, a ridge
     if kind == "rake" and front_a * front_b <= 0:
         return None                                   # one in front of the other, one behind: they do not turn a corner
-    if kind == "eaves":
+    if kind in ("eaves", "head"):
         if front_a >= 0 or front_b >= 0 or abs(line[2]) > HIP_SLOPE:
             return None                               # on a level line, turning outward
     external = front_a < 0
@@ -1044,11 +1044,12 @@ def _roof_link(a, b, kind):
            "k": round(k if kind != "rake" or external else -k, 4), "angle": round(math.degrees(beta), 1), "length": round(t1 - t0, 1)}
     if kind == "rake":
         out["external"] = external
-    if kind == "eaves":
+    if kind in ("eaves", "head"):
         out["a"]["roof"], out["b"]["roof"] = abs(na[2]) > abs(nb[2]), abs(nb[2]) > abs(na[2])
         roof = cb if out["b"]["roof"] else ca
-        if roof[2] <= base[2] + 1.0:
-            return None                               # the roof falls away from the head of the wall: a monopitch's head, not its eaves
+        # the roof rises from the head of the wall: its eaves. It falls away behind it: a monopitch's head.
+        if (roof[2] > base[2] + 1.0) != (kind == "eaves") or abs(roof[2] - base[2]) <= 1.0:
+            return None
     return out
 
 
@@ -1068,11 +1069,20 @@ def eaves_link(a, b):
     return _roof_link(a, b, "eaves")
 
 
+def head_link(a, b):
+    """Is the top edge of a monopitch roof slope the head of a wall it falls away behind?
+    None if not, else what eaves_link gives, its kind "head". The same corner as an eaves
+    with no overhang, seen from the roof's high side: the wall is upright, the two meet on
+    a level line that is the wall's top edge and the roof's top edge, and the corner turns
+    outward (cladding_head: the G3 head verge)."""
+    return _roof_link(a, b, "head")
+
+
 def valley_links(a, others):
     """For each of *others*, in order: how it meets a, at a valley (valley_link), a hip
     (hip_link), a raking corner (rake_link) or an eaves on a wall (eaves_link); None where
     it does none of them."""
-    return [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) for b in others]
+    return [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) or head_link(a, b) for b in others]
 
 
 HEAL_MAX = 500.0          # mm – an edge this far or less from the line two faces would meet on nearly touches it
@@ -1084,7 +1094,7 @@ HEAL_TRIM_SHARE = 0.5     # and what is past the line is under this share of wha
 
 def _joined(a, b):
     """Are the two joined as they stand: at a corner or a ridge, a valley or a hip?"""
-    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b))
+    return bool(chain_link(a, b) or valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) or head_link(a, b))
 
 
 def _reach(elev, other, line, base):
