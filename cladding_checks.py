@@ -233,8 +233,10 @@ def check_rules(params, infos=None):
                 "folded back at 45 degrees%s. Its sizes are assumed: agree them against the supplier's "
                 "eaves detail. Switch it off (Edges, Eaves drip) where the slope runs into a wall or a gutter behind a parapet"
                 % (i["elevation"], sum(e["length"] for e in eaves) / 1000.0, eaves[0]["nose"], min(e["drop"] for e in eaves), max(e["sheet"] for e in eaves),
-                   "; over %s, which it comes down to with no overhang, the roof runs on %.0f mm so the drip stands clear of the wall's "
-                   "cladding and laps it" % (" and ".join(over), max(e.get("run") or 0.0 for e in eaves)) if over else ""), len(eaves))
+                   "; over %s, which it comes down to with no overhang%s, the roof runs on %.0f mm so the drip stands clear of the %s's "
+                   "cladding and laps it" % (" and ".join(over), " (a mansard: the steeper slope below, VMZ-SN-MA-KN-b1)" if any(e.get("mansard") for e in eaves) else "",
+                                             max(e.get("run") or 0.0 for e in eaves), "lower slope" if any(e.get("mansard") for e in eaves) else "wall")
+                   if over else ""), len(eaves))
         hv = i.get("head")
         if hv:
             add("Head verge", "pass" if hv["standard"] else "warn",
@@ -304,10 +306,12 @@ def check_rules(params, infos=None):
                     "the splash zone asks), lapping the roof's G3 flashing, which runs up the wall behind them"
                     % (i["elevation"], o["with"], o["length"] / 1000.0, o["stop"]), o["length"])
         for u in i.get("eaves_under") or []:
-            add("Eaves", "pass", "%s: under the eaves of %s (no overhang) for %.2f m. Every layer stops level, %.0f mm below the line the two "
-                "meet on: the %.0f mm top offset under the roof's plywood where that is lowest, at the outside of this wall's cladding. "
-                "The gap is the wall cavity's vent: an insect mesh closes it (not drawn)"
-                % (i["elevation"], u["with"], u["length"] / 1000.0, -u["stop"], u["gap"]), u["length"])
+            add("Eaves", "pass", "%s: under the eaves of %s (%s) for %.2f m. Every layer stops %s, %.0f mm below the line the two "
+                "meet on: the %.0f mm top offset under the roof's plywood where that is lowest, at the outside of this %s's cladding. "
+                "The gap is the cavity's vent: an insect mesh closes it (not drawn)"
+                % (i["elevation"], u["with"], "a mansard: this is its steeper lower slope" if u.get("mansard") else "no overhang",
+                   u["length"] / 1000.0, "square to the face" if u.get("mansard") else "level", -u["stop"], u["gap"],
+                   "slope" if u.get("mansard") else "wall"), u["length"])
     # A verge's last seam stands 150 to 370 mm in from the tray's edge.
     for i in infos:
         verges = i.get("verges") or []

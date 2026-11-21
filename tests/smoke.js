@@ -2108,6 +2108,36 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     await settle();
     const noAbut = await abutment();
     if (noAbut.flashings || noAbut.upstands || noAbut.check || noAbut.low > 100) throw new Error('the abutment was not switched off: ' + JSON.stringify(noAbut));
+    // A tenth model: a mansard (VMZINC KN-b1). A 15 degree upper slope runs on over a 70 degree
+    // lower one, each its own chain: an eaves over the lower slope's cladding, which stops under it.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'mansard.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    await lookAt('Lower', [0.02, 0.34, 0.94]);
+    await picked(1);
+    await seamRoof();
+    await settle();
+    await lookAt('Upper', [0.02, 0.97, 0.26]);
+    await picked(2);
+    const mansardStatus = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    await seamRoof();
+    await settle();
+    const mansard = await page.evaluate(() => {
+        const g = window._lastPreview.geometry, info = name => window._lastPreview.info.find(i => i.elevation === name) || {};
+        return { records: state.elevations.map(e => valleyRecords(e).map(v => [v.kind, v.with, v.roof].join())).join(' / '),
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')).join(' / '),
+                 zinc: g.filter(m => /Eaves Drip/.test(m.name) && m.elevation === 'Elevation B').length,
+                 under: (info('Elevation A').eaves_under || []).map(u => [u.with, u.mansard].join()).join(' / '),
+                 over: (info('Elevation B').eaves || []).map(e => [e.over, e.mansard, e.run > 0].join()).join(' / '),
+                 checks: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /mansard/.test(t)).length };
+    });
+    console.log('mansard:', JSON.stringify(mansard), '|', mansardStatus);
+    if (mansard.records !== 'eaves,Elevation B,false / eaves,Elevation A,true' || !/mansard with B/.test(mansard.cards) || !/mansard with A/.test(mansard.cards)
+        || !/a mansard with Elevation A/.test(mansardStatus) || mansard.zinc < 2 || mansard.under !== 'Elevation B,true'
+        || mansard.over !== 'Elevation A,true,true' || mansard.checks !== 2)
+        throw new Error('the two slopes were not joined at a mansard: ' + JSON.stringify(mansard));
 
     console.log('SMOKE OK');
     await browser.close();

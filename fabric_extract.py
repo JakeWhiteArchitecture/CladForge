@@ -1014,8 +1014,10 @@ def _roof_link(a, b, kind):
             return None                               # one of them is a roof, not a leaning wall: an eaves, not a corner
     elif kind in ("eaves", "head", "abut"):
         wall, roof = sorted((na, nb), key=lambda v: abs(v[2]))
-        if abs(wall[2]) > EAVES_PLUMB or roof[2] <= RAKE_LEAN:
-            return None                               # an upright wall under a roof slope, or it is something else
+        if roof[2] <= RAKE_LEAN:
+            return None                               # the upper face is no roof slope
+        if abs(wall[2]) > EAVES_PLUMB and not (kind == "eaves" and wall[2] > 0 and _pitch_of(wall) - _pitch_of(roof) >= MANSARD_STEP):
+            return None                               # neither an upright wall nor (at an eaves) a steeper slope, a mansard's, under the roof
     elif na[2] < 1e-6 or nb[2] < 1e-6:
         return None                                   # a wall, or a face that looks down
     line = _cross(na, nb)
@@ -1078,6 +1080,8 @@ def _roof_link(a, b, kind):
         out["a"]["roof"], out["b"]["roof"] = roof_a, not roof_a
     if kind in ("eaves", "head"):
         out["a"]["roof"], out["b"]["roof"] = abs(na[2]) > abs(nb[2]), abs(nb[2]) > abs(na[2])
+        lower = min((na, nb), key=lambda v: abs(v[2]))
+        out["mansard"] = kind == "eaves" and abs(lower[2]) > EAVES_PLUMB      # the face below leans back: a mansard's knuckle
         roof = cb if out["b"]["roof"] else ca
         # the roof rises from the head of the wall: its eaves. It falls away behind it: a monopitch's head.
         if (roof[2] > base[2] + 1.0) != (kind == "eaves") or abs(roof[2] - base[2]) <= 1.0:
@@ -1086,6 +1090,12 @@ def _roof_link(a, b, kind):
 
 
 EAVES_PLUMB = 0.035       # a wall under an eaves is upright: its normal's z no more than this (2 degrees)
+MANSARD_STEP = 10.0       # deg – or it is a slope at least this much steeper than the roof: a mansard
+
+
+def _pitch_of(n):
+    """A face's pitch from level, in degrees, from its normal."""
+    return math.degrees(math.acos(max(-1.0, min(1.0, abs(n[2])))))
 
 
 def eaves_link(a, b):
@@ -1094,7 +1104,9 @@ def eaves_link(a, b):
     roof.
 
     The wall is upright and the roof a slope (flatter than a leaning wall: steeper, the two
-    turn a raking corner or a mansard's knuckle). Their planes meet on a level line, the
+    turn a raking corner). Or the face below is itself a slope at least MANSARD_STEP steeper
+    than the roof, looking up: a mansard's knuckle, where the upper, flatter slope runs on
+    over the lower one as it would over a wall ("mansard": True). Their planes meet on a level line, the
     wall's top edge and the roof's bottom edge both lie on it, and the corner turns
     outward. A roof that sails on over the wall has no edge on the line and is not this:
     it has an eaves of its own out at its edge, and the wall is healed up under it."""
