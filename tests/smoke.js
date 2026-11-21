@@ -93,6 +93,9 @@ async function main() {
     // it has to wait for the browser importer, not fall back to the server.
     if (!/Read by web-ifc/.test(modelInfo)) throw new Error('the model was not read in the browser: ' + modelInfo);
     await page.waitForFunction(() => (typeof pyReady !== "undefined" && pyReady === true) || (document.getElementById('status-chip').classList.contains('ready')), null, { timeout: 300000 });
+    // The cutting list is worked out on demand by default; most steps below check it after
+    // each rebuild, so it is switched to update automatically (the manual mode has its own step).
+    await page.evaluate(() => setAutoNesting(true));
     console.log('engine ready');
 
     // Aim at a named element's face and click the middle of the canvas. Named rather
@@ -631,6 +634,28 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     // With 1000 rows the merge fits: one panel fewer, and the waste readout is repacked.
     await page.evaluate(async () => { d2Elev(view2d.name).panelRows = [1000, 1000]; await updatePreview(); });
     await page.waitForFunction(() => window._lastPlan && window._lastPlan.n_pieces, null, { timeout: 20000 });
+    // Not updating automatically: a rebuild only marks the list out of date, and Update repacks it.
+    const manual = await page.evaluate(async () => {
+        setAutoNesting(false);
+        await new Promise(r => setTimeout(r, 900));      // anything already packing lands first
+        const plan = window._lastPlan;
+        d2Elev(view2d.name).panelRows = [1000, 1000, 1000]; await updatePreview();
+        await new Promise(r => setTimeout(r, 700));
+        const box = document.getElementById('waste-readout');
+        const stale = { same: window._lastPlan === plan, flag: !!window._planStale, cls: box.classList.contains('stale'),
+                        text: document.getElementById('wr-stale-text').textContent, shown: document.getElementById('wr-stale').style.display !== 'none' };
+        await updateCuttingList();
+        const fresh = { changed: window._lastPlan !== plan, flag: !!window._planStale, cls: box.classList.contains('stale'),
+                        shown: document.getElementById('wr-stale').style.display !== 'none' };
+        d2Elev(view2d.name).panelRows = [1000, 1000];
+        setAutoNesting(true); await updatePreview();
+        return { stale, fresh, auto: document.getElementById('wr-auto').checked };
+    });
+    console.log('cutting list on demand:', JSON.stringify(manual));
+    if (!manual.stale.same || !manual.stale.flag || !manual.stale.cls || !manual.stale.shown || !/Out of date/.test(manual.stale.text)
+        || !manual.fresh.changed || manual.fresh.flag || manual.fresh.cls || manual.fresh.shown || !manual.auto)
+        throw new Error('the cutting list did not wait for Update: ' + JSON.stringify(manual));
+    await page.waitForFunction(() => window._lastPlan && window._lastPlan.n_pieces && !window._planStale, null, { timeout: 20000 });
     await page.waitForTimeout(900);
     const fitting = await jointAt(true);
     if (!fitting || !fitting.at) throw new Error('no joint that fits to click: ' + JSON.stringify(fitting));

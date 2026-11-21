@@ -803,7 +803,7 @@ function renderHidden() {
 
 function showElement(index) {
     const m = meshMeta[index];
-    if (m) m.mesh.visible = true;
+    if (m) { m.mesh.visible = true; rebuildModelBatch(); }
     renderHidden();
 }
 
@@ -1883,13 +1883,54 @@ import ifc_generator`);
 // Every panel of every built chain is packed onto stock boards (cladding_nesting.py),
 // each elevation on its own so every board is cut for one elevation; the readout says
 // how many more that takes than packing the whole job together. The quick check (16
-// strategies, a few ms) runs after each finished rebuild, debounced like a typed field
-// and never on a slider frame. Optimise boards runs the full search on demand; the
-// cutting plan and the cutting run always use it.
-let _nestTimer = null, _nestSeq = 0;
+// strategies) runs when Update is pressed; with "update automatically" ticked, after each
+// finished rebuild, debounced like a typed field and never on a slider frame. On a big
+// model packing takes seconds, so by default a rebuild only marks the list out of date.
+// Optimise boards runs the full search on demand; the cutting plan and the cutting run
+// always work out their own.
+let _nestTimer = null, _nestSeq = 0, autoNesting = false;
+try { autoNesting = localStorage.getItem('cladforge.autoNesting') === '1'; } catch (err) { /* private window */ }
+function setAutoNesting(on) {
+    autoNesting = !!on;
+    try { localStorage.setItem('cladforge.autoNesting', autoNesting ? '1' : '0'); } catch (err) { /* private window */ }
+    const box = document.getElementById('wr-auto');
+    if (box) box.checked = autoNesting;
+    if (!autoNesting && _nestTimer) { clearTimeout(_nestTimer); _nestTimer = null; }   // nothing queued runs after it is switched off
+    if (autoNesting && window._planStale) runNesting(false);
+}
 function scheduleNesting() {
     if (_nestTimer) clearTimeout(_nestTimer);
+    if (!autoNesting) { markPlanStale(); return; }
     _nestTimer = setTimeout(() => { _nestTimer = null; runNesting(false); }, 300);
+}
+// The model has changed since the list was worked out (or it never was): say so, keep the
+// last numbers greyed, and offer to work it out.
+function markPlanStale() {
+    const box = document.getElementById('waste-readout');
+    if (!pyReady || !window._lastPreview || !state.chains.some(c => c.built)) {
+        box.style.display = 'none';
+        document.getElementById('run-open').style.display = 'none';
+        window._lastPlan = null; window._planStale = false;
+        tintPanels();
+        return;
+    }
+    window._planStale = true;
+    _nestSeq++;                                         // a packing still on its way is for the model as it was
+    box.style.display = '';
+    document.getElementById('run-open').style.display = '';
+    box.classList.add('stale');
+    box.classList.toggle('empty', !window._lastPlan);
+    if (!window._lastPlan) document.getElementById('wr-title').textContent = jobRecords().title + ' · cutting list';
+    document.getElementById('wr-stale-text').textContent = window._lastPlan ? 'Out of date: the model has changed' : 'Not worked out yet';
+    document.getElementById('wr-update').textContent = window._lastPlan ? 'Update' : 'Work it out';
+    document.getElementById('wr-stale').style.display = '';
+    tintPanels();
+}
+async function updateCuttingList() {
+    const btn = document.getElementById('wr-update');
+    btn.disabled = true; btn.textContent = 'Packing…';
+    await new Promise(r => setTimeout(r, 30));          // let the label paint before Python blocks
+    try { await runNesting(false); } finally { btn.disabled = false; }
 }
 
 // The cutting job: the active chain and every other built chain cut from the same material
@@ -1939,6 +1980,9 @@ _json.dumps(_plan)`);
         const plan = JSON.parse(out);
         plan.title = job.title;
         window._lastPlan = plan;
+        window._planStale = false;
+        box.classList.remove('stale', 'empty');
+        document.getElementById('wr-stale').style.display = 'none';
         renderReadout(plan);
         return plan;
     } catch (err) {
@@ -2268,6 +2312,7 @@ function initApp() {
     initDims2D();
     renderElevationList();
     onTypeChange();
+    document.getElementById('wr-auto').checked = autoNesting;
     const vp = document.getElementById('viewport');
     let down = null;
     vp.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; state._dragged = false; });

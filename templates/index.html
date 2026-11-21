@@ -328,6 +328,8 @@
         <div class="dim2d-editor" id="dim2d-editor" style="display:none"></div>
         <div class="waste-readout" id="waste-readout" style="display:none">
             <div class="wr-title" id="wr-title">Chain 1 · panels</div>
+            <div class="wr-stale" id="wr-stale" style="display:none"><span id="wr-stale-text">Out of date</span>
+                <button class="mini" id="wr-update" onclick="updateCuttingList()" title="Pack the boards for the model as it is now">Update</button></div>
             <div>Clad area <b id="wr-area">--</b></div>
             <div><span id="wr-boards-label">Boards</span> <b id="wr-boards">--</b> <span class="wr-muted" id="wr-lower"></span></div>
             <div>Waste <b id="wr-waste">--</b> <button class="mini" id="wr-optimise" onclick="optimiseBoards()" title="Run the full search: every strategy, shuffled orders, then try to empty a board">Optimise boards</button></div>
@@ -336,6 +338,8 @@
             <div class="wr-splices" id="wr-splices"></div>
             <div class="wr-muted" id="wr-note"></div>
             <div class="wr-muted" id="wr-sizes"></div>
+            <label class="wr-auto" title="Off: the cutting list is worked out when you press Update, so a big model stays quick to edit. On: after every rebuild">
+                <input type="checkbox" id="wr-auto" onchange="setAutoNesting(this.checked)"> update automatically</label>
             <div class="wr-key" id="wr-key" style="display:none"><span style="background:#22c55e"></span>90%+ <span style="background:#f59e0b"></span>75–90% <span style="background:#ef4444"></span>&lt;75% board use</div>
         </div>
         <div class="view-actions">
