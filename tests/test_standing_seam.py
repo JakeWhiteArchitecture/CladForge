@@ -240,7 +240,8 @@ def test_trimmed_and_exported(wall, tmp_path, end):
     trays = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "Standing seam tray"]
     assert len(trays) == len(_of(out, "plank"))
     solids = sum(len(r.Items) for e in trays for r in e.Representation.Representations)
-    assert solids == len(_of(out, "plank")) + len(_of(out, "seam"))           # every fold is there, in its tray
+    lips = [m for m in out["geometry"] if m.get("of")]                        # a tray's head turned out under a window's sill
+    assert solids == len(_of(out, "plank")) + len(_of(out, "seam")) + len(lips)   # every fold is there, in its tray
     assert all(len(e.Representation.Representations) == 1 for e in trays)
     if end == "folded":     # the sloped ends go out as closed breps, beside the swept solids
         assert any(i.is_a("IfcFacetedBrep") for e in trays for r in e.Representation.Representations for i in r.Items)
