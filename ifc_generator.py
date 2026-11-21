@@ -57,6 +57,8 @@ _IFC_TYPE_MAP = {
     "verge_strip":    ("IfcCovering", "ROOFING",     "Verge strip"),
     "valley_gutter":  ("IfcCovering", "ROOFING",     "Valley gutter"),
     "eaves_strip":    ("IfcCovering", "ROOFING",     "Eaves drip"),
+    "window_flashing": ("IfcCovering", "CLADDING",   "Window flashing"),
+    "sill_board":     ("IfcPlate",    "SHEET",       "Sill board"),
     "mass":           ("IfcCovering", "CLADDING",    "Cladding zone (LOD 100)"),
 }
 _MATERIALS = {
@@ -72,6 +74,7 @@ _MATERIALS = {
     "seam": ("Standing seam sheet", "metal"),
     "ridge_cap": ("Ridge cap sheet", "metal"), "ridge_filler": ("Vented foam filler", "rubber"),
     "verge_strip": ("Verge strip sheet", "metal"), "valley_gutter": ("Valley gutter sheet", "metal"), "eaves_strip": ("Eaves drip (the trays' sheet)", "metal"),
+    "window_flashing": ("Window flashing sheet", "metal"), "sill_board": ("Plywood sill board", "wood"),
     "mass": ("Cladding (not yet specified)", "cladding"),
 }
 
@@ -535,6 +538,14 @@ def meshes_to_ifc(meshes, params, infos=None):
                 label = "Eaves support profile"
             elif mesh.get("verge_support"):
                 label = "Verge support profile"
+            elif mesh.get("abut_info") and mesh.get("ifc_type") == "ridge_cap":
+                label = "Head-wall abutment flashing"
+            elif mesh.get("abut_saddle"):
+                label = "Saddle piece"
+            elif mesh.get("abut_edge"):
+                label = "Edge flashing"
+            elif mesh.get("ifc_type") == "deck" and "Abutment Backing" in (mesh.get("name") or ""):
+                label = "Discontinuous plywood"
             elif mesh.get("ifc_type") == "plank" and pe.get("section"):
                 label = "Cladding plank (%s)" % pe["section"]["name"]
             if mesh.get("ifc_type") == "panel" and pe["panels_as_walls"]:

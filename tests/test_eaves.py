@@ -316,3 +316,79 @@ def test_the_drip_is_the_trays_own_sheet_and_the_cutting_list_has_each_tray_that
         assert q["length"] == pytest.approx(on_roof + sheet, abs=0.2)
     (row,) = [r["message"] for r in check_rules(params, out["info"]) if r["name"].endswith("Eaves")]
     assert "the trays' own sheet" in row and "cut %.0f mm longer" % sheet in row
+
+
+# ── the mansard (VMZ-SN-MA-KN-b1): the eaves of a flatter slope over a steeper one ──
+
+def _mansard(lower=70.0, upper=15.0, low=None, up=None):
+    """A mansard's lower slope, *lower* degrees, 3 m high along x, and an upper slope of
+    *upper* degrees whose bottom edge is the lower's top edge. Each its own chain."""
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]                                # noqa: E731
+    face = lambda name, pts, out: extract_elevation({"name": name, "faces": quad(pts), "outward": list(out), "context": [],   # noqa: E731
+                                                     "options": {"debug": False, "clad_depth": 150.0}})
+    run, H = 3000.0 / math.tan(math.radians(lower)), 3000.0
+    sl, cl, su, cu, tu = (math.sin(math.radians(lower)), math.cos(math.radians(lower)), math.sin(math.radians(upper)),
+                          math.cos(math.radians(upper)), math.tan(math.radians(upper)))
+    a = face("Lower", [[0, -run, 0], [6000, -run, 0], [6000, 0, H], [0, 0, H]], (0, -sl, cl))
+    b = face("Upper", [[0, 0, H], [6000, 0, H], [6000, 3000, H + 3000 * tu], [0, 3000, H + 3000 * tu]], (0, -su, cu))
+    link = eaves_link(a, b)
+    if link is None:
+        return None, None, None
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    elevs = [dict(a, offset=0, chain="Chain 1", settings=low or dict(SEAM), valleys=[rec("a", "Upper")], verge="none", eaves="none"),
+             dict(b, offset=0, chain="Chain 2", settings=up or dict(SEAM), valleys=[rec("b", "Lower")], verge="none")]
+    params = {"elevations": elevs, "trim": True, "splash": 0}
+    return link, params, generate_preview(params)
+
+
+def test_a_flatter_slope_over_a_steeper_one_is_a_mansard_s_eaves():
+    for lower in (80.0, 70.0, 45.0, 30.0):
+        link, _p, _o = _mansard(lower)
+        assert link["kind"] == "eaves" and link["mansard"] is True and link["length"] == 6000.0, lower
+        assert link["a"]["roof"] is False and link["b"]["roof"] is True
+    assert _mansard(22.0)[0] is None, "less than MANSARD_STEP steeper: a change of pitch, not a mansard"
+    link, _p, _o = _flush()
+    assert link["mansard"] is False
+
+
+def test_wall_stop_and_over_wall_lean_back_from_the_upright_case():
+    from cladding_eaves import over_wall
+    for pitch in (15.0, 30.0):
+        t, c = math.tan(math.radians(pitch)), math.cos(math.radians(pitch))
+        assert wall_stop(80.0, 60.0, 10.0, pitch) == pytest.approx(min(0.0, 60.0 / c - 80.0 * t) - 10.0)
+        run, below = over_wall(80.0, 60.0, 10.0, pitch)
+        assert run == pytest.approx((80.0 + EAVES_OVER - 60.0 * math.sin(math.radians(pitch))) / c)
+        assert below == pytest.approx(EAVES_WALL_LAP - wall_stop(80.0, 60.0, 10.0, pitch) - run * math.sin(math.radians(pitch)))
+    # leaning back, the lower slope's cladding is further out at the drip's foot: the roof runs on further
+    assert over_wall(80.0, 60.0, 10.0, 15.0, 70.0)[0] > over_wall(80.0, 60.0, 10.0, 15.0)[0]
+
+
+@pytest.mark.parametrize("lower", [80.0, 70.0, 45.0])
+@pytest.mark.parametrize("low", [dict(SEAM), dict(cladding_type="panel")])
+def test_the_upper_slope_runs_on_over_the_lower_and_the_lower_stops_under_it(lower, low):
+    _link, params, out = _mansard(lower, low=low)
+    info = {i["elevation"]: i for i in out["info"]}
+    tu = math.tan(math.radians(15.0))
+    deck = _section(out, "Upper", "deck")
+    end = min(deck, key=lambda q: q[1])                           # the plywood's underside at its end
+    soffit = lambda h: end[1] + (end[0] - h) * tu                 # noqa: E731
+    boards = "panel" if low["cladding_type"] == "panel" else "plank"
+    lower_pts = [q for kind in ("batten", boards, "seam", "deck", "gasket") for q in _section(out, "Lower", kind)]
+    # nothing of the lower slope reaches the upper's plywood: at least its top offset clear (and never past the
+    # line the two meet on, where the upper's own layers end)
+    assert min(soffit(h) - z for h, z in lower_pts) >= 10.0 - 1.0
+    (under,) = info["Lower"]["eaves_under"]
+    assert under["with"] == "Upper" and under["mansard"] is True and under["gap"] == 10.0 and under["stop"] <= -10.0 + 0.01
+    # the drip: plumb, clear of the lower slope's cladding at its foot, lapping its top by EAVES_WALL_LAP
+    apron = _section(out, "Upper", "eaves_strip", lambda m: not m.get("eaves_support"))
+    foot = min(z for _h, z in apron)
+    top = max(z for _h, z in _section(out, "Lower", boards))      # the top of its sheets or boards, at their outside
+    assert foot == pytest.approx(top - EAVES_WALL_LAP, abs=2.5)
+    drop = min(h for h, z in apron if z < top - 10.0)
+    outside = max(h for h, z in lower_pts if z >= foot - 1.0)     # the lower slope's cladding, as far out as it comes above the foot
+    assert drop >= outside + EAVES_OVER - 4.0
+    (eaves,) = info["Upper"]["eaves"]
+    assert eaves["over"] == "Lower" and eaves["mansard"] is True and eaves["run"] > 0.0
+    rows = [r for r in check_rules(params, out["info"]) if r["name"].endswith("Eaves")]
+    text = " ".join(r["message"] for r in rows)
+    assert "a mansard: the steeper slope below, VMZ-SN-MA-KN-b1" in text and "this is its steeper lower slope" in text

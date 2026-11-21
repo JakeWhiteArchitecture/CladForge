@@ -1945,6 +1945,36 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || flush.under !== 'Elevation B,-10,10' || flush.over !== 'Elevation A,true' || flush.checks !== 2)
         throw new Error('the roof and the wall were not joined at an eaves with no overhang: ' + JSON.stringify(flush));
 
+    // Windows in standing seam (VMZ-SN-MA-RA-07): the sample house's south wall, clad in standing
+    // seam. Its window gets a sill capping on a board, dropping over the cladding below, whose
+    // top edge is turned out, and a drip strip at the head. The chain's Edges can switch them off.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'sample_house.ifc'));
+    await page.waitForFunction(() => state.model && allMeshes.length > 4 && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    await lookAt('South wall', [0, 0.35, 1]);
+    await picked(1);
+    await seamRoof();
+    await settle();
+    const windowParts = () => page.evaluate(() => {
+        const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
+        const count = re => names.filter(n => re.test(n)).length;
+        return { caps: count(/Sill Capping/), boards: count(/Sill Board/), strips: count(/Sill Strip/), lips: count(/Turn-out/),
+                 heads: count(/Head Strip/), setting: document.getElementById('edge-windows').value,
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /VMZ-SN-MA-RA-07/.test(t)).length };
+    });
+    const win = await windowParts();
+    console.log('windows in standing seam:', JSON.stringify(win));
+    // one sill, the window's; two heads, the window's and the door's (a door has a head and no sill)
+    if (win.caps !== 1 || win.boards !== 1 || win.strips !== 1 || win.lips < 2 || win.heads !== 2 || win.setting !== 'on' || win.check !== 1)
+        throw new Error('the window sill and head were not built: ' + JSON.stringify(win));
+    await page.selectOption('#edge-windows', 'none');
+    await settle();
+    const winOff = await windowParts();
+    if (winOff.caps || winOff.boards || winOff.lips || winOff.heads || winOff.check) throw new Error('the window sill and head did not switch off: ' + JSON.stringify(winOff));
+    await page.selectOption('#edge-windows', 'on');
+    await settle();
+    if ((await windowParts()).caps !== 1) throw new Error('the window sill did not come back');
     // An eighth model: a monopitch roof whose top edge is the head of a wall it falls away behind
     // (VMZINC's Head verge G3). Two chains, joined at a head verge: the roof runs on over the
     // wall's build-up under a cap that turns down over the wall's cladding.
@@ -1989,6 +2019,125 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     await settle();
     const noHead = await headVerge();
     if (noHead.caps || noHead.upstands || noHead.check) throw new Error('the head verge did not follow its chain setting: ' + JSON.stringify(noHead));
+
+    // A ninth model: a lean-to roof run up to a higher wall (VMZINC's head-wall abutments). The roof
+    // alone first: the wall is not picked, but it is found standing over the roof, and the G3 flashing
+    // turns up it into a chase. Then the wall is picked in standing seam: the roof's trays turn up
+    // behind its cladding, which stops over the roof and laps the upstand.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'lean_to.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    await lookAt('Roof', [0.02, 0.96, 0.26]);
+    await picked(1);
+    await seamChain2();
+    await settle();
+    const abutment = () => page.evaluate(() => {
+        const g = window._lastPreview.geometry, info = name => window._lastPreview.info.find(i => i.elevation === name) || {};
+        const roof = info('Elevation A').abut || {}, wall = (info('Elevation B').abut_over || [])[0] || {};
+        return { records: state.elevations.map(e => valleyRecords(e).map(v => [v.kind, v.with, v.roof].join())).join(' / '),
+                 walls: (state.elevations[0].result.walls_above || []).map(w => w.name).join(),
+                 roof: [roof.kind, roof.over, roof.wall, roof.chase].join(), wall: [wall.kind, wall.with, wall.edge].join(), stop: wall.stop,
+                 flashings: g.filter(m => /Abutment Flashing/.test(m.name)).length, fillers: g.filter(m => m.ifc_type === 'ridge_filler').length,
+                 upstands: g.filter(m => /Abutment Upstand/.test(m.name)).length, saddles: new Set(g.filter(m => m.abut_saddle).map(m => m.abut_saddle)).size,
+                 edges: g.filter(m => m.abut_edge).length, backing: g.filter(m => /Abutment Backing/.test(m.name)).length,
+                 low: Math.round(Math.min(...g.filter(m => m.elevation === 'Elevation B' && m.ifc_type === 'plank').flatMap(m => m.profile.map(q => q[1])))),
+                 setting: document.getElementById('edge-abutment').value,
+                 check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /head-wall abutment|over the roof Elevation A/.test(t)).length };
+    });
+    const g3 = await abutment();
+    console.log('abutment, wall not picked:', JSON.stringify(g3));
+    if (g3.walls !== 'Wall' || g3.roof !== 'g3,,Wall,true' || g3.flashings !== 1 || g3.fillers < 6 || g3.upstands || g3.setting !== 'auto' || g3.check !== 1)
+        throw new Error('the G3 flashing was not built against the wall that was not picked: ' + JSON.stringify(g3));
+    await lookAt('Wall', [0.05, 0.1, 1]);
+    await picked(2);
+    const abutStatus = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    await seamChain2();
+    await settle();
+    const below = await abutment();
+    console.log('abutment, standing seam wall above:', JSON.stringify(below), '|', abutStatus);
+    if (below.records !== 'abut,Elevation B,true / abut,Elevation A,false' || !/head-wall abutment with Elevation A/.test(abutStatus)
+        || below.roof !== 'below,Elevation B,,' || below.wall !== 'below,Elevation A,40' || below.flashings || below.fillers
+        || below.upstands < 6 || below.saddles !== below.upstands - 1 || below.edges !== 1 || below.backing !== 1
+        || !(below.stop > 60 && below.stop < 300) || Math.abs(below.low - 2700 - below.stop) > 1 || below.check !== 2)
+        throw new Error('the roof\'s trays were not turned up under the standing seam wall: ' + JSON.stringify(below));
+    await page.evaluate(() => setActive(0));
+    await page.selectOption('#edge-abutment', 'g3');
+    await settle();
+    const forced = await abutment();
+    if (forced.roof !== 'g3,Elevation B,,false' || forced.flashings !== 1 || forced.upstands || forced.edges || forced.wall !== 'g3,Elevation A,')
+        throw new Error('the abutment did not follow its chain setting: ' + JSON.stringify(forced));
+    // Mitred: the trays and seams of both cut on the bisecting plane, and the wall's seams follow the roof's.
+    await page.selectOption('#edge-abutment', 'mitre');
+    await settle();
+    const mitreState = () => page.evaluate(() => {
+        const info = name => window._lastPreview.info.find(i => i.elevation === name) || {};
+        const g = window._lastPreview.geometry, a = info('Elevation A'), b = info('Elevation B');
+        const world = (name, info_) => { const m = g.find(q => q.elevation === name && q.ifc_type === 'plank');
+            return (info_.seam_lines || []).map(u => Math.round(m.frame.origin[0] + m.frame.u[0] * u)).sort((x, y) => x - y).join(); };
+        return { roof: (a.abut || {}).kind, wall: ((b.abut_over || [])[0] || {}).kind, cut: g.filter(m => m.abut_mitre).length,
+                 follows: [(a.seam_from || {}).name || '', (b.seam_from || {}).name || ''].join('/'),
+                 same: world('Elevation A', a) === world('Elevation B', b), parts: g.filter(m => /Abutment/.test(m.name)).length,
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => /seams follow/.test(x.textContent)).join(),
+                 seamFrom: state.elevations.map(e => e.seamFrom ? e.seamFrom.name : '').join('/'),
+                 list: document.getElementById('edge-seamFrom').value, pipette: !!state.pipette };
+    });
+    const abutMitred = await mitreState();
+    console.log('abutment, mitred:', JSON.stringify(abutMitred));
+    if (abutMitred.roof !== 'mitre' || abutMitred.wall !== 'mitre' || abutMitred.cut < 20 || abutMitred.parts || abutMitred.follows !== '/Elevation A' || !abutMitred.same
+        || abutMitred.cards !== 'false,true')
+        throw new Error('the roof and the wall were not mitred with their seams lined up: ' + JSON.stringify(abutMitred));
+    // The pipette: on the roof, press it and click the wall: now the roof follows the wall instead.
+    await page.evaluate(() => { setActive(0); startPipette(); });
+    if (!(await page.evaluate(() => state.pipette === state.elevations[0] && document.getElementById('seam-pipette').classList.contains('active'))))
+        throw new Error('the pipette did not start');
+    await lookAt('Wall', [0.05, -1, 0.1]);
+    await settle();
+    const piped = await mitreState();
+    console.log('pipette:', JSON.stringify(piped));
+    if (piped.seamFrom !== 'Elevation B/' || piped.pipette || piped.list !== 'Elevation B' || piped.follows !== 'Elevation B/' || !piped.same || piped.cards !== 'true,false')
+        throw new Error('the pipette did not link the roof\'s seams to the wall\'s: ' + JSON.stringify(piped));
+    await page.evaluate(() => startPipette());
+    await page.keyboard.press('Escape');
+    if (await page.evaluate(() => !!state.pipette)) throw new Error('Esc did not cancel the pipette');
+    await page.selectOption('#edge-seamFrom', '');
+    await settle();
+    if ((await mitreState()).follows !== '/Elevation A') throw new Error('clearing the link did not hand it back to the abutment');
+    await page.selectOption('#edge-abutment', 'none');
+    await settle();
+    const noAbut = await abutment();
+    if (noAbut.flashings || noAbut.upstands || noAbut.check || noAbut.low > 100) throw new Error('the abutment was not switched off: ' + JSON.stringify(noAbut));
+    // A tenth model: a mansard (VMZINC KN-b1). A 15 degree upper slope runs on over a 70 degree
+    // lower one, each its own chain: an eaves over the lower slope's cladding, which stops under it.
+    await page.setInputFiles('#ifc-file', path.join(__dirname, 'mansard.ifc'));
+    await page.waitForFunction(() => state.model && state.model.meshes === 2 && allMeshes.length === 2
+                               && state.elevations.length === 1 && !state.elevations[0].picks.length
+                               && document.getElementById('status-chip').classList.contains('ready'), null, { timeout: 120000 });
+    await page.evaluate(() => setPickMode('pick'));
+    await lookAt('Lower', [0.02, 0.34, 0.94]);
+    await picked(1);
+    await seamRoof();
+    await settle();
+    await lookAt('Upper', [0.02, 0.97, 0.26]);
+    await picked(2);
+    const mansardStatus = await page.evaluate(() => document.getElementById('status-chip').textContent);
+    await seamRoof();
+    await settle();
+    const mansard = await page.evaluate(() => {
+        const g = window._lastPreview.geometry, info = name => window._lastPreview.info.find(i => i.elevation === name) || {};
+        return { records: state.elevations.map(e => valleyRecords(e).map(v => [v.kind, v.with, v.roof].join())).join(' / '),
+                 cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')).join(' / '),
+                 zinc: g.filter(m => /Eaves Drip/.test(m.name) && m.elevation === 'Elevation B').length,
+                 under: (info('Elevation A').eaves_under || []).map(u => [u.with, u.mansard].join()).join(' / '),
+                 over: (info('Elevation B').eaves || []).map(e => [e.over, e.mansard, e.run > 0].join()).join(' / '),
+                 checks: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /mansard/.test(t)).length };
+    });
+    console.log('mansard:', JSON.stringify(mansard), '|', mansardStatus);
+    if (mansard.records !== 'eaves,Elevation B,false / eaves,Elevation A,true' || !/mansard with B/.test(mansard.cards) || !/mansard with A/.test(mansard.cards)
+        || !/a mansard with Elevation A/.test(mansardStatus) || mansard.zinc < 2 || mansard.under !== 'Elevation B,true'
+        || mansard.over !== 'Elevation A,true,true' || mansard.checks !== 2)
+        throw new Error('the two slopes were not joined at a mansard: ' + JSON.stringify(mansard));
 
     console.log('SMOKE OK');
     await browser.close();
