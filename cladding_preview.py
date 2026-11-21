@@ -8,7 +8,7 @@ sharing settings is built on its own, so one chain's choices never change anothe
 
 import json
 
-from cladding_constants import _parse, chain_params, v_to_z
+from cladding_constants import _parse, chain_params, frame_to_world, v_to_z
 from cladding_profiles import profile_planks
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
@@ -21,6 +21,7 @@ from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
+from cladding_abut import abut_over, abut_parts, abut_ridges, join_abuts
 from cladding_rake import rake_ends, rake_parts
 from cladding_window import window_parts
 from cladding_lod import at_lod, masses, tag  # noqa: F401 — at_lod is the app's and the exporters'
@@ -113,12 +114,49 @@ def check_rules(params, infos=None):
     return out
 
 
+def link_seams(params):
+    """Before the build proper: carry each linked face's seam lines over from the face it
+    follows ("seam_from": that face's name, set with the pipette, or implied by a mitred
+    head-wall abutment), as "seam_lines" in its own u. The lines are read off a plain build
+    of the face followed, so they are whatever its own setting-out gives: its openings, its
+    chain's offset, its corners and verges. Only between faces whose seams run the same
+    way (their u axes parallel). A face followed may itself follow another: up to three deep."""
+    elevs = params.get("elevations") or []
+    by = {e.get("name"): e for e in elevs}
+    for e in elevs:
+        e.pop("seam_lines", None)
+    linked = [e for e in elevs if by.get(e.get("seam_from")) not in (None, e)]
+    for _ in range(3 if linked else 0):
+        infos = {}
+        for sub, _elevs in setting_groups(params):
+            for i in _build_all(_parse(sub))[2]:
+                infos[i["elevation"]] = i
+        changed = False
+        for e in linked:
+            src = by[e["seam_from"]]
+            got = infos.get(src.get("name")) or {}
+            Us, Uf, o = src["frame"]["u"], e["frame"]["u"], e["frame"]["origin"]
+            way = sum(a * b for a, b in zip(Us, Uf))
+            if abs(way) < 0.99 or not got.get("seam_lines"):
+                lines = {"from": src.get("name"), "lines": [], "why": "its seams do not run the same way" if abs(way) < 0.99 else "it has no seams"}
+            else:
+                to = lambda u: round(sum((w - c) * a for w, c, a in zip(frame_to_world(src["frame"], u, 0.0, 0.0), o, Uf)), 2)   # noqa: E731
+                lines = {"from": src.get("name"), "lines": sorted(to(u) for u in got["seam_lines"]),
+                         "span": sorted(to(u) for u in got["seam_span"]), "mirror": way < 0, "implied": bool(e.get("seam_from_implied"))}
+            if lines != e.get("seam_lines"):
+                e["seam_lines"], changed = lines, True
+        if not changed:
+            break
+
+
 def build_all_groups(params):
     """(meshes, dims, infos) for every face, each group with its chain's settings, untrimmed:
     the exporters' quick source of dimensions and setting-out info."""
     meshes, dims, infos = [], [], []
     join_verges(params)      # a verge over a clad wall: how far its plywood oversails
     join_eaves(params)
+    join_abuts(params)
+    link_seams(params)
     for p, ready in _groups(params):
         m, d, i = _build_all(p, ready)
         meshes, dims, infos = meshes + m, dims + d, infos + i
@@ -129,6 +167,8 @@ def generate_preview(params):
     meshes, dims, infos = [], [], []
     join_verges(params)      # a verge over a clad wall: how far its plywood oversails
     join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
+    join_abuts(params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
+    link_seams(params)       # faces whose seams follow another's are given its seam lines
     for p, ready in _groups(params):
         m, d, i = _preview_one(p, ready)
         meshes, dims, infos = meshes + m, dims + d, infos + i
@@ -150,6 +190,7 @@ def _preview_one(p, ready=None):
     meshes = mitre_to_linings(meshes, p, infos)
     meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
     head_ridges(p)                       # a monopitch's head verge is cut as half a ridge
+    abut_ridges(p)                       # and so is a slope run up to a wall: the head-wall abutment
     meshes = ridge_ends(meshes, p, infos)    # two slopes meeting at a ridge: cut to it, the vent slot left
     meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
     meshes = hip_ends(meshes, p, infos)      # two slopes meeting at a hip: the same, along a sloping line
@@ -162,6 +203,8 @@ def _preview_one(p, ready=None):
     meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
     meshes = window_parts(meshes, p, infos)  # a standing seam wall's openings: the sill capping and the head strip
     meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
+    meshes = abut_parts(meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
+    meshes = abut_over(meshes, p, infos)     # and that wall's layers stop above the roof
     meshes = break_at_seams(meshes, p)       # last: each tray's flat drawn back to its own upstand, clear of the next tray's
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)

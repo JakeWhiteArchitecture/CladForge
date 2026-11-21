@@ -138,7 +138,7 @@ def head_parts(meshes, p, infos):
     for elev in p.get("elevations", []):
         r = elev.get("head_ridge")
         info = info_by.get(elev.get("name"))
-        if not r or info is None:
+        if not r or "head" not in r or info is None:      # (a head-wall abutment's is cladding_abut's)
             continue
         h, name, frame = r["head"], elev.get("name"), elev["frame"]
         face = float(info.get("total_depth") or 0.0)

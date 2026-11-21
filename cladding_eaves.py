@@ -115,7 +115,7 @@ def join_eaves(params):
     by = {e.get("name"): e for e in params.get("elevations") or []}
     for e in params.get("elevations") or []:
         for v in e.get("valleys") or []:
-            other = by.get(v.get("with")) if v.get("kind") in ("eaves", "head") else None
+            other = by.get(v.get("with")) if v.get("kind") in ("eaves", "head", "abut") else None
             if other is None:
                 continue
             po = _parse(dict(chain_params(params, other), elevations=[]))
