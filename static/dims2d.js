@@ -171,7 +171,7 @@ function edgeLines(e, layer) {
 // design is costing boards. In 3D the panels keep their own colour.
 const BOARD_USE = [[0.9, 0x22c55e], [0.75, 0xf59e0b], [-1, 0xef4444]];
 function tintPanels() {
-    const plan = window._lastPlan, on = !!(in2D() && plan && plan.fills);
+    const plan = window._lastPlan, on = !!(in2D() && plan && plan.fills && !window._planStale);
     const key = document.getElementById('wr-key');
     if (key) key.style.display = on ? '' : 'none';
     if (typeof cladGroup === 'undefined' || !cladGroup) return;
@@ -179,8 +179,10 @@ function tintPanels() {
     requestRedraw();
     for (const layer of cladGroup.children) for (const o of layer.children) {
         if (!o.isMesh || !/ (Panel R|Plank C)\d/.test(o.userData.name || '')) continue;
-        if (o.userData.baseColor === undefined) o.userData.baseColor = o.material.color.getHex();
         const f = on ? plan.fills[o.userData.name] : undefined;
+        if (f === undefined && !o.userData.ownMat) continue;             // still its shared colour
+        if (typeof ownMaterial === 'function') ownMaterial(o);
+        if (o.userData.baseColor === undefined) o.userData.baseColor = o.material.color.getHex();
         o.material.color.setHex(f === undefined ? o.userData.baseColor : BOARD_USE.find(c => f >= c[0])[1]);
     }
 }

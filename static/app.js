@@ -12,7 +12,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 const ABUTS = ['auto', 'g3', 'below', 'mitre', 'none'];   // a roof run up to a wall that stands on above it: by what that wall is clad in, the G3 flashing, the trays turned up under its cladding, or nothing
 const HEADS = ['auto', 'g3', 'none'];       // a monopitch's head verge: over a picked wall, on every level top edge, or not at all
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', eaves: 'on', head: 'auto', windows: 'on', abutment: 'auto', capEnds: 'edge' };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', vergeLast: 'vmz', eaves: 'on', head: 'auto', windows: 'on', abutment: 'auto', capEnds: 'edge' };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -134,6 +134,8 @@ function syncEdgeFields() {
     }
     document.getElementById('edge-verge').value = VERGES.includes(ed.verge) ? ed.verge : 'both';
     document.getElementById('edge-vergeType').value = VERGE_TYPES.includes(ed.vergeType) ? ed.vergeType : 'g3';
+    document.getElementById('edge-vergeLast').value = ed.vergeLast === 'full' ? 'full' : 'vmz';
+    document.getElementById('edge-vergeLast').disabled = ed.vergeType === 'cladding';
     const over = document.getElementById('edge-vergeOver');           // blank: taken from the cladding on the wall below
     if (document.activeElement !== over) over.value = ed.vergeOver == null ? '' : ed.vergeOver;
     over.disabled = ed.vergeType !== 'cladding';
@@ -157,6 +159,7 @@ function setEdge(e, key, value) {
     else if (key === 'seamTop' || key === 'seamBottom') e.chain.edges[key] = value === 'flat' ? 'flat' : 'folded';
     else if (key === 'verge') e.chain.edges.verge = VERGES.includes(value) ? value : 'both';
     else if (key === 'vergeType') e.chain.edges.vergeType = VERGE_TYPES.includes(value) ? value : 'g3';
+    else if (key === 'vergeLast') e.chain.edges.vergeLast = value === 'full' ? 'full' : 'vmz';
     else if (key === 'vergeOver') { const v = parseFloat(value); e.chain.edges.vergeOver = isFinite(v) ? Math.max(0, Math.min(400, v)) : null; }
     else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
     else if (key === 'windows') e.chain.edges.windows = value === 'none' ? 'none' : 'on';
@@ -800,7 +803,7 @@ function renderHidden() {
 
 function showElement(index) {
     const m = meshMeta[index];
-    if (m) m.mesh.visible = true;
+    if (m) { m.mesh.visible = true; rebuildModelBatch(); }
     renderHidden();
 }
 
@@ -1145,6 +1148,7 @@ function elevationRecords() {
                                                    seam_fold: chain.edges.fold !== 'off',
                                                    verge: VERGES.includes(chain.edges.verge) ? chain.edges.verge : 'both',
                                                    verge_type: VERGE_TYPES.includes(chain.edges.vergeType) ? chain.edges.vergeType : 'g3',
+                                                   verge_last: chain.edges.vergeLast === 'full' ? 'full' : 'vmz',
                                                    verge_oversail: chain.edges.vergeOver == null ? null : chain.edges.vergeOver,
                                                    eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
                                                    window_flashings: chain.edges.windows === 'none' ? 'none' : 'on',
@@ -1879,13 +1883,54 @@ import ifc_generator`);
 // Every panel of every built chain is packed onto stock boards (cladding_nesting.py),
 // each elevation on its own so every board is cut for one elevation; the readout says
 // how many more that takes than packing the whole job together. The quick check (16
-// strategies, a few ms) runs after each finished rebuild, debounced like a typed field
-// and never on a slider frame. Optimise boards runs the full search on demand; the
-// cutting plan and the cutting run always use it.
-let _nestTimer = null, _nestSeq = 0;
+// strategies) runs when Update is pressed; with "update automatically" ticked, after each
+// finished rebuild, debounced like a typed field and never on a slider frame. On a big
+// model packing takes seconds, so by default a rebuild only marks the list out of date.
+// Optimise boards runs the full search on demand; the cutting plan and the cutting run
+// always work out their own.
+let _nestTimer = null, _nestSeq = 0, autoNesting = false;
+try { autoNesting = localStorage.getItem('cladforge.autoNesting') === '1'; } catch (err) { /* private window */ }
+function setAutoNesting(on) {
+    autoNesting = !!on;
+    try { localStorage.setItem('cladforge.autoNesting', autoNesting ? '1' : '0'); } catch (err) { /* private window */ }
+    const box = document.getElementById('wr-auto');
+    if (box) box.checked = autoNesting;
+    if (!autoNesting && _nestTimer) { clearTimeout(_nestTimer); _nestTimer = null; }   // nothing queued runs after it is switched off
+    if (autoNesting && window._planStale) runNesting(false);
+}
 function scheduleNesting() {
     if (_nestTimer) clearTimeout(_nestTimer);
+    if (!autoNesting) { markPlanStale(); return; }
     _nestTimer = setTimeout(() => { _nestTimer = null; runNesting(false); }, 300);
+}
+// The model has changed since the list was worked out (or it never was): say so, keep the
+// last numbers greyed, and offer to work it out.
+function markPlanStale() {
+    const box = document.getElementById('waste-readout');
+    if (!pyReady || !window._lastPreview || !state.chains.some(c => c.built)) {
+        box.style.display = 'none';
+        document.getElementById('run-open').style.display = 'none';
+        window._lastPlan = null; window._planStale = false;
+        tintPanels();
+        return;
+    }
+    window._planStale = true;
+    _nestSeq++;                                         // a packing still on its way is for the model as it was
+    box.style.display = '';
+    document.getElementById('run-open').style.display = '';
+    box.classList.add('stale');
+    box.classList.toggle('empty', !window._lastPlan);
+    if (!window._lastPlan) document.getElementById('wr-title').textContent = jobRecords().title + ' · cutting list';
+    document.getElementById('wr-stale-text').textContent = window._lastPlan ? 'Out of date: the model has changed' : 'Not worked out yet';
+    document.getElementById('wr-update').textContent = window._lastPlan ? 'Update' : 'Work it out';
+    document.getElementById('wr-stale').style.display = '';
+    tintPanels();
+}
+async function updateCuttingList() {
+    const btn = document.getElementById('wr-update');
+    btn.disabled = true; btn.textContent = 'Packing…';
+    await new Promise(r => setTimeout(r, 30));          // let the label paint before Python blocks
+    try { await runNesting(false); } finally { btn.disabled = false; }
 }
 
 // The cutting job: the active chain and every other built chain cut from the same material
@@ -1935,6 +1980,9 @@ _json.dumps(_plan)`);
         const plan = JSON.parse(out);
         plan.title = job.title;
         window._lastPlan = plan;
+        window._planStale = false;
+        box.classList.remove('stale', 'empty');
+        document.getElementById('wr-stale').style.display = 'none';
         renderReadout(plan);
         return plan;
     } catch (err) {
@@ -2189,7 +2237,7 @@ function appIdle() {
 // appIdle sees the cutting plan, an export or an import while it is being worked out.
 function enginePy(code) {
     _engineCalls++;
-    const over = () => { _engineCalls--; requestRedraw(300); };
+    const over = () => { _engineCalls--; window._engineEndedAt = performance.now(); requestRedraw(300); };
     return pyodide.runPythonAsync(code).then(v => { over(); return v; }, e => { over(); throw e; });
 }
 
@@ -2202,11 +2250,11 @@ function pyRun(code) {
             if (done) return;
             try { py.runPython('0'); }
             catch (err) {
-                if (/fatally failed|Aborted/i.test(err.message || '')) { done = true; _engineCalls--; clearInterval(timer); reject(err); }
+                if (/fatally failed|Aborted/i.test(err.message || '')) { done = true; _engineCalls--; window._engineEndedAt = performance.now(); clearInterval(timer); reject(err); }
             }
         }, 1500);
         // whatever the answer changes on screen is drawn (viewer.requestRedraw)
-        const over = () => { if (!done) { done = true; _engineCalls--; clearInterval(timer); requestRedraw(300); } };
+        const over = () => { if (!done) { done = true; _engineCalls--; window._engineEndedAt = performance.now(); clearInterval(timer); requestRedraw(300); } };
         py.runPythonAsync(code).then(v => { over(); resolve(v); }, e => { over(); reject(e); });
     });
 }
@@ -2264,6 +2312,7 @@ function initApp() {
     initDims2D();
     renderElevationList();
     onTypeChange();
+    document.getElementById('wr-auto').checked = autoNesting;
     const vp = document.getElementById('viewport');
     let down = null;
     vp.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; state._dragged = false; });

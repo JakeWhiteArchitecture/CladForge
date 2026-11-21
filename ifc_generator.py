@@ -536,6 +536,8 @@ def meshes_to_ifc(meshes, params, infos=None):
                 label = "Standing seam tray"
             elif mesh.get("eaves_support"):
                 label = "Eaves support profile"
+            elif mesh.get("verge_support"):
+                label = "Verge support profile"
             elif mesh.get("abut_info") and mesh.get("ifc_type") == "ridge_cap":
                 label = "Head-wall abutment flashing"
             elif mesh.get("abut_saddle"):

@@ -284,6 +284,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .waste-readout .wr-splices { font-size: 11px; line-height: 1.7; white-space: nowrap; }
 .waste-readout .wr-splices .mini { padding: 0 6px; font-size: 10px; margin-left: 4px; }
 .waste-readout .wr-warn { color: #f59e0b; }
+.waste-readout .wr-stale { color: #f59e0b; font-size: 11px; margin: 2px 0; }
+.waste-readout .wr-stale .mini { padding: 1px 6px; font-size: 10px; margin-left: 4px; }
+.waste-readout.stale #wr-area, .waste-readout.stale #wr-boards, .waste-readout.stale #wr-waste, .waste-readout.stale #wr-lower { opacity: 0.45; }
+.waste-readout.empty > div:not(.wr-title):not(.wr-stale) { display: none; }
+.waste-readout .wr-auto { display: block; font-size: 10px; color: var(--hint); margin-top: 3px; cursor: pointer; }
+.waste-readout .wr-auto input { vertical-align: -2px; margin: 0 4px 0 0; }
 .waste-readout #wr-splices-btn { margin: 2px 0; }
 /* offcuts: carried on, on the rack, and cut later from a board's offcut */
 .run-offcut-stock { fill: hsl(var(--hue), 18%, 30%); }

@@ -93,6 +93,33 @@ async function main() {
     // it has to wait for the browser importer, not fall back to the server.
     if (!/Read by web-ifc/.test(modelInfo)) throw new Error('the model was not read in the browser: ' + modelInfo);
     await page.waitForFunction(() => (typeof pyReady !== "undefined" && pyReady === true) || (document.getElementById('status-chip').classList.contains('ready')), null, { timeout: 300000 });
+    // The cutting list is worked out on demand by default; most steps below check it after
+    // each rebuild, so it is switched to update automatically (the manual mode has its own step).
+    await page.evaluate(() => setAutoNesting(true));
+    // The drawing resolution: a still view never below the screen's CSS pixels however slow
+    // the frames; a moving camera drops only where frames are slow; a frame the engine held
+    // up is not measured.
+    const ratio = await page.evaluate(() => {
+        const dpr = window.devicePixelRatio || 1, out = {};
+        viewRatio = null; _redraw.cost = 0;
+        out.fastMoving = movingRatio() === stillRatio();
+        for (let i = 0; i < 12; i++) frameCost(800);
+        out.stillFloor = stillRatio() >= Math.min(dpr, 1) - 1e-9;
+        _redraw.cost = 800;
+        out.slowMoving = movingRatio() < stillRatio() || stillRatio() <= 0.75;
+        _engineCalls++; out.busy = engineBusySince(performance.now()); _engineCalls--;
+        window._engineEndedAt = performance.now(); out.busyAfter = engineBusySince(performance.now() - 50);
+        out.idle = !engineBusySince(performance.now() + 1);
+        viewRatio = null; _redraw.cost = 0; setRatio(stillRatio());
+        // the near plane follows the distance to what the camera looks at (depth precision)
+        const keep = camera.position.clone(), t = controls.target.clone(), dir = keep.clone().sub(t).normalize();
+        camera.position.copy(t).addScaledVector(dir, 15000); fitNearPlane(); out.near15m = Math.abs(camera.near - 100) < 1;
+        camera.position.copy(t).addScaledVector(dir, 500); fitNearPlane(); out.nearClose = camera.near === 10;
+        camera.position.copy(keep); fitNearPlane();
+        return out;
+    });
+    console.log('resolution rules:', JSON.stringify(ratio));
+    if (Object.values(ratio).some(v => !v)) throw new Error('the resolution rules broke: ' + JSON.stringify(ratio));
     console.log('engine ready');
 
     // Aim at a named element's face and click the middle of the canvas. Named rather
@@ -631,6 +658,28 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     // With 1000 rows the merge fits: one panel fewer, and the waste readout is repacked.
     await page.evaluate(async () => { d2Elev(view2d.name).panelRows = [1000, 1000]; await updatePreview(); });
     await page.waitForFunction(() => window._lastPlan && window._lastPlan.n_pieces, null, { timeout: 20000 });
+    // Not updating automatically: a rebuild only marks the list out of date, and Update repacks it.
+    const manual = await page.evaluate(async () => {
+        setAutoNesting(false);
+        await new Promise(r => setTimeout(r, 900));      // anything already packing lands first
+        const plan = window._lastPlan;
+        d2Elev(view2d.name).panelRows = [1000, 1000, 1000]; await updatePreview();
+        await new Promise(r => setTimeout(r, 700));
+        const box = document.getElementById('waste-readout');
+        const stale = { same: window._lastPlan === plan, flag: !!window._planStale, cls: box.classList.contains('stale'),
+                        text: document.getElementById('wr-stale-text').textContent, shown: document.getElementById('wr-stale').style.display !== 'none' };
+        await updateCuttingList();
+        const fresh = { changed: window._lastPlan !== plan, flag: !!window._planStale, cls: box.classList.contains('stale'),
+                        shown: document.getElementById('wr-stale').style.display !== 'none' };
+        d2Elev(view2d.name).panelRows = [1000, 1000];
+        setAutoNesting(true); await updatePreview();
+        return { stale, fresh, auto: document.getElementById('wr-auto').checked };
+    });
+    console.log('cutting list on demand:', JSON.stringify(manual));
+    if (!manual.stale.same || !manual.stale.flag || !manual.stale.cls || !manual.stale.shown || !/Out of date/.test(manual.stale.text)
+        || !manual.fresh.changed || manual.fresh.flag || manual.fresh.cls || manual.fresh.shown || !manual.auto)
+        throw new Error('the cutting list did not wait for Update: ' + JSON.stringify(manual));
+    await page.waitForFunction(() => window._lastPlan && window._lastPlan.n_pieces && !window._planStale, null, { timeout: 20000 });
     await page.waitForTimeout(900);
     const fitting = await jointAt(true);
     if (!fitting || !fitting.at) throw new Error('no joint that fits to click: ' + JSON.stringify(fitting));
@@ -1603,7 +1652,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  cards: [...document.querySelectorAll('.elev-meta')].slice(-2).map(c => c.textContent.replace(/^.*openings?/, '')),
                  caps: named(a, /Ridge Cap/).length + named(b, /Ridge Cap/).length,
                  fillers: [named(a, /Ridge Filler/).length, named(b, /Ridge Filler/).length],
-                 upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Strip/).length + named(b, /Verge Strip/).length,
+                 upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Support/).length + named(b, /Verge Support/).length,
                  seams: [seams(a), seams(b)],
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)) };
     });
@@ -1621,7 +1670,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     await settle();
     const zi05 = await page.evaluate(() => {
         const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
-        return { strips: names.filter(n => /Verge Strip/.test(n)).length, flashings: names.filter(n => /Verge Flashing/.test(n)).length,
+        return { strips: names.filter(n => /Verge Support/.test(n)).length, flashings: names.filter(n => /Verge Flashing/.test(n)).length,
                  clips: names.filter(n => /Verge Clip/.test(n)).length, seams: names.filter(n => /Verge Seam/.test(n)).length, type: state.elevations[state.elevations.length - 1].chain.edges.vergeType,
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /verge flashing over the cladding/.test(t)).length };
     });
@@ -1631,7 +1680,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         throw new Error('the verge with cladding was not built: ' + JSON.stringify(zi05));
     await page.selectOption('#edge-vergeType', 'g3');
     await settle();
-    const g3Again = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Verge Strip/.test(m.userData.name || '')).length);
+    const g3Again = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Verge Support/.test(m.userData.name || '')).length);
     if (g3Again !== 4) throw new Error('the G3 verge strips did not come back: ' + g3Again);
     await page.evaluate(async () => { for (let k = 0; k < 2; k++) { setActive(state.elevations.length - 1); deleteElevation(); await settled(); } });
 

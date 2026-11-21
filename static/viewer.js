@@ -58,16 +58,27 @@ function initThree() {
         renderer.setSize(container.clientWidth, container.clientHeight);
     });
     watchForRedraws();
-    (function animate() {
+    (function animate(t) {
         requestAnimationFrame(animate);
+        // What the last frame drawn cost: the time to this callback, the GPU's share included.
+        if (_redraw.drewAt) { if (_redraw.drewStill && !engineBusySince(_redraw.drewClock)) frameCost(t - _redraw.drewAt); _redraw.drewAt = 0; }
         const moved = controls.update();                        // true while orbiting, zooming or easing to rest
+        const camMoved = cameraMoved();
         const now = performance.now();
-        if (!(moved || _redraw.dirty || now < _redraw.until || cameraMoved() || now - _redraw.last > REDRAW_IDLE_MS)) return;
-        _redraw.dirty = false; _redraw.last = now; _redraw.frames++;
+        // While the camera moves the view is drawn at a lower resolution, sharp again the
+        // moment it stops (MOVE_SETTLE_MS later): a drag stays smooth on a weak GPU.
+        if (moved || camMoved) _redraw.movedAt = now;
+        const still = now - _redraw.movedAt > MOVE_SETTLE_MS;
+        if (setRatio(still ? stillRatio() : movingRatio())) _redraw.dirty = true;
+        if (!(moved || camMoved || _redraw.dirty || now < _redraw.until || now - _redraw.last > REDRAW_IDLE_MS)) return;
+        _redraw.dirty = false; _redraw.frames++;
         if (view2d.on && view2d.onFrame) view2d.onFrame();     // the 2D labels follow the view
         placeHealMarks();                                       // and the ticks and crosses their ghosts
+        fitNearPlane();
         renderer.render(scene, activeCamera());
-    })();
+        _redraw.drewAt = t; _redraw.drewStill = still; _redraw.drewClock = performance.now() - 1;
+        _redraw.last = performance.now();                       // the idle net counts from the end of a frame
+    })(performance.now());
 }
 
 // ─── REDRAW ON DEMAND ───
@@ -79,9 +90,71 @@ function initThree() {
 // rebuild that follows, land within REDRAW_AFTER_INPUT_MS), when the engine answers
 // (app.pyRun), or when code asks: requestRedraw(ms) draws the next frame, and keeps
 // drawing for ms. As a net under anything that slips through, an idle scene is still
-// drawn once every REDRAW_IDLE_MS.
-const REDRAW_AFTER_INPUT_MS = 700, REDRAW_IDLE_MS = 1000;
-const _redraw = { dirty: true, until: 0, last: 0, frames: 0, cam: null, sig: new Float64Array(32) };
+// drawn once every REDRAW_IDLE_MS, counted from the end of the last frame: a frame that
+// takes longer than that (a big model on a slow or software GPU) must never chain into
+// another, or the page draws non-stop and the engine's answers, picks and clicks queue
+// behind the frames. Moving the mouse over the page is not input unless a button is down
+// (OrbitControls reports its own moves).
+const REDRAW_AFTER_INPUT_MS = 700, REDRAW_IDLE_MS = 4000;
+const _redraw = { dirty: true, until: 0, last: 0, frames: 0, cam: null, sig: new Float64Array(32), drewAt: 0, drewStill: true, cost: 0, movedAt: -1e9 };
+
+// The drawing resolution follows what frames cost: a retina screen draws four pixels for
+// each one, and on a slow GPU a big model's frames then take a second or more. Above
+// FRAME_SLOW_MS (smoothed) the pixel ratio steps down, to FRAME_MIN_RATIO at the least;
+// well under FRAME_FAST_MS it steps back up towards the screen's own.
+// Only still frames are measured, and only those the engine did not hold up: a rebuild
+// blocking the page between two frames is not a slow GPU (counted as one, it dropped the
+// resolution for nothing and the edges went jagged). A still view is never drawn below
+// the screen's own CSS pixels; only a moving camera may go lower, and only where frames
+// really are slow (MOVE_DROP_MS): on a capable GPU orbiting stays full resolution.
+const FRAME_SLOW_MS = 90, FRAME_FAST_MS = 25, FRAME_MIN_RATIO = 0.75, STILL_MIN_RATIO = 1, MOVE_SETTLE_MS = 150, MOVE_DROP_MS = 30;
+let viewRatio = null;                                        // the still frames' pixel ratio; null: the screen's
+function stillRatio() { return viewRatio || window.devicePixelRatio || 1; }
+// Moving, where frames are slow: half a retina screen's (a quarter of the pixels), never
+// under 1 there; three quarters of an ordinary screen's; never under FRAME_MIN_RATIO.
+function movingRatio() {
+    const r = stillRatio();
+    if (!(_redraw.cost > MOVE_DROP_MS)) return r;
+    return Math.max(FRAME_MIN_RATIO, r > 1 ? Math.max(1, r / 2) : r * 0.75);
+}
+// The depth buffer's precision is set by the near plane: fixed at 10 mm, a view from 12 m
+// off could not tell apart surfaces a millimetre or two apart, and the dark vent strips
+// under a 0.7 mm ridge cap flickered through it. The near plane follows the distance to
+// what the camera looks at instead (NEAR_SHARE of it, NEAR_MIN at the least): eight times
+// the precision at 12 m, and still nothing nearer the eye than that is lost.
+const NEAR_SHARE = 1 / 150, NEAR_MIN = 10, NEAR_MAX = 5000;
+function fitNearPlane() {
+    const cam = activeCamera();
+    if (!cam || !cam.isPerspectiveCamera || !controls) return;
+    const d = cam.position.distanceTo(controls.target);
+    const near = Math.min(NEAR_MAX, Math.max(NEAR_MIN, d * NEAR_SHARE));
+    if (Math.abs(near - cam.near) > 0.05 * cam.near) { cam.near = near; cam.updateProjectionMatrix(); }
+}
+function engineBusySince(t) {                               // did the engine hold the page since t?
+    return typeof _engineCalls !== 'undefined' && (_engineCalls > 0 || (window._engineEndedAt || 0) > t);
+}
+function setRatio(r) {
+    if (!renderer || Math.abs(renderer.getPixelRatio() - r) < 1e-6) return false;
+    renderer.setPixelRatio(r);
+    const c = renderer.domElement.parentElement;
+    if (c) renderer.setSize(c.clientWidth, c.clientHeight);
+    return true;
+}
+function frameCost(ms) {
+    if (ms > 5000) return;                                   // the tab was away, or the engine held the thread
+    _redraw.cost = _redraw.cost ? 0.6 * _redraw.cost + 0.4 * ms : ms;
+    const pr = stillRatio(), top = window.devicePixelRatio || 1, floor = Math.min(top, STILL_MIN_RATIO);
+    let next = pr;
+    if (_redraw.cost > FRAME_SLOW_MS && pr > floor) next = Math.max(floor, pr - 0.5);
+    else if (_redraw.cost < FRAME_FAST_MS && pr < top && _redraw.cost * Math.pow((pr + 0.5) / pr, 2) < FRAME_SLOW_MS * 0.6)
+        next = Math.min(top, pr + 0.5);
+    if (next !== pr) {
+        viewRatio = next;
+        setRatio(next);
+        _redraw.cost = 0;                                   // measure afresh at the new size
+        requestRedraw();
+    }
+}
 
 function requestRedraw(ms = 0) {
     _redraw.dirty = true;
@@ -107,9 +180,10 @@ function watchForRedraws() {
         THREE.Object3D.prototype[method] = function () { _redraw.dirty = true; return original.apply(this, arguments); };
     }
     const touched = () => requestRedraw(REDRAW_AFTER_INPUT_MS);
-    for (const type of ['pointerdown', 'pointerup', 'pointermove', 'wheel', 'keydown', 'keyup', 'click', 'dblclick',
-                        'input', 'change', 'touchstart', 'touchmove', 'touchend', 'dragover', 'drop'])
+    for (const type of ['pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'click', 'dblclick',
+                        'input', 'change', 'touchstart', 'touchmove', 'touchend', 'drop'])
         document.addEventListener(type, touched, { capture: true, passive: true });
+    document.addEventListener('pointermove', e => { if (e.buttons) touched(); }, { capture: true, passive: true });
     window.addEventListener('resize', touched);
     document.addEventListener('visibilitychange', touched);
 }
@@ -286,8 +360,49 @@ function modelScale(raw) {
     return { scale: 1, lo, hi, diag };    // implausible either way: leave it alone and say so
 }
 
+// ─── THE HOST MODEL, DRAWN IN BATCHES ───
+// A model of thousands of elements (a timber frame: every stud, noggin and batten) drawn as
+// one mesh each is thousands of draw calls a frame, and the engine's answers wait behind
+// those frames. So, as the web-ifc viewers do, the screen draws the elements merged into
+// one mesh per material (walls, everything else). Each element still has its own mesh,
+// never drawn: picking, its triangles, its bounding box and hiding work on those, and the
+// batches are rebuilt from the visible ones whenever an element is hidden or shown.
+const MODEL_MATS = {
+    wall: new THREE.MeshPhongMaterial({ color: 0xd8d8d8, flatShading: true, side: THREE.DoubleSide }),
+    other: new THREE.MeshPhongMaterial({ color: 0xa8a8b8, flatShading: true, side: THREE.DoubleSide }),
+};
+function rebuildModelBatch() {
+    clearGroup(modelGroup);
+    for (const kind of Object.keys(MODEL_MATS)) {
+        const parts = meshMeta.filter(m => m.mesh.visible && m.kind === kind).map(m => m.mesh.geometry);
+        if (!parts.length) continue;
+        let nv = 0, ni = 0;
+        for (const g of parts) { nv += g.attributes.position.count; ni += g.index.count; }
+        const pos = new Float32Array(nv * 3), idx = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
+        let v = 0, i = 0;
+        for (const g of parts) {
+            pos.set(g.attributes.position.array, v * 3);
+            const src = g.index.array;
+            for (let k = 0; k < src.length; k++) idx[i + k] = src[k] + v;
+            v += g.attributes.position.count; i += src.length;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setIndex(new THREE.BufferAttribute(idx, 1));
+        geo.computeBoundingBox(); geo.computeBoundingSphere();
+        // its own copy of the material: the 2D view fades it, and clearGroup disposes it
+        const batch = new THREE.Mesh(geo, MODEL_MATS[kind].clone());
+        batch.matrixAutoUpdate = false;
+        batch.userData.batch = kind;
+        modelGroup.add(batch);
+    }
+    if (typeof view2d !== 'undefined' && view2d.on && typeof apply2DLook === 'function') { apply2DLook(false); apply2DLook(true); }
+    requestRedraw();
+}
+
 function buildScene(raw, context, warnings) {
     clearGroup(modelGroup); clearGroup(highlightGroup);
+    for (const m of allMeshes) m.geometry.dispose();     // the elements' own meshes are not in the scene
     allMeshes = []; meshMeta = [];
     modelContext = context || {};
     const { scale, lo, hi, diag } = modelScale(raw);
@@ -308,17 +423,16 @@ function buildScene(raw, context, warnings) {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         geo.setIndex(new THREE.BufferAttribute(new Uint32Array(r.idx), 1));
-        geo.computeVertexNormals();
         geo.computeBoundingBox();
-        const isWall = /WALL/i.test(r.type);
-        const mat = new THREE.MeshPhongMaterial({ color: isWall ? 0xd8d8d8 : 0xa8a8b8, flatShading: true,
-                                                  side: THREE.DoubleSide, transparent: false, opacity: 1 });   // solid; the 2D view fades it
-        const th = new THREE.Mesh(geo, mat);
+        geo.computeBoundingSphere();
+        const kind = /WALL/i.test(r.type) ? 'wall' : 'other';
+        const th = new THREE.Mesh(geo, MODEL_MATS[kind]);     // never drawn: picked, measured and hidden (rebuildModelBatch)
         th.userData.index = allMeshes.length;
-        modelGroup.add(th);
+        th.updateMatrixWorld(true);
         allMeshes.push(th);
-        meshMeta.push({ mesh: th, expressID: r.expressID, type: r.type, name: r.name, storey: r.storey });
+        meshMeta.push({ mesh: th, kind, expressID: r.expressID, type: r.type, name: r.name, storey: r.storey });
     }
+    rebuildModelBatch();
     placeGrid();
     fitCameraTo(modelGroup);
     return new Set(meshMeta.filter(m => m.storey).map(m => m.storey.name)).size;
@@ -379,9 +493,15 @@ function setModelVisible(on) { layerVisible.model = on; modelGroup.visible = on;
 // For getting round the model: a hidden element is not drawn and clicks pass through it,
 // so the face behind can be picked. It still counts for extraction (abutments, openings
 // and penetrations come from the whole model), and a new model starts with none hidden.
-function hideElement(mesh) { mesh.visible = false; requestRedraw(); }
-function hideElementType(type) { for (const m of meshMeta) if (m.type === type) m.mesh.visible = false; requestRedraw(); }
-function showAllElements() { for (const m of meshMeta) m.mesh.visible = true; requestRedraw(); }
+function hideElement(mesh) { mesh.visible = false; rebuildModelBatch(); }
+function hideElementType(type) { for (const m of meshMeta) if (m.type === type) m.mesh.visible = false; rebuildModelBatch(); }
+function showAllElements() { for (const m of meshMeta) m.mesh.visible = true; rebuildModelBatch(); }
+// A mesh about to be coloured on its own (the cutting run, the board-use tint) gets its own
+// material first: the cladding's pieces share one per colour (renderGeometry).
+function ownMaterial(mesh) {
+    if (!mesh.userData.ownMat) { mesh.material = mesh.material.clone(); mesh.userData.ownMat = true; }
+    return mesh.material;
+}
 function hiddenElements() { return meshMeta.filter(m => !m.mesh.visible); }
 function elementTypes() {             // [[type, count]], most common first
     const n = {};
@@ -752,18 +872,28 @@ function renderGeometry(meshes) {
     if (typeof inCuttingRun === 'function' && inCuttingRun()) closeCuttingRun();
     clearGroup(cladGroup);
     const byLayer = {};
+    // one material per look, shared by every piece that has it: far fewer for the GPU to
+    // switch between (a piece coloured on its own takes its own copy, ownMaterial)
+    const mats = new Map(), outlines = {};
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x1b2a3a, transparent: true, opacity: 0.6 });
     for (const m of meshes) {
         const layer = _layerOf[m.ifc_type] || 'cladding';
         if (!byLayer[layer]) { byLayer[layer] = new THREE.Group(); byLayer[layer].name = layer; cladGroup.add(byLayer[layer]); }
         let geo;
         try { geo = m.parts && m.parts.length ? partsGeometry(m) : prismBody(m); }
         catch (e) { continue; }
-        // A standing seam's deck lies right behind trays under a millimetre thick: pushed back in
-        // depth, so from across the street it does not show through them.
-        const behind = m.ifc_type === 'deck';
-        const mat = new THREE.MeshPhongMaterial({ color: new THREE.Color(m.color), flatShading: true, transparent: m.opacity < 1,
-                                                  opacity: m.opacity, side: THREE.DoubleSide, depthWrite: m.opacity >= 1,
-                                                  polygonOffset: behind, polygonOffsetFactor: behind ? 4 : 0, polygonOffsetUnits: behind ? 8 : 0 });
+        // A standing seam's deck lies right behind trays under a millimetre thick, and so do the
+        // ridge's vent strips under the cap and the eaves and verge supports under the drips:
+        // pushed back in depth, so from across the street they do not show through the zinc.
+        const behind = m.ifc_type === 'deck' || m.ifc_type === 'ridge_filler' || !!m.eaves_support || !!m.verge_support;
+        const look = m.color + '|' + m.opacity + '|' + behind;
+        let mat = mats.get(look);
+        if (!mat) {
+            mat = new THREE.MeshPhongMaterial({ color: new THREE.Color(m.color), flatShading: true, transparent: m.opacity < 1,
+                                                opacity: m.opacity, side: THREE.DoubleSide, depthWrite: m.opacity >= 1,
+                                                polygonOffset: behind, polygonOffsetFactor: behind ? 4 : 0, polygonOffsetUnits: behind ? 8 : 0 });
+            mats.set(look, mat);
+        }
         const mesh = new THREE.Mesh(geo, mat);
         mesh.matrixAutoUpdate = false;
         mesh.matrix.copy(frameMatrix(m.frame, m.depth));
@@ -771,11 +901,26 @@ function renderGeometry(meshes) {
         mesh.userData.elevation = m.elevation;
         byLayer[layer].add(mesh);
         if (m.opacity >= 1 || m.ifc_type === 'panel' || m.ifc_type === 'plank') {
-            const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), new THREE.LineBasicMaterial({ color: 0x1b2a3a, transparent: true, opacity: 0.6 }));
-            edges.matrixAutoUpdate = false; edges.matrix.copy(mesh.matrix);
-            edges.userData.elevation = m.elevation;
-            byLayer[layer].add(edges);
+            // the outline, placed in the world and gathered per layer and elevation: drawn as
+            // one line set each rather than one per piece (half the draw calls at LOD 300)
+            const eg = new THREE.EdgesGeometry(geo, 30);
+            eg.applyMatrix4(mesh.matrix);
+            const key = layer + '\u0000' + (m.elevation || '');
+            (outlines[key] = outlines[key] || { layer, elevation: m.elevation, parts: [] }).parts.push(eg.attributes.position.array);
+            eg.dispose();
         }
+    }
+    for (const { layer, elevation, parts } of Object.values(outlines)) {
+        const pos = new Float32Array(parts.reduce((n, a) => n + a.length, 0));
+        let at = 0;
+        for (const a of parts) { pos.set(a, at); at += a.length; }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        const lines = new THREE.LineSegments(g, edgeMat);
+        lines.matrixAutoUpdate = false;
+        lines.userData.elevation = elevation;
+        lines.userData.outlines = true;
+        byLayer[layer].add(lines);
     }
     for (const key of Object.keys(byLayer)) byLayer[key].visible = layerVisible[key] !== false;
     placeGrid();         // the cladding may reach lower than the model does

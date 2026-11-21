@@ -84,6 +84,7 @@ function startRun(plan) {
     for (const layer of cladGroup.children) for (const o of layer.children)
         if (o.isMesh && o.userData.name) run.meshes[o.userData.name] = o;
     for (const m of Object.values(run.meshes)) {
+        ownMaterial(m);                                  // coloured piece by piece: off the shared material
         m.userData.runColor = m.material.color.getHex();
         m.userData.runEmissive = m.material.emissive.getHex();
     }
@@ -553,7 +554,7 @@ function clearView(target, facing, dist, focal) {
     const skip = new Set(focal);
     const shown = o => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
     const blockers = [];
-    modelGroup.traverse(o => { if (o.isMesh && shown(o)) blockers.push(o); });
+    if (shown(modelGroup)) for (const o of allMeshes) if (o.visible) blockers.push(o);    // the elements, not the drawn batches
     cladGroup.traverse(o => { if (o.isMesh && !skip.has(o) && shown(o)) blockers.push(o); });
     scene.updateMatrixWorld();
     const pts = sightPoints(focal), ray = new THREE.Raycaster(), h = facing.clone().setY(0).normalize();

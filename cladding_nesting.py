@@ -107,7 +107,7 @@ def chain_pieces(geometry, elevations, kind="panel"):
             area = abs(face.area) if face.is_valid else abs(face.buffer(0).area)
         except Exception:   # noqa: BLE001 — a degenerate outline counts its rectangle
             area = (max(us) - min(us)) * (max(vs) - min(vs))
-        out.append({"name": m.get("name", "Panel"), "w": round(max(us) - min(us) + float(grow[0]), 1),
+        out.append({"name": m.get("name", "Panel"), "w": round(max(us) - min(us) + float(grow[0]) + float(m.get("cut_extra_w") or 0.0), 1),     # (and round a verge, into its drip)
                     "h": round(max(vs) - min(vs) + extra + float(grow[1]), 1), "area": area, "elevation": m.get("elevation"),
                     "u": round(min(us), 1), "v": round(min(vs), 1)})
     return out
