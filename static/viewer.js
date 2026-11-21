@@ -61,7 +61,7 @@ function initThree() {
     (function animate(t) {
         requestAnimationFrame(animate);
         // What the last frame drawn cost: the time to this callback, the GPU's share included.
-        if (_redraw.drewAt) { if (_redraw.drewStill) frameCost(t - _redraw.drewAt); _redraw.drewAt = 0; }
+        if (_redraw.drewAt) { if (_redraw.drewStill && !engineBusySince(_redraw.drewClock)) frameCost(t - _redraw.drewAt); _redraw.drewAt = 0; }
         const moved = controls.update();                        // true while orbiting, zooming or easing to rest
         const camMoved = cameraMoved();
         const now = performance.now();
@@ -75,7 +75,7 @@ function initThree() {
         if (view2d.on && view2d.onFrame) view2d.onFrame();     // the 2D labels follow the view
         placeHealMarks();                                       // and the ticks and crosses their ghosts
         renderer.render(scene, activeCamera());
-        _redraw.drewAt = t; _redraw.drewStill = still;
+        _redraw.drewAt = t; _redraw.drewStill = still; _redraw.drewClock = performance.now() - 1;
         _redraw.last = performance.now();                       // the idle net counts from the end of a frame
     })(performance.now());
 }
@@ -101,13 +101,24 @@ const _redraw = { dirty: true, until: 0, last: 0, frames: 0, cam: null, sig: new
 // each one, and on a slow GPU a big model's frames then take a second or more. Above
 // FRAME_SLOW_MS (smoothed) the pixel ratio steps down, to FRAME_MIN_RATIO at the least;
 // well under FRAME_FAST_MS it steps back up towards the screen's own.
-// Only still frames are measured: a moving camera draws at movingRatio() anyway.
-const FRAME_SLOW_MS = 90, FRAME_FAST_MS = 25, FRAME_MIN_RATIO = 0.75, MOVE_SETTLE_MS = 150;
+// Only still frames are measured, and only those the engine did not hold up: a rebuild
+// blocking the page between two frames is not a slow GPU (counted as one, it dropped the
+// resolution for nothing and the edges went jagged). A still view is never drawn below
+// the screen's own CSS pixels; only a moving camera may go lower, and only where frames
+// really are slow (MOVE_DROP_MS): on a capable GPU orbiting stays full resolution.
+const FRAME_SLOW_MS = 90, FRAME_FAST_MS = 25, FRAME_MIN_RATIO = 0.75, STILL_MIN_RATIO = 1, MOVE_SETTLE_MS = 150, MOVE_DROP_MS = 30;
 let viewRatio = null;                                        // the still frames' pixel ratio; null: the screen's
 function stillRatio() { return viewRatio || window.devicePixelRatio || 1; }
-// Moving: half a retina screen's (a quarter of the pixels), never under 1 there; three
-// quarters of an ordinary screen's; never under FRAME_MIN_RATIO.
-function movingRatio() { const r = stillRatio(); return Math.max(FRAME_MIN_RATIO, r > 1 ? Math.max(1, r / 2) : r * 0.75); }
+// Moving, where frames are slow: half a retina screen's (a quarter of the pixels), never
+// under 1 there; three quarters of an ordinary screen's; never under FRAME_MIN_RATIO.
+function movingRatio() {
+    const r = stillRatio();
+    if (!(_redraw.cost > MOVE_DROP_MS)) return r;
+    return Math.max(FRAME_MIN_RATIO, r > 1 ? Math.max(1, r / 2) : r * 0.75);
+}
+function engineBusySince(t) {                               // did the engine hold the page since t?
+    return typeof _engineCalls !== 'undefined' && (_engineCalls > 0 || (window._engineEndedAt || 0) > t);
+}
 function setRatio(r) {
     if (!renderer || Math.abs(renderer.getPixelRatio() - r) < 1e-6) return false;
     renderer.setPixelRatio(r);
@@ -118,9 +129,9 @@ function setRatio(r) {
 function frameCost(ms) {
     if (ms > 5000) return;                                   // the tab was away, or the engine held the thread
     _redraw.cost = _redraw.cost ? 0.6 * _redraw.cost + 0.4 * ms : ms;
-    const pr = stillRatio(), top = window.devicePixelRatio || 1;
+    const pr = stillRatio(), top = window.devicePixelRatio || 1, floor = Math.min(top, STILL_MIN_RATIO);
     let next = pr;
-    if (_redraw.cost > FRAME_SLOW_MS && pr > FRAME_MIN_RATIO) next = Math.max(FRAME_MIN_RATIO, pr - 0.5);
+    if (_redraw.cost > FRAME_SLOW_MS && pr > floor) next = Math.max(floor, pr - 0.5);
     else if (_redraw.cost < FRAME_FAST_MS && pr < top && _redraw.cost * Math.pow((pr + 0.5) / pr, 2) < FRAME_SLOW_MS * 0.6)
         next = Math.min(top, pr + 0.5);
     if (next !== pr) {

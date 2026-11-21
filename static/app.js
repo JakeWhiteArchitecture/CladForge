@@ -2237,7 +2237,7 @@ function appIdle() {
 // appIdle sees the cutting plan, an export or an import while it is being worked out.
 function enginePy(code) {
     _engineCalls++;
-    const over = () => { _engineCalls--; requestRedraw(300); };
+    const over = () => { _engineCalls--; window._engineEndedAt = performance.now(); requestRedraw(300); };
     return pyodide.runPythonAsync(code).then(v => { over(); return v; }, e => { over(); throw e; });
 }
 
@@ -2250,11 +2250,11 @@ function pyRun(code) {
             if (done) return;
             try { py.runPython('0'); }
             catch (err) {
-                if (/fatally failed|Aborted/i.test(err.message || '')) { done = true; _engineCalls--; clearInterval(timer); reject(err); }
+                if (/fatally failed|Aborted/i.test(err.message || '')) { done = true; _engineCalls--; window._engineEndedAt = performance.now(); clearInterval(timer); reject(err); }
             }
         }, 1500);
         // whatever the answer changes on screen is drawn (viewer.requestRedraw)
-        const over = () => { if (!done) { done = true; _engineCalls--; clearInterval(timer); requestRedraw(300); } };
+        const over = () => { if (!done) { done = true; _engineCalls--; window._engineEndedAt = performance.now(); clearInterval(timer); requestRedraw(300); } };
         py.runPythonAsync(code).then(v => { over(); resolve(v); }, e => { over(); reject(e); });
     });
 }

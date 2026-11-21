@@ -96,6 +96,25 @@ async function main() {
     // The cutting list is worked out on demand by default; most steps below check it after
     // each rebuild, so it is switched to update automatically (the manual mode has its own step).
     await page.evaluate(() => setAutoNesting(true));
+    // The drawing resolution: a still view never below the screen's CSS pixels however slow
+    // the frames; a moving camera drops only where frames are slow; a frame the engine held
+    // up is not measured.
+    const ratio = await page.evaluate(() => {
+        const dpr = window.devicePixelRatio || 1, out = {};
+        viewRatio = null; _redraw.cost = 0;
+        out.fastMoving = movingRatio() === stillRatio();
+        for (let i = 0; i < 12; i++) frameCost(800);
+        out.stillFloor = stillRatio() >= Math.min(dpr, 1) - 1e-9;
+        _redraw.cost = 800;
+        out.slowMoving = movingRatio() < stillRatio() || stillRatio() <= 0.75;
+        _engineCalls++; out.busy = engineBusySince(performance.now()); _engineCalls--;
+        window._engineEndedAt = performance.now(); out.busyAfter = engineBusySince(performance.now() - 50);
+        out.idle = !engineBusySince(performance.now() + 1);
+        viewRatio = null; _redraw.cost = 0; setRatio(stillRatio());
+        return out;
+    });
+    console.log('resolution rules:', JSON.stringify(ratio));
+    if (Object.values(ratio).some(v => !v)) throw new Error('the resolution rules broke: ' + JSON.stringify(ratio));
     console.log('engine ready');
 
     // Aim at a named element's face and click the middle of the canvas. Named rather
