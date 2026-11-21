@@ -359,6 +359,18 @@ def hip_parts(meshes, p, infos):
             extra.append(leg)
             if ridge:
                 continue
+            if drop:
+                # the cap's foot at the eaves closed: a stop end along the foot of the leg, from its underside
+                # down to the trays' face, so the vent slot under the cap cannot be looked into from the front
+                vs = [q[1] for q in ring]
+                low = min(vs)
+                us = [q[0] for q in ring if q[1] <= low + 0.5]
+                face = float(info.get("total_depth") or 0.0)
+                if len(us) >= 2 and max(us) - min(us) > 5.0 and rest - face > 1.0:
+                    stop = _prism([[min(us), low], [max(us), low], [max(us), low + t], [min(us), low + t]], face, rest - face,
+                                  frame, "ridge_cap", "%s Hip Stop End %s" % (name, short(h["with"])), name)
+                    stop.update(tray_sheet=True, of=leg["name"], stop_end=True)
+                    extra.append(stop)
             (x1, y1), (x2, y2) = h["p1"], h["p2"]
             dx = (x2 - x1) / h["length"]
             mx, my = h["m"]

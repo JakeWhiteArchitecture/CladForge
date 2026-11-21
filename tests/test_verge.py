@@ -104,18 +104,26 @@ def test_start_and_end_are_the_same_ends_of_the_roof_on_both_slopes_of_a_ridge()
     "start" must still be one end of the roof, not one on each."""
     _link, params, out = _roof(elev={"verge": "start"}, **SEAM)
     a, b = params["elevations"]
-    strips = {m["elevation"]: m for m in _strips(out, "Support")}
+    strips = {m["elevation"]: m for m in _strips(out, "Support") if not m["name"].endswith("End")}
     assert strips["Roof A"]["name"].endswith("L") and strips["Roof B"]["name"].endswith("R")
     ends = [frame_to_world(m["frame"], 0.0, 0.0, 0.0) for m in strips.values()]
     from synthetic import U
     along = [sum((p[i] - ends[0][i]) * U[i] for i in range(3)) for p in ends]
     assert abs(along[1]) < 0.01                                                 # both at the one gable
-    # at the ridge each strip stops square, under the cap, the foot of its drop clear of the other slope's
+    # at the ridge each verge runs on up to the plane that bisects it, and is cut on it, so
+    # the two slopes' verges meet at the apex under the cap's stop end
+    from cladding_primitives import ring_at
     k = math.tan(math.radians(31.4))
-    assert 2930.0 < strips["Roof A"]["thickness"] < 3000.0
-    foot = strips["Roof A"]["thickness"] - 3000.0 - k * min(
-        world_to_frame(a["frame"], frame_to_world(strips["Roof A"]["frame"], x, y, 0.0))[2] for x, y in strips["Roof A"]["profile"])
-    assert foot <= -15.0 * math.sqrt(1 + k * k) + 0.5
+    for e in (a, b):
+        tops = [m for m in out["geometry"] if m["elevation"] == e["name"] and m["name"].endswith("Ridge End")
+                and (m.get("verge_support") or m.get("verge_drip"))]
+        assert len(tops) == 2, [m["name"] for m in tops]                         # the support and the drip
+        for m in tops:
+            on = lambda d: [world_to_frame(e["frame"], frame_to_world(m["frame"], x, y, d)) for x, y in ring_at(m, 0, d)]   # noqa: E731
+            off = [max(abs(q[1] - k * q[2] - e["ridge"]["v"]) for q in on(d)) for d in (0.0, float(m["thickness"]))]
+            assert min(off) < 0.5, (m["name"], off)                              # one end of it lies in the plane
+    caps = [m for m in out["geometry"] if m.get("stop_end")]
+    assert [m["name"] for m in caps] == ["Roof A Ridge Stop End L"] and caps[0]["of"] == "Roof A Ridge Cap"   # "start": one gable, one stop end
 
 
 def test_only_trays_running_with_the_fall_on_a_roof_get_a_verge():
@@ -177,7 +185,8 @@ def test_the_verge_exports_to_ifc_and_dxf():
 # ── the verge with cladding (VMZ-SN-MA-ZI-05) ─────────────────────────────
 
 def _flashings(out):
-    return sorted((m for m in out["geometry"] if "Verge Flashing" in m["name"] and m["ifc_type"] == "verge_strip"), key=lambda m: m["name"])
+    return sorted((m for m in out["geometry"] if "Verge Flashing" in m["name"] and m["ifc_type"] == "verge_strip" and not m.get("drip_end")),
+                  key=lambda m: m["name"])
 
 
 def _section(a, part, edge, out_sign):
@@ -197,7 +206,7 @@ def test_the_verge_with_cladding_is_a_true_seam_at_the_edge_and_a_flashing_down_
     assert verge_type(a) == "cladding" and verge_type({}) == "g3" and verge_type({"verge_type": "nonsense"}) == "g3"
     assert not _strips_named(out, "Verge Strip") and not _strips_named(out, "Verge Upstand")
     left, right = _flashings(out)
-    clips = _strips_named(out, "Verge Clip")
+    clips = [m for m in _strips_named(out, "Verge Clip") if not m.get("drip_end")]
     assert (left["name"], right["name"]) == ("Roof A Verge Flashing L", "Roof A Verge Flashing R") and len(clips) == 2
     deck = next(m for m in out["geometry"] if m["ifc_type"] == "deck")
     deck_top, t = deck["depth"] + deck["thickness"], left["verge_info"]["thickness"]
@@ -250,7 +259,8 @@ def test_the_verge_with_cladding_is_a_true_seam_at_the_edge_and_a_flashing_down_
         mid = sign * (sum(q[0] for q in batten["profile"]) / len(batten["profile"]) - edge)
         assert min(x for x, _d in strip) < mid < 0.0                              # it reaches over the batten at the roof's edge
         assert min(d for _x, d in strip) >= foot and max(d for _x, d in strip) <= back
-        assert flashing["thickness"] == 3000.0 and clip["thickness"] == 3000.0     # the slope long
+        # the slope long: carried down to the back of the eaves drip at the corner (join_drips), its end pieces beyond
+        assert abs(flashing["thickness"] - 3000.0) < 10.0 and abs(clip["thickness"] - 3000.0) < 10.0
 
 
 def _strips_named(out, text):
@@ -295,7 +305,8 @@ def test_the_verge_with_cladding_exports():
     assert len(folds) == 16 and not [m for m in folds if any(m is x for x in own_elements(out["geometry"]))]
     for e in ifc.by_type("IfcCovering"):
         if "Verge Flashing" in e.Name:
-            assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5      # the flashing and its five sheets of the seam
+            # the flashing, its five sheets of the seam, and its two end pieces at the eaves corner
+            assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5 + 2
     assert len(out["info"][0]["verge_strips"]) == 2 and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
 
 
@@ -442,3 +453,18 @@ def test_verge_last_tray_full_lets_the_last_seam_stand_further_in_and_the_check_
         else:
             assert row["status"] == "pass", row["message"]
     assert found, "some offset puts the last seam past 370 with a full tray allowed"
+
+
+def test_with_cladding_the_eaves_corner_is_closed_as_the_g3_one():
+    """The verge with cladding at the eaves: the flashing's part over the edge mitres to the
+    eaves bullnose, its drop comes down to the back of the eaves drip's drop, the clip is cut
+    with it, and the eaves drip runs out to the flashing's outside."""
+    params, out = _one(elev={"verge_type": "cladding"})
+    geo = out["geometry"]
+    names = sorted(m["name"] for m in geo if m.get("drip_end") and m.get("ifc_type") == "verge_strip")
+    assert names == ["Roof A Verge Clip L Drop End", "Roof A Verge Clip R Drop End",
+                     "Roof A Verge Flashing L Bullnose End", "Roof A Verge Flashing L Drop End",
+                     "Roof A Verge Flashing R Bullnose End", "Roof A Verge Flashing R Drop End"]
+    assert all(m["of"] in (m["name"].rsplit(" ", 2)[0],) for m in geo if m.get("drip_end") and m.get("ifc_type") == "verge_strip")
+    eaves_ends = [m for m in geo if m.get("drip_end") and " Eaves Drip " in m["name"]]
+    assert len(eaves_ends) == 4                                          # bullnose and drop, at each verge

@@ -16,7 +16,7 @@ from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip
 from cladding_edges import mitre_to_linings, finish_seams, break_at_seams
 from cladding_checks import check_rules as _check_rules
 from cladding_ridge import ridge_ends, ridge_parts
-from cladding_verge import join_drips, verge_parts, join_verges
+from cladding_verge import close_cap_ends, join_drips, join_hip_drips, verge_parts, join_verges
 from cladding_valley import valley_cut, valley_parts
 from cladding_hip import hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
@@ -201,11 +201,13 @@ def _preview_one(p, ready=None):
     meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
     meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
     meshes = join_drips(meshes, p)           # where it meets a G3 verge: the verge drip down to the back of the eaves drip
+    meshes = join_hip_drips(meshes, p)       # where it runs into a hip: the two slopes' drips mitred on the hip's plan line
     meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
     meshes = window_parts(meshes, p, infos)  # a standing seam wall's openings: the sill capping and the head strip
     meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
     meshes = abut_parts(meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
     meshes = abut_over(meshes, p, infos)     # and that wall's layers stop above the roof
+    meshes = close_cap_ends(meshes, p)       # a ridge or head verge cap that ends at a verge: the verge up to its plane, a stop end
     meshes = break_at_seams(meshes, p)       # last: each tray's flat drawn back to its own upstand, clear of the next tray's
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)

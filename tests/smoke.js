@@ -1652,7 +1652,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  cards: [...document.querySelectorAll('.elev-meta')].slice(-2).map(c => c.textContent.replace(/^.*openings?/, '')),
                  caps: named(a, /Ridge Cap/).length + named(b, /Ridge Cap/).length,
                  fillers: [named(a, /Ridge Filler/).length, named(b, /Ridge Filler/).length],
-                 upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Support/).length + named(b, /Verge Support/).length,
+                 upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Support [LR]$/).length + named(b, /Verge Support [LR]$/).length,
                  seams: [seams(a), seams(b)],
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)) };
     });
@@ -1670,8 +1670,8 @@ _dxf(_o["geometry"], _p, _o["info"])`);
     await settle();
     const zi05 = await page.evaluate(() => {
         const names = cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh).map(m => m.userData.name || '');
-        return { strips: names.filter(n => /Verge Support/.test(n)).length, flashings: names.filter(n => /Verge Flashing/.test(n)).length,
-                 clips: names.filter(n => /Verge Clip/.test(n)).length, seams: names.filter(n => /Verge Seam/.test(n)).length, type: state.elevations[state.elevations.length - 1].chain.edges.vergeType,
+        return { strips: names.filter(n => /Verge Support/.test(n)).length, flashings: names.filter(n => /Verge Flashing [LR]$/.test(n)).length,
+                 clips: names.filter(n => /Verge Clip [LR]$/.test(n)).length, seams: names.filter(n => /Verge Seam/.test(n)).length, type: state.elevations[state.elevations.length - 1].chain.edges.vergeType,
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /verge flashing over the cladding/.test(t)).length };
     });
     console.log('verge with cladding:', JSON.stringify(zi05));
@@ -1680,7 +1680,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         throw new Error('the verge with cladding was not built: ' + JSON.stringify(zi05));
     await page.selectOption('#edge-vergeType', 'g3');
     await settle();
-    const g3Again = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Verge Support/.test(m.userData.name || '')).length);
+    const g3Again = await page.evaluate(() => cladGroup.children.flatMap(l => l.children).filter(m => m.isMesh && /Verge Support [LR]$/.test(m.userData.name || '')).length);
     if (g3Again !== 4) throw new Error('the G3 verge strips did not come back: ' + g3Again);
     await page.evaluate(async () => { for (let k = 0; k < 2; k++) { setActive(state.elevations.length - 1); deleteElevation(); await settled(); } });
 
@@ -1754,7 +1754,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  records: [valleyRecords(a), valleyRecords(c)].map(v => v.map(x => [x.kind, x.with, x.master, Math.round(x.length)])),
                  cards: [...document.querySelectorAll('.elev-meta')].map(x => x.textContent.replace(/^.*openings?/, '')),
                  caps: names.filter(n => /Hip Cap/.test(n)), gutters: names.filter(n => /Valley Gutter/.test(n)).length,
-                 upstands: names.filter(n => /Hip Upstand/.test(n)).length, aprons: names.filter(n => /Eaves Support/.test(n)),
+                 upstands: names.filter(n => /Hip Upstand/.test(n)).length, aprons: names.filter(n => /Eaves Support \d+$/.test(n)),
                  checks: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a hip|: an eaves \d/.test(t)).length };
     });
     const hip = await roofParts();
@@ -1790,7 +1790,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         return { chains: state.elevations.map(e => e.chain.name), ridge: state.elevations.slice(0, 2).map(e => e.ridge && [e.ridge.u0, e.ridge.u1]),
                  hips: state.elevations.map(e => valleyRecords(e).filter(v => v.kind === 'hip').length),
                  ridgeCaps: names.filter(n => /Ridge Cap/.test(n)).length, hipCaps: names.filter(n => /Hip Cap/.test(n)).length,
-                 aprons: names.filter(n => /Eaves Support/.test(n)).length, verges: names.filter(n => /Verge/.test(n)).length,
+                 aprons: names.filter(n => /Eaves Support \d+$/.test(n)).length, verges: names.filter(n => /Verge/.test(n)).length,
                  ridgeCheck: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)).map(t => (t.match(/cap ([\d.]+) m long/) || [])[1]) };
     });
     console.log('hipped roof:', JSON.stringify(hipped));
