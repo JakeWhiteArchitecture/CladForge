@@ -61,15 +61,21 @@ function initThree() {
     (function animate(t) {
         requestAnimationFrame(animate);
         // What the last frame drawn cost: the time to this callback, the GPU's share included.
-        if (_redraw.drewAt) { frameCost(t - _redraw.drewAt); _redraw.drewAt = 0; }
+        if (_redraw.drewAt) { if (_redraw.drewStill) frameCost(t - _redraw.drewAt); _redraw.drewAt = 0; }
         const moved = controls.update();                        // true while orbiting, zooming or easing to rest
+        const camMoved = cameraMoved();
         const now = performance.now();
-        if (!(moved || _redraw.dirty || now < _redraw.until || cameraMoved() || now - _redraw.last > REDRAW_IDLE_MS)) return;
+        // While the camera moves the view is drawn at a lower resolution, sharp again the
+        // moment it stops (MOVE_SETTLE_MS later): a drag stays smooth on a weak GPU.
+        if (moved || camMoved) _redraw.movedAt = now;
+        const still = now - _redraw.movedAt > MOVE_SETTLE_MS;
+        if (setRatio(still ? stillRatio() : movingRatio())) _redraw.dirty = true;
+        if (!(moved || camMoved || _redraw.dirty || now < _redraw.until || now - _redraw.last > REDRAW_IDLE_MS)) return;
         _redraw.dirty = false; _redraw.frames++;
         if (view2d.on && view2d.onFrame) view2d.onFrame();     // the 2D labels follow the view
         placeHealMarks();                                       // and the ticks and crosses their ghosts
         renderer.render(scene, activeCamera());
-        _redraw.drewAt = t;
+        _redraw.drewAt = t; _redraw.drewStill = still;
         _redraw.last = performance.now();                       // the idle net counts from the end of a frame
     })(performance.now());
 }
@@ -89,25 +95,37 @@ function initThree() {
 // behind the frames. Moving the mouse over the page is not input unless a button is down
 // (OrbitControls reports its own moves).
 const REDRAW_AFTER_INPUT_MS = 700, REDRAW_IDLE_MS = 4000;
-const _redraw = { dirty: true, until: 0, last: 0, frames: 0, cam: null, sig: new Float64Array(32), drewAt: 0, cost: 0 };
+const _redraw = { dirty: true, until: 0, last: 0, frames: 0, cam: null, sig: new Float64Array(32), drewAt: 0, drewStill: true, cost: 0, movedAt: -1e9 };
 
 // The drawing resolution follows what frames cost: a retina screen draws four pixels for
 // each one, and on a slow GPU a big model's frames then take a second or more. Above
 // FRAME_SLOW_MS (smoothed) the pixel ratio steps down, to FRAME_MIN_RATIO at the least;
 // well under FRAME_FAST_MS it steps back up towards the screen's own.
-const FRAME_SLOW_MS = 90, FRAME_FAST_MS = 25, FRAME_MIN_RATIO = 0.75;
+// Only still frames are measured: a moving camera draws at movingRatio() anyway.
+const FRAME_SLOW_MS = 90, FRAME_FAST_MS = 25, FRAME_MIN_RATIO = 0.75, MOVE_SETTLE_MS = 150;
+let viewRatio = null;                                        // the still frames' pixel ratio; null: the screen's
+function stillRatio() { return viewRatio || window.devicePixelRatio || 1; }
+// Moving: half a retina screen's (a quarter of the pixels), never under 1 there; three
+// quarters of an ordinary screen's; never under FRAME_MIN_RATIO.
+function movingRatio() { const r = stillRatio(); return Math.max(FRAME_MIN_RATIO, r > 1 ? Math.max(1, r / 2) : r * 0.75); }
+function setRatio(r) {
+    if (!renderer || Math.abs(renderer.getPixelRatio() - r) < 1e-6) return false;
+    renderer.setPixelRatio(r);
+    const c = renderer.domElement.parentElement;
+    if (c) renderer.setSize(c.clientWidth, c.clientHeight);
+    return true;
+}
 function frameCost(ms) {
     if (ms > 5000) return;                                   // the tab was away, or the engine held the thread
     _redraw.cost = _redraw.cost ? 0.6 * _redraw.cost + 0.4 * ms : ms;
-    const pr = renderer.getPixelRatio(), top = window.devicePixelRatio || 1;
+    const pr = stillRatio(), top = window.devicePixelRatio || 1;
     let next = pr;
     if (_redraw.cost > FRAME_SLOW_MS && pr > FRAME_MIN_RATIO) next = Math.max(FRAME_MIN_RATIO, pr - 0.5);
     else if (_redraw.cost < FRAME_FAST_MS && pr < top && _redraw.cost * Math.pow((pr + 0.5) / pr, 2) < FRAME_SLOW_MS * 0.6)
         next = Math.min(top, pr + 0.5);
     if (next !== pr) {
-        renderer.setPixelRatio(next);
-        const c = renderer.domElement.parentElement;
-        if (c) renderer.setSize(c.clientWidth, c.clientHeight);
+        viewRatio = next;
+        setRatio(next);
         _redraw.cost = 0;                                   // measure afresh at the new size
         requestRedraw();
     }
@@ -831,7 +849,7 @@ function renderGeometry(meshes) {
     const byLayer = {};
     // one material per look, shared by every piece that has it: far fewer for the GPU to
     // switch between (a piece coloured on its own takes its own copy, ownMaterial)
-    const mats = new Map();
+    const mats = new Map(), outlines = {};
     const edgeMat = new THREE.LineBasicMaterial({ color: 0x1b2a3a, transparent: true, opacity: 0.6 });
     for (const m of meshes) {
         const layer = _layerOf[m.ifc_type] || 'cladding';
@@ -857,11 +875,26 @@ function renderGeometry(meshes) {
         mesh.userData.elevation = m.elevation;
         byLayer[layer].add(mesh);
         if (m.opacity >= 1 || m.ifc_type === 'panel' || m.ifc_type === 'plank') {
-            const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), edgeMat);
-            edges.matrixAutoUpdate = false; edges.matrix.copy(mesh.matrix);
-            edges.userData.elevation = m.elevation;
-            byLayer[layer].add(edges);
+            // the outline, placed in the world and gathered per layer and elevation: drawn as
+            // one line set each rather than one per piece (half the draw calls at LOD 300)
+            const eg = new THREE.EdgesGeometry(geo, 30);
+            eg.applyMatrix4(mesh.matrix);
+            const key = layer + '\u0000' + (m.elevation || '');
+            (outlines[key] = outlines[key] || { layer, elevation: m.elevation, parts: [] }).parts.push(eg.attributes.position.array);
+            eg.dispose();
         }
+    }
+    for (const { layer, elevation, parts } of Object.values(outlines)) {
+        const pos = new Float32Array(parts.reduce((n, a) => n + a.length, 0));
+        let at = 0;
+        for (const a of parts) { pos.set(a, at); at += a.length; }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        const lines = new THREE.LineSegments(g, edgeMat);
+        lines.matrixAutoUpdate = false;
+        lines.userData.elevation = elevation;
+        lines.userData.outlines = true;
+        byLayer[layer].add(lines);
     }
     for (const key of Object.keys(byLayer)) byLayer[key].visible = layerVisible[key] !== false;
     placeGrid();         // the cladding may reach lower than the model does
