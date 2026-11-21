@@ -111,6 +111,11 @@ async function main() {
         window._engineEndedAt = performance.now(); out.busyAfter = engineBusySince(performance.now() - 50);
         out.idle = !engineBusySince(performance.now() + 1);
         viewRatio = null; _redraw.cost = 0; setRatio(stillRatio());
+        // the near plane follows the distance to what the camera looks at (depth precision)
+        const keep = camera.position.clone(), t = controls.target.clone(), dir = keep.clone().sub(t).normalize();
+        camera.position.copy(t).addScaledVector(dir, 15000); fitNearPlane(); out.near15m = Math.abs(camera.near - 100) < 1;
+        camera.position.copy(t).addScaledVector(dir, 500); fitNearPlane(); out.nearClose = camera.near === 10;
+        camera.position.copy(keep); fitNearPlane();
         return out;
     });
     console.log('resolution rules:', JSON.stringify(ratio));

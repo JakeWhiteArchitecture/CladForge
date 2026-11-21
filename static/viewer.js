@@ -74,6 +74,7 @@ function initThree() {
         _redraw.dirty = false; _redraw.frames++;
         if (view2d.on && view2d.onFrame) view2d.onFrame();     // the 2D labels follow the view
         placeHealMarks();                                       // and the ticks and crosses their ghosts
+        fitNearPlane();
         renderer.render(scene, activeCamera());
         _redraw.drewAt = t; _redraw.drewStill = still; _redraw.drewClock = performance.now() - 1;
         _redraw.last = performance.now();                       // the idle net counts from the end of a frame
@@ -115,6 +116,19 @@ function movingRatio() {
     const r = stillRatio();
     if (!(_redraw.cost > MOVE_DROP_MS)) return r;
     return Math.max(FRAME_MIN_RATIO, r > 1 ? Math.max(1, r / 2) : r * 0.75);
+}
+// The depth buffer's precision is set by the near plane: fixed at 10 mm, a view from 12 m
+// off could not tell apart surfaces a millimetre or two apart, and the dark vent strips
+// under a 0.7 mm ridge cap flickered through it. The near plane follows the distance to
+// what the camera looks at instead (NEAR_SHARE of it, NEAR_MIN at the least): eight times
+// the precision at 12 m, and still nothing nearer the eye than that is lost.
+const NEAR_SHARE = 1 / 150, NEAR_MIN = 10, NEAR_MAX = 5000;
+function fitNearPlane() {
+    const cam = activeCamera();
+    if (!cam || !cam.isPerspectiveCamera || !controls) return;
+    const d = cam.position.distanceTo(controls.target);
+    const near = Math.min(NEAR_MAX, Math.max(NEAR_MIN, d * NEAR_SHARE));
+    if (Math.abs(near - cam.near) > 0.05 * cam.near) { cam.near = near; cam.updateProjectionMatrix(); }
 }
 function engineBusySince(t) {                               // did the engine hold the page since t?
     return typeof _engineCalls !== 'undefined' && (_engineCalls > 0 || (window._engineEndedAt || 0) > t);
@@ -868,9 +882,10 @@ function renderGeometry(meshes) {
         let geo;
         try { geo = m.parts && m.parts.length ? partsGeometry(m) : prismBody(m); }
         catch (e) { continue; }
-        // A standing seam's deck lies right behind trays under a millimetre thick: pushed back in
-        // depth, so from across the street it does not show through them.
-        const behind = m.ifc_type === 'deck';
+        // A standing seam's deck lies right behind trays under a millimetre thick, and so do the
+        // ridge's vent strips under the cap and the eaves and verge supports under the drips:
+        // pushed back in depth, so from across the street they do not show through the zinc.
+        const behind = m.ifc_type === 'deck' || m.ifc_type === 'ridge_filler' || !!m.eaves_support || !!m.verge_support;
         const look = m.color + '|' + m.opacity + '|' + behind;
         let mat = mats.get(look);
         if (!mat) {
