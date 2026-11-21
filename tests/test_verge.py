@@ -129,9 +129,9 @@ def test_start_and_end_are_the_same_ends_of_the_roof_on_both_slopes_of_a_ridge()
 @pytest.mark.parametrize("verge_type", ["g3", "cladding"])
 @pytest.mark.parametrize("style", ["square", "v", "flat"])
 def test_the_ridge_cap_stop_end_hangs_a_skirt_over_the_apex(style, verge_type):
-    """"v" and "flat" hang the stop end down over the two verges' joint at the apex, to
-    10 mm below their lowest point there: to a point on the centre line, or a short level
-    edge across it. "square" is the cap's section only."""
+    """"v" and "flat" hang the stop end down over the two verges' joint at the apex: to a
+    point on the centre line, its edges square to the cap's flanges, or a short level edge
+    across it 10 mm below the verges' lowest point there. "square" is the cap's section only."""
     from cladding_constants import frame_v
     from cladding_primitives import ring_at
     _link, params, out = _roof(elev={"verge_type": verge_type, "ridge_end": style}, **SEAM)
@@ -154,12 +154,22 @@ def test_the_ridge_cap_stop_end_hangs_a_skirt_over_the_apex(style, verge_type):
         bottom = [q for q in stop["profile"] if abs(q[1] - min(ys)) < 0.01]
         if style == "square":
             assert abs(min(ys) - cap_low) < 0.01
+        elif style == "v":
+            # the point on the centre line, well below the verges, each edge square to its flange
+            assert len(bottom) == 1 and abs(bottom[0][0]) < 0.5 and min(ys) < verge_low - 10.0
+            apex = max(cap["profile"], key=lambda q: q[1])
+            ring = stop["profile"]
+            i = ring.index(bottom[0])
+            for sign in (1, -1):
+                end = max(cap["profile"], key=lambda q: q[0] * sign)
+                flange = (end[0] - apex[0], end[1] - apex[1])
+                foot = [q for q in (ring[i - 1], ring[(i + 1) % len(ring)]) if q[0] * sign > 0][0]   # the V's edge on that side
+                edge = (bottom[0][0] - foot[0], bottom[0][1] - foot[1])
+                cos = (flange[0] * edge[0] + flange[1] * edge[1]) / math.hypot(*flange) / math.hypot(*edge)
+                assert abs(cos) < 0.01, cos
         else:
             assert abs(min(ys) - (verge_low - 10.0)) < 0.5
-            if style == "v":
-                assert len(bottom) == 1 and abs(bottom[0][0]) < 0.5
-            else:
-                assert len(bottom) == 2 and abs(bottom[0][0] + bottom[1][0]) < 0.5 and abs(bottom[0][0]) > 10.0
+            assert len(bottom) == 2 and abs(bottom[0][0] + bottom[1][0]) < 0.5 and abs(bottom[0][0]) > 10.0
     # still one element with its cap in the IFC
     ifc = ifcopenshell.open(meshes_to_ifc(geo, params, out["info"]))
     assert not [e for e in ifc.by_type("IfcElement") if "Stop End" in (e.Name or "")]
