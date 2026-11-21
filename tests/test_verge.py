@@ -185,7 +185,8 @@ def test_the_verge_exports_to_ifc_and_dxf():
 # ── the verge with cladding (VMZ-SN-MA-ZI-05) ─────────────────────────────
 
 def _flashings(out):
-    return sorted((m for m in out["geometry"] if "Verge Flashing" in m["name"] and m["ifc_type"] == "verge_strip"), key=lambda m: m["name"])
+    return sorted((m for m in out["geometry"] if "Verge Flashing" in m["name"] and m["ifc_type"] == "verge_strip" and not m.get("drip_end")),
+                  key=lambda m: m["name"])
 
 
 def _section(a, part, edge, out_sign):
@@ -205,7 +206,7 @@ def test_the_verge_with_cladding_is_a_true_seam_at_the_edge_and_a_flashing_down_
     assert verge_type(a) == "cladding" and verge_type({}) == "g3" and verge_type({"verge_type": "nonsense"}) == "g3"
     assert not _strips_named(out, "Verge Strip") and not _strips_named(out, "Verge Upstand")
     left, right = _flashings(out)
-    clips = _strips_named(out, "Verge Clip")
+    clips = [m for m in _strips_named(out, "Verge Clip") if not m.get("drip_end")]
     assert (left["name"], right["name"]) == ("Roof A Verge Flashing L", "Roof A Verge Flashing R") and len(clips) == 2
     deck = next(m for m in out["geometry"] if m["ifc_type"] == "deck")
     deck_top, t = deck["depth"] + deck["thickness"], left["verge_info"]["thickness"]
@@ -258,7 +259,8 @@ def test_the_verge_with_cladding_is_a_true_seam_at_the_edge_and_a_flashing_down_
         mid = sign * (sum(q[0] for q in batten["profile"]) / len(batten["profile"]) - edge)
         assert min(x for x, _d in strip) < mid < 0.0                              # it reaches over the batten at the roof's edge
         assert min(d for _x, d in strip) >= foot and max(d for _x, d in strip) <= back
-        assert flashing["thickness"] == 3000.0 and clip["thickness"] == 3000.0     # the slope long
+        # the slope long: carried down to the back of the eaves drip at the corner (join_drips), its end pieces beyond
+        assert abs(flashing["thickness"] - 3000.0) < 10.0 and abs(clip["thickness"] - 3000.0) < 10.0
 
 
 def _strips_named(out, text):
@@ -303,7 +305,8 @@ def test_the_verge_with_cladding_exports():
     assert len(folds) == 16 and not [m for m in folds if any(m is x for x in own_elements(out["geometry"]))]
     for e in ifc.by_type("IfcCovering"):
         if "Verge Flashing" in e.Name:
-            assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5      # the flashing and its five sheets of the seam
+            # the flashing, its five sheets of the seam, and its two end pieces at the eaves corner
+            assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5 + 2
     assert len(out["info"][0]["verge_strips"]) == 2 and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
 
 

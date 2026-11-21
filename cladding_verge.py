@@ -391,7 +391,8 @@ def _cut_end(m, cuts, at_start=True):
         bu, bv = dot(e, u) / em, dot(e, v) / em
         end = dict(m, profile=ring, holes=[], depth=0.0, thickness=round(run * em, 4),
                    frame={"origin": o, "u": u, "v": v, "n": mv}, name="%s %s End" % (m["name"], label),
-                   vshift=[[[0.0, bu, 0.0, bv] for _q in ring]], drip_end=True)
+                   vshift=[[[0.0, bu, 0.0, bv] for _q in ring]], drip_end=True,
+                   of=m.get("of") or m["name"])               # one element with the length it ends (IFC)
         end.pop("drip_runs", None)
         end.pop("corner", None)
         out.append(end)
@@ -411,15 +412,47 @@ def join_drips(meshes, p):
         o = frame["origin"]
         uv = lambda q: (dot([a - b for a, b in zip(q, o)], U), dot([a - b for a, b in zip(q, o)], V))   # noqa: E731
         verge = [m for m in out_meshes if m.get("elevation") == name and m.get("verge_drip")]
+        flashings = [m for m in out_meshes if m.get("elevation") == name and m.get("ifc_type") == "verge_strip"
+                     and " Verge Flashing " in m.get("name", "") + " " and not m.get("drip_end")]
+        clips = [m for m in out_meshes if m.get("elevation") == name and m.get("ifc_type") == "verge_strip"
+                 and " Verge Clip " in m.get("name", "") + " " and not m.get("drip_end")]
         eaves = [m for m in out_meshes if m.get("elevation") == name and m.get("eaves_info") and m.get("tray_sheet")
                  and abs(dot(m["frame"]["n"], U)) > 0.99]
-        if not verge or not eaves:
+        if not (verge or flashings) or not eaves:
             continue
+        N = [float(c) for c in frame["n"]]
+        decks = [m for m in out_meshes if m.get("elevation") == name and m.get("ifc_type") == "deck"]
         for side in (-1.0, 1.0):
             mine = [m for m in verge if dot(m["frame"]["u"], U) * side > 0]
-            if not mine:
-                continue
-            low = min(mine, key=lambda m: uv(m["frame"]["origin"])[1])
+            extras = []
+            if mine:
+                low = min(mine, key=lambda m: uv(m["frame"]["origin"])[1])
+                runs = low.get("drip_runs") or [None, None]
+            else:
+                # a verge with cladding (ZI-05): its flashing, split at the plywood's underside into
+                # the part over the edge (mitred to the eaves bullnose) and the drop (down to the
+                # back of the eaves drip's drop), and the clip behind it cut with the drop
+                mine = [m for m in flashings if dot(m["frame"]["u"], U) * side > 0]
+                if not mine:
+                    continue
+                low = min(mine, key=lambda m: uv(m["frame"]["origin"])[1])
+                sgn = 1.0 if dot(low["frame"]["v"], N) > 0 else -1.0
+                soffit = min((float(m["depth"]) for m in decks), default=0.0)
+                poly = Polygon(low["profile"])
+                xs = [x for x, _y in low["profile"]]
+                big = 1.0e4
+                upper = Polygon([(min(xs) - 1, sgn * soffit), (max(xs) + 1, sgn * soffit), (max(xs) + 1, sgn * big), (min(xs) - 1, sgn * big)])
+                parts = [poly.intersection(upper), poly.difference(upper)]
+                runs = []
+                for g in parts:
+                    g = max(getattr(g, "geoms", [g]), key=lambda q: q.area) if not g.is_empty else None
+                    runs.append([[round(x, 4), round(y, 4)] for x, y in list(orient(g, 1.0).exterior.coords)[:-1]] if g is not None and g.area > 1.0 else None)
+                if not all(runs):
+                    continue
+                low = dict(low, drip_runs=runs)
+                i = out_meshes.index(next(m for m in mine if m["name"] == low["name"]))
+                out_meshes[i] = low
+                extras = [m for m in clips if dot(m["frame"]["u"], U) * side > 0]
             ue, v_lo = uv(low["frame"]["origin"])
             reach = max(x for x, _y in low["profile"])                     # the verge drip's outside, out from the roof's edge
             # the eaves drip nearest this verge, and which of its ends is there
@@ -455,18 +488,20 @@ def join_drips(meshes, p):
             corner = frame_to_world(frame, ue + side * reach, e_line - e_reach, 0.0)
             mitre = [side * U[i] + V[i] for i in range(3)]
             # the outside of the verge drip's drop: where the eaves drip's drop stops
-            v_drop = max(x for x, _y in low["drip_runs"][1]) if low.get("drip_runs") else VERGE_CLEAR
+            v_drop = max(x for x, _y in runs[1]) if runs and runs[1] else VERGE_CLEAR
             stop = frame_to_world(frame, ue + side * v_drop, 0.0, 0.0)
             # bring the verge drip down past the eaves, then cut both at the corner
             v_start = uv(back)[1] - 200.0
-            if v_start < v_lo:
-                low["frame"] = dict(low["frame"], origin=frame_to_world(frame, ue, v_start, 0.0))
-                low["thickness"] = float(low["thickness"]) + (v_lo - v_start)
-            for piece, cuts, first in (
-                    (low, [((low.get("drip_runs") or [None, None])[0], corner, mitre, "Bullnose"),
-                           ((low.get("drip_runs") or [None, None])[1], back, up, "Drop")], True),
+            for piece in [low] + extras:
+                pu, pv = uv(piece["frame"]["origin"])
+                if v_start < pv:
+                    piece["frame"] = dict(piece["frame"], origin=frame_to_world(frame, pu, v_start, 0.0))
+                    piece["thickness"] = float(piece["thickness"]) + (pv - v_start)
+            for piece, cuts, first in [
+                    (low, [(runs[0], corner, mitre, "Bullnose"), (runs[1], back, up, "Drop")], True),
                     (near, [((near.get("drip_runs") or [None, None])[0], corner, mitre, "Bullnose"),
-                            ((near.get("drip_runs") or [None, None])[1], stop, U, "Drop")], at_start)):
+                            ((near.get("drip_runs") or [None, None])[1], stop, U, "Drop")], at_start)] + [
+                    (x, [(None, back, up, "Drop")], True) for x in extras]:
                 pieces = _cut_end(piece, cuts, at_start=first)
                 if pieces:
                     i = out_meshes.index(piece)
