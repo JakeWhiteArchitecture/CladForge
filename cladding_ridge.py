@@ -59,7 +59,7 @@ OWN = ("ridge_cap", "ridge_filler")
 def ridge_of(elev):
     """The face's ridge, or None: none recorded, or the cladding is cut off below it (a
     top level picked under the ridge), in which case the face ends as any other does."""
-    r = (elev or {}).get("ridge")
+    r = (elev or {}).get("ridge") or (elev or {}).get("head_ridge")      # (a monopitch's head verge is cut as half a ridge: cladding_head)
     try:
         r = {"with": r.get("with"), "v": float(r["v"]), "u0": float(r["u0"]), "u1": float(r["u1"]),
              "k": float(r["k"]), "master": bool(r.get("master"))}

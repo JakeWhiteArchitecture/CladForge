@@ -13,7 +13,7 @@ import pytest  # noqa: E402
 import ifcopenshell  # noqa: E402
 
 from cladding_checks import check_rules  # noqa: E402
-from cladding_constants import frame_to_world, world_to_frame  # noqa: E402
+from cladding_constants import SEAM_AIR, frame_to_world, world_to_frame  # noqa: E402
 from cladding_eaves import (EAVES_TRAY, EAVES_NOSE, EAVES_LAP, EAVES_DROP, EAVES_CLEAR, EAVES_OVER, EAVES_WALL_LAP, EAVES_HOOK, EAVES_SUPPORT_LEG,  # noqa: E402
                             apron_drop, wall_stop, has_eaves)
 from cladding_constants import _parse  # noqa: E402
@@ -58,7 +58,8 @@ def test_the_plywood_and_the_trays_run_on_and_the_layers_under_run_to_the_edge()
     trays = [m for m in out["geometry"] if m["ifc_type"] == "plank"]
     assert len(drips) == len(trays) and sorted(d["of"] for d in drips) == sorted(m["name"] for m in trays)   # a length of it per tray
     assert all(d["name"] == d["of"] + " Eaves Drip" for d in drips)
-    assert sum(d["thickness"] for d in drips) == pytest.approx(info["length"])           # seam to seam, the eaves long
+    # seam to seam, the eaves long: less the break between one tray's sheet and the next under each seam
+    assert sum(d["thickness"] for d in drips) == pytest.approx(info["length"] - (len(trays) - 1) * SEAM_AIR)
     assert _runs(out)[0]["thickness"] == pytest.approx(info["length"])
 
 
