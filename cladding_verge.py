@@ -59,6 +59,7 @@ from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import orient
 
 from cladding_constants import SEAM_AIR, _prism, frame_to_world, frame_v
+from cladding_primitives import ring_at
 from cladding_ridge import ridge_of, _slot, _same_frame, _up_slope
 
 VERGE_CLEAR = 10.0    # mm – the drop, clear of the edge's face (dimensioned)
@@ -568,6 +569,9 @@ def close_cap_ends(meshes, p):
         reach = {0: 0.0, 1: 0.0}
         met = {0: False, 1: False}
         letters = {}
+        low = {}                                                            # end: the verge's lowest point on the plane (u, v in the cap's section)
+        cu, cv = [float(c) for c in f["u"]], [float(c) for c in frame_v(f)]
+        style = ridge_end(by.get(faces[0]) if faces else None)
         for name in faces:
             elev = by.get(name)
             r = ridge_of(elev) if elev else None
@@ -611,7 +615,21 @@ def close_cap_ends(meshes, p):
                     if hi < r["v"] - 600.0 or m.get("drip_end"):
                         continue                                            # not the length that reaches the ridge
                     i = out.index(m)
-                    out[i:i + 1] = _up_to_plane(m, point, normal, frame, r)
+                    new = _up_to_plane(m, point, normal, frame, r)
+                    out[i:i + 1] = new
+                    # the verge's lowest point where it meets the plane, in the cap's section
+                    size = math.sqrt(dot(normal, normal))
+                    for piece in new:
+                        d0, d1 = float(piece["depth"]), float(piece["depth"]) + float(piece["thickness"])
+                        for d in (d0, d1):
+                            for x, y in ring_at(piece, 0, d):
+                                q = frame_to_world(piece["frame"], x, y, d)
+                                if abs(dot([a - b for a, b in zip(q, point)], normal)) / size > 1.0:
+                                    continue                                # not on the plane
+                                w = [a - b for a, b in zip(q, o)]
+                                at = (dot(w, cu), dot(w, cv))
+                                if end not in low or at[1] < low[end][1]:
+                                    low[end] = at
         if not (met[0] or met[1]):
             continue
         # the cap over the verge, and its ends closed
@@ -619,11 +637,10 @@ def close_cap_ends(meshes, p):
         grow1 = reach[1] + t if met[1] else 0.0
         cap["frame"] = dict(f, origin=[c - grow0 * k for c, k in zip(o, n)])
         cap["thickness"] = length + grow0 + grow1
-        hull = Polygon(cap["profile"]).convex_hull
-        ring = [[round(x, 3), round(y, 3)] for x, y in list(orient(hull, 1.0).exterior.coords)[:-1]]
         for end in (0, 1):
             if not met[end]:
                 continue
+            ring = _stop_ring(cap["profile"], style, low.get(end))
             letter = letters.get(end) or ("L" if end == 0 else "R")
             at = 0.0 if end == 0 else float(cap["thickness"]) - t
             stop = _prism(ring, at, t, dict(cap["frame"]), "ridge_cap", "%s Stop End %s" % (cap["name"].replace(" Cap", ""), letter), cap.get("elevation"))
@@ -631,6 +648,35 @@ def close_cap_ends(meshes, p):
             out.append(stop)
         cap.setdefault("ridge_info" if cap.get("ridge_info") else "head_info", {})["stop_ends"] = [k for k in (0, 1) if met[k]]
     return out
+
+
+RIDGE_ENDS = ("square", "v", "flat")
+STOP_LAP = 10.0          # mm the stop end's skirt runs on down past the verges' lowest point at the apex
+
+
+def ridge_end(elev):
+    """The chain's ridge cap end ("ridge_end"): "square", the cap's own section, filled; "v",
+    a skirt from the cap's lower corners down to a point on the apex's centre line below
+    the verges; "flat", diagonals down to a short level edge across the apex there."""
+    v = (elev or {}).get("ridge_end")
+    return v if v in RIDGE_ENDS else "square"
+
+
+def _stop_ring(profile, style, low):
+    """The stop end's outline in the cap's section: the cap's section, filled, and for a
+    "v" or "flat" end a skirt hung down over the top of the two verges, to STOP_LAP below
+    *low* (the verges' lowest point where they meet at the apex: (u, v), or None)."""
+    pts = [(float(x), float(y)) for x, y in profile]
+    if style != "square" and low is not None:
+        x, y = low[0], low[1] - STOP_LAP
+        if style == "v":
+            pts.append((x, y))
+        else:
+            half = (max(q[0] for q in pts) - min(q[0] for q in pts)) / 2.0
+            w = max(20.0, half / 4.0)                                       # the level edge: an eighth of the cap's width each side of the centre
+            pts += [(x - w, y), (x + w, y)]
+    hull = Polygon(pts).convex_hull
+    return [[round(a, 3), round(b, 3)] for a, b in list(orient(hull, 1.0).exterior.coords)[:-1]]
 
 
 def re_flash(name):

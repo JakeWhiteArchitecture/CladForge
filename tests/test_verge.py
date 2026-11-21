@@ -126,6 +126,45 @@ def test_start_and_end_are_the_same_ends_of_the_roof_on_both_slopes_of_a_ridge()
     assert [m["name"] for m in caps] == ["Roof A Ridge Stop End L"] and caps[0]["of"] == "Roof A Ridge Cap"   # "start": one gable, one stop end
 
 
+@pytest.mark.parametrize("verge_type", ["g3", "cladding"])
+@pytest.mark.parametrize("style", ["square", "v", "flat"])
+def test_the_ridge_cap_stop_end_hangs_a_skirt_over_the_apex(style, verge_type):
+    """"v" and "flat" hang the stop end down over the two verges' joint at the apex, to
+    10 mm below their lowest point there: to a point on the centre line, or a short level
+    edge across it. "square" is the cap's section only."""
+    from cladding_constants import frame_v
+    from cladding_primitives import ring_at
+    _link, params, out = _roof(elev={"verge_type": verge_type, "ridge_end": style}, **SEAM)
+    geo = out["geometry"]
+    (cap,) = [m for m in geo if m["ifc_type"] == "ridge_cap" and not m.get("stop_end")]
+    stops = [m for m in geo if m.get("stop_end")]
+    assert len(stops) == 2
+    f = cap["frame"]
+    cu, cv = f["u"], frame_v(f)
+    sec = lambda q: [sum((q[i] - f["origin"][i]) * a[i] for i in range(3)) for a in (cu, cv)]   # noqa: E731
+    # the verges' lowest point where the two slopes' verges meet, on the centre line
+    lows = [sec(frame_to_world(m["frame"], x, y, d))[1] for m in geo if m["name"].endswith("Ridge End")
+            for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for x, y in ring_at(m, 0, d)
+            if abs(sec(frame_to_world(m["frame"], x, y, d))[0]) < 0.5]
+    verge_low = min(lows)
+    cap_low = min(q[1] for q in cap["profile"])
+    assert verge_low < cap_low - 30.0                                       # the joint shows below the cap's corners
+    for stop in stops:
+        ys = [q[1] for q in stop["profile"]]
+        bottom = [q for q in stop["profile"] if abs(q[1] - min(ys)) < 0.01]
+        if style == "square":
+            assert abs(min(ys) - cap_low) < 0.01
+        else:
+            assert abs(min(ys) - (verge_low - 10.0)) < 0.5
+            if style == "v":
+                assert len(bottom) == 1 and abs(bottom[0][0]) < 0.5
+            else:
+                assert len(bottom) == 2 and abs(bottom[0][0] + bottom[1][0]) < 0.5 and abs(bottom[0][0]) > 10.0
+    # still one element with its cap in the IFC
+    ifc = ifcopenshell.open(meshes_to_ifc(geo, params, out["info"]))
+    assert not [e for e in ifc.by_type("IfcElement") if "Stop End" in (e.Name or "")]
+
+
 def test_only_trays_running_with_the_fall_on_a_roof_get_a_verge():
     roof = dict(_slope("Roof A"), offset=0)
     seam = {"seam": True, "plank_orient": "vertical"}
