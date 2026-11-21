@@ -214,8 +214,10 @@ def test_a_top_level_picked_below_the_ridge_leaves_the_slopes_as_they_were():
 
 def test_one_cap_over_the_ridge_resting_on_the_seams():
     link, params, out = _roof(**SEAM)
-    (cap,) = [m for m in out["geometry"] if m["ifc_type"] == "ridge_cap"]
-    assert cap["elevation"] == "Roof A" and cap["thickness"] == 8000.0             # the master's, the ridge long
+    (cap,) = [m for m in out["geometry"] if m["ifc_type"] == "ridge_cap" and not m.get("stop_end")]
+    # the master's: the ridge long, and on out over each verge's drip, closed at each end (cladding_verge.close_cap_ends)
+    over = (float(cap["thickness"]) - 8000.0) / 2.0
+    assert cap["elevation"] == "Roof A" and 55.0 < over < 70.0
     info = cap["ridge_info"]
     assert info["between"] == ["Roof A", "Roof B"] and info["leg"] == RIDGE_LEG and info["gap"] == RIDGE_GAP
     xs, ys = [q[0] for q in cap["profile"]], [q[1] for q in cap["profile"]]
@@ -224,10 +226,13 @@ def test_one_cap_over_the_ridge_resting_on_the_seams():
     face = out["info"][0]["total_depth"]
     rest = face + params.get("seam_h", 25.0) + 2.0                                 # on the seams, 2 clear
     assert abs(max(ys) - (rest / math.cos(PITCH) + 0.3 / math.cos(PITCH))) < 1.0   # the apex, over the ridge line
-    # its ends are the ridge's ends, and it stands over the ridge line
+    # its ends are the ridge's ends, carried out over the verges, and it stands over the ridge line
     ends = [frame_to_world(cap["frame"], 0.0, 0.0, d) for d in (0.0, cap["thickness"])]
     along = sorted(round(sum((p[i] - RIDGE[i]) * U[i] for i in range(3)), 1) for p in ends)
-    assert along == [0.0, 8000.0]
+    assert along == [round(-over, 1), round(8000.0 + over, 1)]
+    stops = [m for m in out["geometry"] if m.get("stop_end")]
+    assert sorted(m["name"] for m in stops) == ["Roof A Ridge Stop End L", "Roof A Ridge Stop End R"]
+    assert all(m["of"] == cap["name"] and m["tray_sheet"] for m in stops)
     assert all(abs(sum((p[i] - RIDGE[i]) * N[i] for i in range(3))) < 0.05 and abs(p[2] - RIDGE[2]) < 0.05 for p in ends)
     # nothing built on either slope comes through the cap: every part under it is below its underside
     a = next(e for e in params["elevations"] if e["name"] == "Roof A")

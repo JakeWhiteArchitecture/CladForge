@@ -104,18 +104,26 @@ def test_start_and_end_are_the_same_ends_of_the_roof_on_both_slopes_of_a_ridge()
     "start" must still be one end of the roof, not one on each."""
     _link, params, out = _roof(elev={"verge": "start"}, **SEAM)
     a, b = params["elevations"]
-    strips = {m["elevation"]: m for m in _strips(out, "Support")}
+    strips = {m["elevation"]: m for m in _strips(out, "Support") if not m["name"].endswith("End")}
     assert strips["Roof A"]["name"].endswith("L") and strips["Roof B"]["name"].endswith("R")
     ends = [frame_to_world(m["frame"], 0.0, 0.0, 0.0) for m in strips.values()]
     from synthetic import U
     along = [sum((p[i] - ends[0][i]) * U[i] for i in range(3)) for p in ends]
     assert abs(along[1]) < 0.01                                                 # both at the one gable
-    # at the ridge each strip stops square, under the cap, the foot of its drop clear of the other slope's
+    # at the ridge each verge runs on up to the plane that bisects it, and is cut on it, so
+    # the two slopes' verges meet at the apex under the cap's stop end
+    from cladding_primitives import ring_at
     k = math.tan(math.radians(31.4))
-    assert 2930.0 < strips["Roof A"]["thickness"] < 3000.0
-    foot = strips["Roof A"]["thickness"] - 3000.0 - k * min(
-        world_to_frame(a["frame"], frame_to_world(strips["Roof A"]["frame"], x, y, 0.0))[2] for x, y in strips["Roof A"]["profile"])
-    assert foot <= -15.0 * math.sqrt(1 + k * k) + 0.5
+    for e in (a, b):
+        tops = [m for m in out["geometry"] if m["elevation"] == e["name"] and m["name"].endswith("Ridge End")
+                and (m.get("verge_support") or m.get("verge_drip"))]
+        assert len(tops) == 2, [m["name"] for m in tops]                         # the support and the drip
+        for m in tops:
+            on = lambda d: [world_to_frame(e["frame"], frame_to_world(m["frame"], x, y, d)) for x, y in ring_at(m, 0, d)]   # noqa: E731
+            off = [max(abs(q[1] - k * q[2] - e["ridge"]["v"]) for q in on(d)) for d in (0.0, float(m["thickness"]))]
+            assert min(off) < 0.5, (m["name"], off)                              # one end of it lies in the plane
+    caps = [m for m in out["geometry"] if m.get("stop_end")]
+    assert [m["name"] for m in caps] == ["Roof A Ridge Stop End L"] and caps[0]["of"] == "Roof A Ridge Cap"   # "start": one gable, one stop end
 
 
 def test_only_trays_running_with_the_fall_on_a_roof_get_a_verge():
