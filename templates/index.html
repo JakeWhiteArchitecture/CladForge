@@ -147,6 +147,9 @@
                         <button class="turn-btn active" data-value="on" onclick="onEdgeField('fold', 'on')">Folded at 45°</button>
                         <button class="turn-btn" data-value="off" onclick="onEdgeField('fold', 'off')">All flat</button>
                     </div></div>
+                <div class="field"><label>Seams follow <span class="unit">this face only: take the seam lines of another standing seam face (the roof below a wall, the wall over a roof), carried on at tray centres beyond it. A mitred wall abutment links the wall to its roof by itself</span></label>
+                    <div style="display:flex; gap:6px"><select id="edge-seamFrom" style="flex:1" onchange="setSeamFrom(this.value)"><option value="">Its own setting-out</option></select>
+                    <button id="seam-pipette" class="mini" onclick="startPipette()" title="Pipette: press, then click the clad face in the model whose seams the active face should follow. Esc cancels.">Pipette</button></div></div>
                 <div class="row edge-row">
                     <div class="field"><label>Top ends <span class="unit">the head, under sills</span></label>
                         <select id="edge-seamTop" onchange="onEdgeField('seamTop', this.value)"><option value="folded" selected>Folded</option><option value="flat">Flat</option></select></div>
@@ -165,6 +168,8 @@
                     <select id="edge-windows" onchange="onEdgeField('windows', this.value)"><option value="on" selected>On</option><option value="none">None</option></select></div>
                 <div class="field"><label>Head verge <span class="unit">a monopitch's level top edge: a G3 cap over the trays' ends that turns down over the wall below</span></label>
                     <select id="edge-head" onchange="onEdgeField('head', this.value)"><option value="auto" selected>Over a picked wall</option><option value="g3">On every level top edge</option><option value="none">None</option></select></div>
+                <div class="field"><label>Wall abutment <span class="unit">a slope's level top edge run up to a wall that stands on above it. By the wall: a G3 flashing turned up it where it is not clad or is in boards or panels; where it is standing seam, the trays turned up behind its cladding</span></label>
+                    <select id="edge-abutment" onchange="onEdgeField('abutment', this.value)"><option value="auto" selected>By the wall above</option><option value="g3">G3 flashing, on every level top edge</option><option value="below">Trays turned up, under standing seam</option><option value="mitre">Mitred, the seams welded through (standing seam above)</option><option value="none">None</option></select></div>
                 <div class="field"><label>Hip and ridge cap ends <span class="unit">an end that meets no other cap: run on and cut back to the roof's own edge (30 mm past the metal at the eaves), or cut square</span></label>
                     <select id="edge-capEnds" onchange="onEdgeField('capEnds', this.value)"><option value="edge" selected>Cut to the roof edge</option><option value="square">Square</option></select></div>
                 </div>
