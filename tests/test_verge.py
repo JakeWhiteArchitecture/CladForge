@@ -453,3 +453,18 @@ def test_verge_last_tray_full_lets_the_last_seam_stand_further_in_and_the_check_
         else:
             assert row["status"] == "pass", row["message"]
     assert found, "some offset puts the last seam past 370 with a full tray allowed"
+
+
+def test_with_cladding_the_eaves_corner_is_closed_as_the_g3_one():
+    """The verge with cladding at the eaves: the flashing's part over the edge mitres to the
+    eaves bullnose, its drop comes down to the back of the eaves drip's drop, the clip is cut
+    with it, and the eaves drip runs out to the flashing's outside."""
+    params, out = _one(elev={"verge_type": "cladding"})
+    geo = out["geometry"]
+    names = sorted(m["name"] for m in geo if m.get("drip_end") and m.get("ifc_type") == "verge_strip")
+    assert names == ["Roof A Verge Clip L Drop End", "Roof A Verge Clip R Drop End",
+                     "Roof A Verge Flashing L Bullnose End", "Roof A Verge Flashing L Drop End",
+                     "Roof A Verge Flashing R Bullnose End", "Roof A Verge Flashing R Drop End"]
+    assert all(m["of"] in (m["name"].rsplit(" ", 2)[0],) for m in geo if m.get("drip_end") and m.get("ifc_type") == "verge_strip")
+    eaves_ends = [m for m in geo if m.get("drip_end") and " Eaves Drip " in m["name"]]
+    assert len(eaves_ends) == 4                                          # bullnose and drop, at each verge

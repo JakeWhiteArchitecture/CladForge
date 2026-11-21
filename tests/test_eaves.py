@@ -33,7 +33,7 @@ def _aprons(out):
 
 def _runs(out):
     """The eaves, as built: one support profile along each."""
-    return [m for m in out["geometry"] if m.get("eaves_support")]
+    return [m for m in out["geometry"] if m.get("eaves_support") and not m.get("drip_end")]
 
 
 def _bottoms(out, kind, face=None):
@@ -392,3 +392,30 @@ def test_the_upper_slope_runs_on_over_the_lower_and_the_lower_stops_under_it(low
     rows = [r for r in check_rules(params, out["info"]) if r["name"].endswith("Eaves")]
     text = " ".join(r["message"] for r in rows)
     assert "a mansard: the steeper slope below, VMZ-SN-MA-KN-b1" in text and "this is its steeper lower slope" in text
+
+
+def test_at_a_hip_the_two_slopes_drips_are_mitred_on_the_hips_line_and_the_cap_foot_is_closed():
+    """Where an eaves runs into a hip, each slope's drip runs past its own corner and is cut
+    on the plumb plane through the hip's line on plan, so the two drips meet; the hip cap's
+    foot is closed by a stop end under each leg."""
+    from cladding_primitives import ring_at
+    _link, params, out = _hipped(elev={"eaves": "on"}, **SEAM)
+    by = {e["name"]: e for e in params["elevations"]}
+    ends = [m for m in out["geometry"] if m["name"].endswith("Hip End")]
+    assert {m["elevation"] for m in ends} == {"Roof A", "Roof C"}
+    for m in ends:
+        h = next(v for v in by[m["elevation"]]["valleys"] if v["kind"] == "hip")
+        (u1, v1), (u2, v2) = h["p1"], h["p2"]
+        f = by[m["elevation"]]["frame"]
+        a, b = frame_to_world(f, u1, v1, 0.0), frame_to_world(f, u2, v2, 0.0)
+        d = (b[0] - a[0], b[1] - a[1])
+        size = math.hypot(*d)
+        # one end face of the piece lies on the plumb plane through the hip's line on plan
+        off = []
+        for depth in (0.0, float(m["thickness"])):
+            pts = [frame_to_world(m["frame"], x, y, depth) for x, y in ring_at(m, 0, depth)]
+            off.append(max(abs((q[0] - a[0]) * d[1] - (q[1] - a[1]) * d[0]) / size for q in pts))
+        assert min(off) < 0.5, (m["name"], off)
+        assert m["of"]                                                   # one element with its tray (or support)
+    stops = sorted(m["name"] for m in out["geometry"] if m.get("stop_end"))
+    assert stops == ["Roof A Hip Stop End Roof C", "Roof C Hip Stop End Roof A"]

@@ -53,6 +53,8 @@ Not modelled: the vertical plywood and the timber behind it, the fixings, the li
 strip gives the tray's edge, the insect mesh, and the wall's cladding stopping under the
 roof's plywood (heal the wall up to the roof for that)."""
 
+import math
+
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import orient
 
@@ -633,3 +635,53 @@ def close_cap_ends(meshes, p):
 
 def re_flash(name):
     return " Verge Flashing " in name + " " or " Verge Clip " in name + " "
+
+
+def join_hip_drips(meshes, p):
+    """Where an eaves runs into a hip, the two slopes' eaves drips each ended square at the
+    corner of their own outline and left a notch at the hip's foot. Each drip (and the
+    support under it) now runs on past the corner and is cut on the plumb plane through
+    the hip's line on plan, so the two slopes' drips meet in that plane, mitred."""
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    out = list(meshes)
+    for elev in p.get("elevations", []):
+        name, frame = elev.get("name"), elev["frame"]
+        hips = [v for v in (elev.get("valleys") or []) if v.get("kind") == "hip" and v.get("p1") and v.get("p2")]
+        if not hips:
+            continue
+        U, V = [float(c) for c in frame["u"]], [float(c) for c in frame_v(frame)]
+        o = frame["origin"]
+        uv = lambda q: (dot([a - b for a, b in zip(q, o)], U), dot([a - b for a, b in zip(q, o)], V))   # noqa: E731
+        lengths = [m for m in out if m.get("elevation") == name and (m.get("eaves_info") or m.get("eaves_support")
+                   or (m.get("tray_sheet") and " Eaves Drip" in m.get("name", ""))) and not m.get("drip_end")
+                   and abs(dot(m["frame"]["n"], U)) > 0.99]
+        for h in hips:
+            p1, p2 = [[float(c) for c in h["p1"]], [float(c) for c in h["p2"]]]
+            foot, head = (p1, p2) if p1[1] < p2[1] else (p2, p1)
+            fw, hw = frame_to_world(frame, foot[0], foot[1], 0.0), frame_to_world(frame, head[0], head[1], 0.0)
+            d = [hw[0] - fw[0], hw[1] - fw[1]]
+            size = math.hypot(*d)
+            if size < 1.0:
+                continue
+            normal = [-d[1] / size, d[0] / size, 0.0]                        # plumb, through the hip's line on plan
+            for m in list(lengths):
+                if m not in out:
+                    continue
+                a = uv(m["frame"]["origin"])[0]
+                fwd = dot(m["frame"]["n"], U) > 0
+                b = a + float(m["thickness"]) * (1.0 if fwd else -1.0)
+                lo, hi = min(a, b), max(a, b)
+                if min(abs(lo - foot[0]), abs(hi - foot[0])) > 250.0:
+                    continue                                                 # this length does not reach the hip's foot
+                left = abs(lo - foot[0]) < abs(hi - foot[0])                 # the hip is at its low-u end
+                at_start = left == fwd
+                grow = 400.0
+                if at_start:
+                    m["frame"] = dict(m["frame"], origin=[c - grow * k for c, k in zip(m["frame"]["origin"], m["frame"]["n"])])
+                m["thickness"] = float(m["thickness"]) + grow
+                pieces = _cut_end(m, [(None, fw, normal, "Hip")], at_start=at_start)
+                if pieces:
+                    i = out.index(m)
+                    out[i:i + 1] = pieces
+                    lengths.remove(m)
+    return out
