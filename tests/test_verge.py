@@ -175,6 +175,32 @@ def test_the_ridge_cap_stop_end_hangs_a_skirt_over_the_apex(style, verge_type):
     assert not [e for e in ifc.by_type("IfcElement") if "Stop End" in (e.Name or "")]
 
 
+@pytest.mark.parametrize("angle", [70.0, 90.0, 110.0])
+def test_the_stop_end_angle_turns_the_v_s_edges_off_the_flanges(angle):
+    """The chain's stop end angle is the angle inside the stop end between each flange and
+    the V's edge off its lower corner: more points the V further down."""
+    _link, params, out = _roof(elev={"ridge_end": "v", "ridge_v_angle": angle}, **SEAM)
+    geo = out["geometry"]
+    (cap,) = [m for m in geo if m["ifc_type"] == "ridge_cap" and not m.get("stop_end")]
+    apex = max(cap["profile"], key=lambda q: q[1])
+    for stop in [m for m in geo if m.get("stop_end")]:
+        ring = stop["profile"]
+        tip = min(ring, key=lambda q: q[1])
+        i = ring.index(tip)
+        for sign in (1, -1):
+            end = max(cap["profile"], key=lambda q: q[0] * sign)
+            corner = [q for q in (ring[i - 1], ring[(i + 1) % len(ring)]) if q[0] * sign > 0][0]
+            up = (apex[0] - end[0], apex[1] - end[1])                            # back up the flange
+            edge = (tip[0] - corner[0], tip[1] - corner[1])
+            cos = (up[0] * edge[0] + up[1] * edge[1]) / math.hypot(*up) / math.hypot(*edge)
+            assert abs(math.degrees(math.acos(cos)) - angle) < 0.5
+    tips = {}
+    for a in (70.0, 110.0):
+        _l, _p, o = _roof(elev={"ridge_end": "v", "ridge_v_angle": a}, **SEAM)
+        tips[a] = min(q[1] for m in o["geometry"] if m.get("stop_end") for q in m["profile"])
+    assert tips[110.0] < tips[70.0]
+
+
 def test_only_trays_running_with_the_fall_on_a_roof_get_a_verge():
     roof = dict(_slope("Roof A"), offset=0)
     seam = {"seam": True, "plank_orient": "vertical"}

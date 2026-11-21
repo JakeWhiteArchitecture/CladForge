@@ -572,6 +572,7 @@ def close_cap_ends(meshes, p):
         low = {}                                                            # end: the verge's lowest point on the plane (u, v in the cap's section)
         cu, cv = [float(c) for c in f["u"]], [float(c) for c in frame_v(f)]
         style = ridge_end(by.get(faces[0]) if faces else None)
+        angle = v_angle(by.get(faces[0]) if faces else None)
         for name in faces:
             elev = by.get(name)
             r = ridge_of(elev) if elev else None
@@ -640,7 +641,7 @@ def close_cap_ends(meshes, p):
         for end in (0, 1):
             if not met[end]:
                 continue
-            ring = _stop_ring(cap["profile"], style, low.get(end))
+            ring = _stop_ring(cap["profile"], style, low.get(end), angle)
             letter = letters.get(end) or ("L" if end == 0 else "R")
             at = 0.0 if end == 0 else float(cap["thickness"]) - t
             stop = _prism(ring, at, t, dict(cap["frame"]), "ridge_cap", "%s Stop End %s" % (cap["name"].replace(" Cap", ""), letter), cap.get("elevation"))
@@ -651,6 +652,7 @@ def close_cap_ends(meshes, p):
 
 
 RIDGE_ENDS = ("square", "v", "flat")
+V_ANGLE = 90.0           # degrees the stop end's edge turns off the cap's flange: square to it
 STOP_LAP = 10.0          # mm the stop end's skirt runs on down past the verges' lowest point at the apex
 
 
@@ -663,55 +665,109 @@ def ridge_end(elev):
     return v if v in RIDGE_ENDS else "square"
 
 
-def _stop_ring(profile, style, low):
+def v_angle(elev):
+    """The chain's stop end edge angle ("ridge_v_angle", degrees off the cap's flange,
+    inside the stop end): V_ANGLE, square to it, by default; 30 to 150."""
+    try:
+        a = float((elev or {}).get("ridge_v_angle"))
+    except (TypeError, ValueError):
+        return V_ANGLE
+    return max(30.0, min(150.0, a)) if math.isfinite(a) else V_ANGLE
+
+
+def _stop_ring(profile, style, low, angle=V_ANGLE):
     """The stop end's outline in the cap's section: the cap's section, filled, and for a
-    "v" or "flat" end a skirt hung down over the top of the two verges, to STOP_LAP below
-    *low* (the verges' lowest point where they meet at the apex: (u, v), or None). The V's
-    edges leave the flanges' lower corners square to them (_square_tip), its point no
-    higher than that lap below the verges."""
+    "v" or "flat" end a skirt hung down over the top of the verges. *low* is the verges'
+    lowest point where they meet the cap's plane ((u, v), or None).
+
+    A ridge cap (a flange each side of its apex): "v" runs an edge from each flange's lower
+    corner at *angle* to the flange (90: square to it, _flange_edge) to where the two meet,
+    no higher than STOP_LAP below *low*; "flat" runs diagonals down to a short level edge
+    across the apex, STOP_LAP below *low*.
+
+    A monopitch's head verge cap (one flange, and an upstand down the wall's face): either
+    closes the cap's end as a box, its edge leaving the flange's lower corner at *angle* and
+    running down to a level bottom at the upstand's foot (or STOP_LAP below *low* if that is
+    lower), then level back to the upstand (_mono_ring)."""
     pts = [(float(x), float(y)) for x, y in profile]
-    if style != "square" and low is not None:
-        x, y = low[0], low[1] - STOP_LAP
-        if style == "v":
-            tip = _square_tip(pts)
-            pts.append((tip[0], min(tip[1], y)) if tip else (x, y))
-        else:
-            half = (max(q[0] for q in pts) - min(q[0] for q in pts)) / 2.0
-            w = max(20.0, half / 4.0)                                       # the level edge: an eighth of the cap's width each side of the centre
-            pts += [(x - w, y), (x + w, y)]
+    if style != "square":
+        sides = [_flange_edge(pts, sign, angle) for sign in (1.0, -1.0)]
+        if not all(sides):
+            pts = _mono_ring(pts, [e for e in sides if e], low, angle)
+        elif low is not None:
+            x, y = low[0], low[1] - STOP_LAP
+            if style == "v":
+                tip = _meet(*sides)
+                pts.append((tip[0], min(tip[1], y)) if tip else (x, y))
+            else:
+                half = (max(q[0] for q in pts) - min(q[0] for q in pts)) / 2.0
+                w = max(20.0, half / 4.0)                                   # the level edge: an eighth of the cap's width each side of the centre
+                pts += [(x - w, y), (x + w, y)]
     hull = Polygon(pts).convex_hull
     return [[round(a, 3), round(b, 3)] for a, b in list(orient(hull, 1.0).exterior.coords)[:-1]]
 
 
-def _square_tip(pts):
-    """Where the V point's two edges meet when each leaves its flange's lower corner at a
-    right angle to the flange (the cap's section, *pts*: the apex its highest point, each
-    flange running down from it to its outer end, hem and all). None where the cap has
-    no flange on one side (a head verge cap's half) or the two edges do not meet below."""
+def _flange_edge(pts, sign, angle=V_ANGLE):
+    """The stop end's edge off one flange of a cap's section *pts* (the apex its highest
+    point; *sign* +1 the flange out along +u, -1 along -u): its start, the flange's lower
+    corner (furthest down it, past any hem), and its direction, turned *angle* degrees
+    from the flange (measured inside the stop end: 90 is square to it, more points it
+    further down), kept between plumb and nearly level. None where there is no flange
+    that side."""
     ax, ay = max(pts, key=lambda q: q[1])
-    sides = []
-    for sign in (1.0, -1.0):
-        side = [q for q in pts if (q[0] - ax) * sign > 1.0]
-        if not side:
-            return None
-        out = max(side, key=lambda q: (q[0] - ax) * sign)                   # the flange's outer end
-        fx, fy = out[0] - ax, out[1] - ay                                   # along the flange, down and out
-        size = math.hypot(fx, fy)
-        if size < 1.0:
-            return None
-        foot = max(side, key=lambda q: (q[0] - ax) * fx + (q[1] - ay) * fy)  # furthest down it (past any hem)
-        # square to the flange, inward and down
-        dx, dy = (fy / size, -fx / size) if sign > 0 else (-fy / size, fx / size)
-        if dy > -0.05:
-            return None
-        sides.append((foot, (dx, dy)))
-    (p, d), (q, e) = sides
+    side = [q for q in pts if (q[0] - ax) * sign > 1.0]
+    if not side:
+        return None
+    out = max(side, key=lambda q: (q[0] - ax) * sign)                       # the flange's outer end
+    fx, fy = out[0] - ax, out[1] - ay                                       # along the flange, down and out
+    size = math.hypot(fx, fy)
+    if size < 1.0:
+        return None
+    foot = max(side, key=lambda q: (q[0] - ax) * fx + (q[1] - ay) * fy)
+    ux, uy = -fx / size, -fy / size                                         # back up the flange
+    a = math.radians(angle) * sign                                          # turned away from it, inward and down
+    dx, dy = ux * math.cos(a) - uy * math.sin(a), ux * math.sin(a) + uy * math.cos(a)
+    if dx * sign > 0.0:
+        dx, dy = 0.0, -1.0                                                  # never back out past plumb
+    if dy > -0.05:
+        dx, dy = -sign * math.sqrt(1.0 - 0.05 ** 2), -0.05                  # nor up into the cap
+    return foot, (dx, dy)
+
+
+def _meet(left, right):
+    """Where the edges off a ridge cap's two flanges meet, below both corners, or None."""
+    (p, d), (q, e) = left, right
     det = d[0] * -e[1] + e[0] * d[1]
     if abs(det) < 1e-6:
         return None
     t = ((q[0] - p[0]) * -e[1] + e[0] * (q[1] - p[1])) / det
     tip = (p[0] + t * d[0], p[1] + t * d[1])
     return tip if t > 0 and tip[1] < min(p[1], q[1]) else None
+
+
+def _mono_ring(pts, edges, low, angle=V_ANGLE):
+    """A head verge cap's stop end, closed as a box: its section, then from the flange's
+    lower corner an edge at *angle* to the flange down to a level bottom, and level back
+    to the upstand down the wall's face. The bottom is at the upstand's foot, or STOP_LAP
+    below the verge's lowest point at the plane (*low*) if that is lower."""
+    if not edges:
+        return pts
+    (foot, (dx, dy)), = edges
+    ax = max(pts, key=lambda q: q[1])[0]
+    back = [q for q in pts if abs(q[0] - ax) <= 5.0]                        # the upstand, down from the apex
+    if not back:
+        return pts
+    x_up = (min if foot[0] > ax else max)(q[0] for q in back)              # the upstand's outer face
+    y = min(q[1] for q in back)
+    if low is not None:
+        y = min(y, low[1] - STOP_LAP)
+    if y >= foot[1]:
+        return pts
+    t = (y - foot[1]) / dy
+    x = foot[0] + t * dx
+    if (x - x_up) * (foot[0] - x_up) < 0.0:
+        x = x_up                                                            # it would cross the upstand: the bottom is a point
+    return pts + [(x, y), (x_up, y)]
 
 
 def re_flash(name):
