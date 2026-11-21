@@ -11,7 +11,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 // folded or flat.
 const HEADS = ['auto', 'g3', 'none'];       // a monopitch's head verge: over a picked wall, on every level top edge, or not at all
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', eaves: 'on', head: 'auto', capEnds: 'edge' };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', eaves: 'on', head: 'auto', windows: 'on', capEnds: 'edge' };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -95,6 +95,7 @@ function syncEdgeFields() {
     if (document.activeElement !== over) over.value = ed.vergeOver == null ? '' : ed.vergeOver;
     over.disabled = ed.vergeType !== 'cladding';
     document.getElementById('edge-eaves').value = ed.eaves === 'none' ? 'none' : 'on';
+    document.getElementById('edge-windows').value = ed.windows === 'none' ? 'none' : 'on';
     document.getElementById('edge-head').value = HEADS.includes(ed.head) ? ed.head : 'auto';
     document.getElementById('edge-capEnds').value = ed.capEnds === 'square' ? 'square' : 'edge';
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
@@ -110,6 +111,7 @@ function setEdge(e, key, value) {
     else if (key === 'vergeType') e.chain.edges.vergeType = VERGE_TYPES.includes(value) ? value : 'g3';
     else if (key === 'vergeOver') { const v = parseFloat(value); e.chain.edges.vergeOver = isFinite(v) ? Math.max(0, Math.min(400, v)) : null; }
     else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
+    else if (key === 'windows') e.chain.edges.windows = value === 'none' ? 'none' : 'on';
     else if (key === 'head') e.chain.edges.head = HEADS.includes(value) ? value : 'auto';
     else if (key === 'capEnds') e.chain.edges.capEnds = value === 'square' ? 'square' : 'edge';
     else {
@@ -1083,6 +1085,7 @@ function elevationRecords() {
                                                    verge_type: VERGE_TYPES.includes(chain.edges.vergeType) ? chain.edges.vergeType : 'g3',
                                                    verge_oversail: chain.edges.vergeOver == null ? null : chain.edges.vergeOver,
                                                    eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
+                                                   window_flashings: chain.edges.windows === 'none' ? 'none' : 'on',
                                                    head: HEADS.includes(chain.edges.head) ? chain.edges.head : 'auto',
                                                    cap_ends: chain.edges.capEnds === 'square' ? 'square' : 'edge',
                                                    seam_top: chain.edges.seamTop === 'flat' ? 'flat' : 'folded',
@@ -2162,7 +2165,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_lod', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_head', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_window', 'cladding_lod', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_head', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
                          'ifc_generator'];
         const v = Date.now();

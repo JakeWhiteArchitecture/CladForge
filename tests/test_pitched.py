@@ -172,6 +172,11 @@ def test_the_cladding_on_a_slope_is_the_walls_turned_onto_it(kw, deg):
     leans out over the ground."""
     _p0, up = _build(0.0, kw)
     _p1, tipped = _build(deg, kw)
+    # the sill capping and head strip of a standing seam wall's windows (cladding_window) are an upright
+    # wall's only: an opening in a slope is a rooflight. Everything else is compared.
+    wall_only = lambda o: dict(o, geometry=[m for m in o["geometry"]                 # noqa: E731
+                                            if m["ifc_type"] not in ("window_flashing", "sill_board")])
+    up, tipped = wall_only(up), wall_only(tipped)
     assert [m["name"] for m in tipped["geometry"]] == [m["name"] for m in up["geometry"]]
     kinds = {m["ifc_type"] for m in up["geometry"]}
     assert {"reveal", "closer", "batten"} <= kinds
@@ -274,7 +279,9 @@ def test_a_pitched_face_exports_to_ifc_on_its_slope():
     assert ifc.schema.startswith("IFC4X3")
     products = [e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]
     up_path = meshes_to_ifc(up["geometry"], _p, up["info"])
-    assert len(products) == len([e for e in ifcopenshell.open(up_path).by_type("IfcElement") if not e.is_a("IfcElementAssembly")])
+    # (less an upright wall's window sill and head, cladding_window: a slope's openings are rooflights)
+    assert len(products) == len([e for e in ifcopenshell.open(up_path).by_type("IfcElement") if not e.is_a("IfcElementAssembly")
+                                 and e.ObjectType not in ("Window flashing", "Sill board")])
     # every extrusion runs along the slope's own axes: none along world Z alone unless the upright one's does
     n = out["geometry"][0]["frame"]["n"]
     assert abs(n[2] - math.sin(math.radians(deg))) < 1e-6
