@@ -23,6 +23,7 @@ from cladding_eaves import eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
 from cladding_abut import abut_over, abut_parts, abut_ridges, join_abuts
 from cladding_rake import rake_ends, rake_parts
+from cladding_window import window_parts
 from cladding_lod import at_lod, masses, tag  # noqa: F401 — at_lod is the app's and the exporters'
 from cladding_match import plan_matches
 
@@ -200,6 +201,7 @@ def _preview_one(p, ready=None):
     meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
     meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
     meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
+    meshes = window_parts(meshes, p, infos)  # a standing seam wall's openings: the sill capping and the head strip
     meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
     meshes = abut_parts(meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
     meshes = abut_over(meshes, p, infos)     # and that wall's layers stop above the roof

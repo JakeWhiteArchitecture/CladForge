@@ -215,6 +215,15 @@ def check_rules(params, infos=None):
                     what + ": every layer is cut to the plane that bisects it, the boards %.0f mm apart across the mitre" % r["gap"] + tail
                     + (". Agree a standing seam corner on a raking line with the supplier" if p["seam"] else ""), r["length"])
     for i in infos:
+        wins = i.get("windows") or []
+        if wins:
+            sills, heads = [w for w in wins if w.get("sill")], [w for w in wins if w.get("head")]
+            add("Windows", "pass", "%s: %d opening%s in standing seam (VMZ-SN-MA-RA-07): %d with a sill capping on a board falling "
+                "1 degree outward, dropping 60 mm over the head of the cladding below, whose top edge is turned out behind it; %d with "
+                "a drip strip at the head, behind the foot of the cladding over the opening. Only the 60 mm, the 10 mm at the frame "
+                "and the fall are on the sheet: agree the other sizes with the supplier. The jambs are the chain's reveal detail"
+                % (i["elevation"], len(wins), "" if len(wins) == 1 else "s", len(sills), len(heads)), len(wins))
+    for i in infos:
         eaves = i.get("eaves") or []
         if eaves:
             over = sorted({e["over"] for e in eaves if e.get("over")})
