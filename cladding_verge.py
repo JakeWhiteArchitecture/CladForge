@@ -512,6 +512,8 @@ def join_drips(meshes, p):
             a, b = end_u(near)
             if min(abs(a - ue), abs(b - ue)) > VERGE_TRAY + 60.0:
                 continue                                                   # this eaves does not reach the verge
+            if v_lo - uv(near["frame"]["origin"])[1] > 400.0:
+                continue                                                   # nor this verge the eaves: a gablet's rake starts at the hip's top
             # run the eaves drip on out to the outside of the verge's drip; with cladding (ZI-05)
             # only to the flashing's inside face, the flashing's end closing it
             clad = bool(extras) or " Verge Flashing " in low.get("name", "") + " "

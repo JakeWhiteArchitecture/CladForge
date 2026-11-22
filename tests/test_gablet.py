@@ -144,8 +144,17 @@ def test_the_hip_cap_is_cut_on_the_rake_seam_s_plane_and_nothing_stands_above_th
         t_y = frame_to_world(by[name]["frame"], T[0], T[1], 0.0)[1]
         ys = [q[1] for m in legs for q in pts(m)]
         assert (max(ys) if sign > 0 else min(ys)) == pytest.approx(t_y, abs=1.0)    # and is cut across at the drip's foot
-        seams = [m for m in geo if m["elevation"] == name and m.get("verge_seam")]
-        assert min(min(q[1] for q in m["profile"]) for m in seams) == pytest.approx(S[1], abs=0.5)
+        # past the rake's foot the hip end's flange runs on along the gable's foot, in under the drip
+        (flange,) = [m for m in geo if m["elevation"] == "West" and m["name"] == "West Hip Cap %s Flange" % name]
+        fy = [q[1] for q in pts(flange)]
+        assert (min(fy) if sign > 0 else max(fy)) == pytest.approx(t_y, abs=1.0) and abs(max(fy) - min(fy)) > 100.0
+        drip_low = min(q[2] - (q[1] if sign > 0 else 6000.0 - q[1]) * t for m in geo if m["elevation"] == name
+                       and " Verge Flashing " in m["name"] + " " for q in pts(m))
+        far = [q for q in pts(flange) if abs(q[1] - t_y) > 50.0]
+        assert all(q[2] - (q[1] if sign > 0 else 6000.0 - q[1]) * t >= drip_low - 1.0 for q in far)    # no lower than the drip's edge
+        # the verge's flashing runs only up the rake, from its foot: not down to the eaves
+        assert all(min(sign * (q[1] - t_y) for q in pts(m)) > -100.0
+                   for m in geo if m["elevation"] == name and " Verge Flashing " in m["name"] + " ")
     assert not [m for m in geo if "Hip Dressing" in m["name"] or "Hip Top Stop End" in m["name"]]
     # nothing of the abutment at the gable's foot (the hip end's, the gable's own) stands above the slopes' plywood
     for m in geo:
