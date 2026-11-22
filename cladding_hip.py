@@ -503,51 +503,36 @@ def _as_plate(m):
     return plate
 
 
-def _flange_on(out, by, elev, h, world_t, up_rake):
-    """Carry the hip end's leg of the cap (cut across at the rake's foot) on along the
-    gable's foot, level and up the rake, until it runs in under the verge's drip: a sheet
-    in the leg's plane from that cut to the plane through the drip's bottom edge parallel to
-    the slope (one element with the leg)."""
-    from cladding_constants import frame_to_world, world_to_frame
-    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
-    name, other = elev.get("name"), by.get(h["with"])
-    if other is None:
+def _join_rake_seam(out, name, frame, u_s, T):
+    """The verge's edge seam (its sheets laid in the face's frame, standing on the rake's line)
+    carried down from the rake's foot *T* to the tray seam on the same line below it, each
+    sheet to the top of the same sheet of that seam (the overcloak to the overcloak, its bend
+    to its bend: the tray seam's head is cut on the hip's slant, so its sheets end at
+    different heights), and set on that seam's line, so the two meet end to end. Nothing
+    where there is no tray seam there."""
+    on = lambda m: abs(float(m.get("seam_line") or -1e9) - u_s) < 3.0 and _same_frame(m["frame"], frame)   # noqa: E731
+    def part(m):                                                            # "overcloak bend", "undercloak", ...
+        tail = m.get("name", "").split(" Seam ", 1)[-1]
+        return tail[2:] if tail[:2] in ("L ", "R ") else tail
+    trays = [m for m in out if m.get("elevation") == name and m.get("seam_part") and not m.get("verge_seam") and on(m)]
+    edge = [m for m in out if m.get("elevation") == name and m.get("verge_seam") and on(m)
+            and abs(min(q[1] for q in m["profile"]) - T[1]) < 150.0]
+    if not trays or not edge:
         return
-    short = lambda n: str(n or "").replace("Elevation ", "")              # noqa: E731
-    leg = next((m for m in out if m.get("elevation") == h["with"] and m.get("cap_leg")
-                and m.get("name") == "%s Hip Cap %s" % (h["with"], short(name))), None)
-    drips = [m for m in out if m.get("elevation") == name and (m.get("verge_drip") or " Verge Flashing " in m.get("name", "") + " ")]
-    if leg is None or not drips:
-        return
-    f, N, o = elev["frame"], [float(c) for c in elev["frame"]["n"]], elev["frame"]["origin"]
-    off = lambda q: dot([a - b for a, b in zip(q, o)], N)                   # noqa: E731  depth off the slope's face
-    low = min(off(frame_to_world(m["frame"], x, y, dd)) for m in drips
-              for dd in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for x, y in ring_at(m, 0, dd)
-              if 0.0 < dot([a - b for a, b in zip(frame_to_world(m["frame"], x, y, dd), world_t)], up_rake) < 600.0)   # near the rake's foot
-    rate = dot(up_rake, N)                                                  # depth off the slope per mm up the rake
-    if rate > -1e-6:
-        return
-    mid = float(leg["depth"]) + float(leg["thickness"]) / 2.0
-    fo = leg["frame"]
-    corners = [(q, frame_to_world(fo, x, y, mid)) for q, (x, y) in zip(leg["profile"], ring_at(leg, 0, mid))]
-    edge = [w for _q, w in corners if abs(dot([a - b for a, b in zip(w, world_t)], up_rake)) < 0.5]
-    if len(edge) < 2:
-        return
-    a, b = edge[0], edge[-1]
-    far = []
-    for w in (a, b):
-        step = (low - off(w)) / rate
-        if step <= 1.0:
-            return
-        far.append([c + step * k for c, k in zip(w, up_rake)])
-    ring = [world_to_frame(fo, w)[:2] for w in (a, b, far[1], far[0])]
-    pg = orient(Polygon(ring), 1.0)
-    if pg.area < 1.0:
-        return
-    sheet = _prism([[round(x, 3), round(y, 3)] for x, y in list(pg.exterior.coords)[:-1]], float(leg["depth"]), float(leg["thickness"]),
-                   fo, "ridge_cap", "%s Flange" % leg["name"], h["with"])
-    sheet.update(of=leg["name"], tray_sheet=True, color=leg.get("color", sheet["color"]))
-    out.append(sheet)
+    tops = {}
+    for m in trays:
+        top = max(q[1] for dd in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for q in ring_at(m, 0, dd))
+        tops[part(m)] = min(tops.get(part(m), top), top)
+    line = float(trays[0]["seam_line"])
+    for m in edge:
+        top = tops.get(part(m), min(tops.values()))
+        shift = line - float(m["seam_line"])
+        low = min(q[1] for q in m["profile"])
+        for q in m["profile"]:
+            q[0] = round(q[0] + shift, 3)
+            if q[1] <= low + 0.5:
+                q[1] = round(min(q[1], top - 2.0), 3)                   # a little into its partner: no gap between
+        m["seam_line"] = line
 
 
 def gablet_hip_tops(meshes, p, infos):
@@ -557,9 +542,7 @@ def gablet_hip_tops(meshes, p, infos):
     cut on that plane**: on the hip end's side its leg runs on up to meet the verge's drip
     face, and is cut square across where the drip's foot comes down to it (a vertical plane
     square to the gable face through the rake's foot); on the slope's side its leg, which would ride over the
-    seam, ends against it; past the rake's foot the hip end's flange runs on along the
-    gable's foot until it is under the verge's drip (_flange_on). The trays' upstands along
-    the hip are cut on it too. **The abutment parts at the gable's foot**, the hip end's (the plywood stood up
+    seam, ends against it. The trays' upstands along the hip are cut on it too. **The abutment parts at the gable's foot**, the hip end's (the plywood stood up
     the gable, the trays' upstands, the saddles) and the gable's own (its edge flashing),
     where they rise through the slope's plane at its corner, are cut back to the underside
     of the slope's plywood."""
@@ -605,9 +588,9 @@ def gablet_hip_tops(meshes, p, infos):
                             break
                     if not kept:
                         out.remove(m)
-            # the hip end's flange carried on along the gable's foot, from that cut, until it runs in
-            # under the verge's drip: to the plane through the drip's bottom edge, parallel to the slope
-            _flange_on(out, by, elev, h, world_t, up_rake)
+            # the verge's edge seam carried down the rake's line to meet the tray seam below it, on that
+            # seam's own line, so the two read as one seam from the eaves to the ridge
+            _join_rake_seam(out, name, frame, u_s, T)
             # the hip end's abutment parts at the gable's foot, cut back under this slope's plywood
             decks = [m for m in out if m.get("elevation") == name and m.get("ifc_type") == "deck" and _same_frame(m["frame"], frame)]
             if not decks:

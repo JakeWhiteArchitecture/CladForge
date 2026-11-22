@@ -144,14 +144,17 @@ def test_the_hip_cap_is_cut_on_the_rake_seam_s_plane_and_nothing_stands_above_th
         t_y = frame_to_world(by[name]["frame"], T[0], T[1], 0.0)[1]
         ys = [q[1] for m in legs for q in pts(m)]
         assert (max(ys) if sign > 0 else min(ys)) == pytest.approx(t_y, abs=1.0)    # and is cut across at the drip's foot
-        # past the rake's foot the hip end's flange runs on along the gable's foot, in under the drip
-        (flange,) = [m for m in geo if m["elevation"] == "West" and m["name"] == "West Hip Cap %s Flange" % name]
-        fy = [q[1] for q in pts(flange)]
-        assert (min(fy) if sign > 0 else max(fy)) == pytest.approx(t_y, abs=1.0) and abs(max(fy) - min(fy)) > 100.0
-        drip_low = min(q[2] - (q[1] if sign > 0 else 6000.0 - q[1]) * t for m in geo if m["elevation"] == name
-                       and " Verge Flashing " in m["name"] + " " for q in pts(m))
-        far = [q for q in pts(flange) if abs(q[1] - t_y) > 50.0]
-        assert all(q[2] - (q[1] if sign > 0 else 6000.0 - q[1]) * t >= drip_low - 1.0 for q in far)    # no lower than the drip's edge
+        assert not [m for m in geo if m["name"].endswith("Flange")]
+        # the rake's edge seam comes down to the tray seam below it, sheet to sheet, on its line: one seam
+        on = [m for m in geo if m["elevation"] == name and m.get("seam_part") and abs(float(m.get("seam_line") or -1e9) - u_s) < 3.0]
+        edge = [m for m in on if m.get("verge_seam")]
+        trays = [m for m in on if not m.get("verge_seam")]
+        assert edge and trays and {float(m["seam_line"]) for m in on} == {float(trays[0]["seam_line"])}
+        tray_top = {m["name"].split(" Seam ", 1)[-1]: max(q[1] for q in ring_at(m, 0, float(m["depth"]))) for m in trays}
+        for m in edge:
+            tail = m["name"].split(" Seam ", 1)[-1]
+            tail = tail[2:] if tail[:2] in ("L ", "R ") else tail
+            assert min(q[1] for q in ring_at(m, 0, float(m["depth"]))) <= tray_top[tail] + 0.5, m["name"]
         # the verge's flashing runs only up the rake, from its foot: not down to the eaves
         assert all(min(sign * (q[1] - t_y) for q in pts(m)) > -100.0
                    for m in geo if m["elevation"] == name and " Verge Flashing " in m["name"] + " ")
