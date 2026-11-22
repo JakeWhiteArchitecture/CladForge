@@ -200,6 +200,32 @@ def _schedule(p, info, meshes):
 
 # ── entry points ─────────────────────────────────────────────────────────
 
+def _building_elevations(dxf, meshes, top):
+    """The building's four elevations (cladding_elevations), side by side under the faces'
+    own, their tops at *top*. Returns the lowest y used."""
+    from cladding_elevations import elevation
+    ox, low = 0.0, top
+    for view in ("north", "east", "south", "west"):
+        lines = elevation(meshes, view)
+        if not lines:
+            continue
+        xs = [x for pts, _k in lines for x, _y in pts]
+        zs = [z for pts, _k in lines for _x, z in pts]
+        x0, z1 = min(xs), max(zs)
+        dx, dy = ox - x0, top - 400.0 - z1                  # its left edge at ox, its top under the title
+        for pts, kind in lines:
+            layer = "CORNER_PROFILE" if kind in ("ridge_cap", "verge_strip", "valley_gutter", "eaves_strip", "window_flashing") \
+                else _LAYER_FOR_TYPE.get(kind, "0")
+            for a, b in zip(pts, pts[1:]):
+                dxf.add_line((a[0] + dx, a[1] + dy), (b[0] + dx, b[1] + dy), layer)
+        dxf.add_text("%s ELEVATION" % view.upper(), (ox, top), _TITLE, "NOTES")
+        dxf.add_text("The whole model seen square from the %s (project north: the model's +Y), hidden lines removed." % view,
+                     (ox, top - 170.0), _TEXT, "NOTES")
+        low = min(low, min(zs) + dy - 300.0)
+        ox += max(xs) - x0 + _ELEV_GAP
+    return low
+
+
 def _hip1_plan(meshes, elev):
     """GreenCoat's Hip 1 (cladding_greencoat) as it shows on a slope: each batten and each
     flashing length seen square to the face, clipped to the face's own outline, as
@@ -316,6 +342,7 @@ def meshes_to_dxf_string(meshes, params, infos=None):
     notes = ["%s  -  %s companion export  -  units mm" % (TOOL_NAME, IFC_SCHEMA_LABEL), DISCLAIMER]
     notes += _wrap(SCOPE_NOTE) + _wrap(QUANTITY_NOTE)
     notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING CLOSER CORNER_PROFILE DIMS NOTES")
-    _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), sheet_min_y - 600.0, 60.0)
+    y_low = _building_elevations(dxf, meshes, sheet_min_y - 2500.0)
+    _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), y_low - 600.0, 60.0)
     return dxf.to_string()
 
