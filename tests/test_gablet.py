@@ -86,3 +86,27 @@ def test_the_chain_can_still_ask_for_the_g3_strip_or_set_the_oversail():
     assert {v["side"]: v["type"] for i in out["info"] if i["elevation"] == "South" for v in i["verges"]} == {"l": "g3", "r": "g3"}
     join_verges(params)
     assert by["North"]["verge_over"] == {"r": 40.0}                          # auto with an oversail set: only where a wall is below
+
+
+def test_a_seam_is_set_on_the_gable_line_so_no_verge_falls_part_way_across_a_tray():
+    """The gablet's rake stands in from the slope's own end (the slope runs on out past it
+    lower down, to the hip), so the trays are set out from the rake: the verge's last tray
+    ends at it, and the trays beyond it run up to the hip."""
+    from cladding_verge import VERGE_SEAM, verge_seam_out
+    _found, params, out = gablet()
+    d = HIP_TOP / math.tan(math.radians(PITCH))
+    by = {e["name"]: e for e in params["elevations"]}
+    for name in ("South", "North"):
+        e = by[name]
+        side = next(iter(e["verge_walls"]))
+        over = e["verge_over"][side]
+        edge = d if side == "l" else float(e["width"]) - d
+        line = edge - over - verge_seam_out() if side == "l" else edge + over + verge_seam_out()
+        trays = [m for m in out["geometry"] if m.get("elevation") == name and m["ifc_type"] == "plank"]
+        spans = [(min(q[0] for q in m["profile"]), max(q[0] for q in m["profile"]), max(q[1] for q in m["profile"])) for m in trays]
+        rake_v = HIP_TOP / math.sin(math.radians(PITCH))                     # the top of the hip, up the slope
+        # no tray that runs up past the top of the hip crosses the rake's line
+        assert not [s for s in spans if s[0] < line - 1.0 < line + 1.0 < s[1] and s[2] > rake_v + 50.0], (name, line)
+        # the verge's last tray ends at the line, and a tray beyond it runs up to the hip
+        assert any(abs((s[0] if side == "l" else s[1]) - line) < 1.5 and s[2] > rake_v + 50.0 for s in spans), (name, line)
+        assert any(abs((s[1] if side == "l" else s[0]) - line) < 1.5 and s[2] < rake_v + 50.0 for s in spans), (name, line)
