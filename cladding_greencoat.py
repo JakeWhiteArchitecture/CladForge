@@ -12,10 +12,11 @@ and the hip flashing (a T-cap, lapped and sealed end to end) is fixed over it.
     (its underside cut to their V), HIP1_H deep at its sides, its top square to the plane.
   * The flashing: a flat T-cap on the batten's top, out HIP1_CAP_OVER past the upstands each
     side, its edges turned down HIP1_CAP_DROP.
-  * At the foot, at the eaves, each half (each slope's side of the hip) is cut on a plumb
-    plane along its own slope's eaves, HIP1_OVERSAIL past the front of its eaves bullnose, so the batten and
-    the flashing come to a point on plan at the corner (as the zinc hip cap's legs do), and
-    each half of the flashing's end is closed by a stop end in its plane. Where two hips meet at the
+  * At the foot, at the eaves, each half (each slope's side of the hip) of the flashing is
+    cut on a plumb plane along its own slope's eaves, HIP1_OVERSAIL past the front of its
+    eaves bullnose, its end turned down as its sides are; the batten and the trays'
+    upstands stop with the plywood. The flashing comes to a point on plan at the corner,
+    as the zinc hip cap's legs do. Where two hips meet at the
     top of a hip end they are mitred on the vertical plane between them; the ridge cap,
     which then runs whole to the ridge's end, laps over the joint.
   * **A hip under a gable** (a gablet: the hip runs up to the foot of the gable's rake): the
@@ -165,9 +166,9 @@ def _sections(na, da, fa, nb, db, fb, sa, t):
         pts.append((x, y))
         ends.append((x, end))
     out.append(_ccw(pts, ends) + ("ridge_cap", "Hip Flashing", 0))
-    xo_a, xo_b = cx + sa * e, cx + sb * e                          # the flashing's open end, down to the trays
-    mouth = {sa: [(cx, fq[1]), (xo_a, face(xo_a)), (xo_a, top + t), (cx, top + t)],
-             sb: [(cx, fq[1]), (xo_b, face(xo_b)), (xo_b, top + t), (cx, top + t)]}
+    xo_a, xo_b = cx + sa * e, cx + sb * e      # the flashing's end at the eaves: turned down as its sides are
+    mouth = {sa: [(cx, top - HIP1_CAP_DROP), (xo_a, top - HIP1_CAP_DROP), (xo_a, top + t), (cx, top + t)],
+             sb: [(cx, top - HIP1_CAP_DROP), (xo_b, top - HIP1_CAP_DROP), (xo_b, top + t), (cx, top + t)]}
     return out, mouth, cx
 
 
@@ -192,7 +193,7 @@ def _taper_shift(ring, end, s0, length):
 
 
 def _stop_end(mouth, frame, foot, phi, t, title, name):
-    """Half the flashing's end at the eaves closed: a plate *t* thick lying in the plane
+    """Half the flashing's end at the eaves turned down: a plate *t* thick lying in the plane
     through *foot* square to *phi* (plumb, pointing back up the hip), over that half of the
     flashing's section seen along the hip."""
     O, X, Y, L = frame["origin"], frame["u"], frame["v"], frame["n"]
@@ -344,7 +345,7 @@ def hip1_parts(meshes, p, infos):
                     piece["elevation"] = name if part_side == sa else h["with"]
                 pieces = [piece]
                 if feet:
-                    planes = timber if kind == "batten" else feet
+                    planes = feet if kind == "ridge_cap" else timber      # the batten and the trays' upstands stop at the eaves
                     halves = [(_half(ring, cx, side) if not part_side else (None if side == part_side else False), q, n,
                                "Foot %s" % ("L" if side > 0 else "R")) for side, (q, n) in planes.items()]
                     halves = [c for c in halves if c[0] is not False and (c[0] or part_side)]
