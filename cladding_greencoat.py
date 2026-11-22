@@ -11,8 +11,10 @@ and the hip flashing (a T-cap, lapped and sealed end to end) is fixed over it.
     (its underside cut to their V), HIP1_H deep at its sides, its top square to the plane.
   * The flashing: its top on the batten, its legs down each side outside the trays'
     upstands, their feet clear of the standing seams.
-  * At the foot, at the eaves, both are cut on a vertical plane square to the hip on plan,
-    HIP_PROJECT past the trays' ends (as the zinc hip cap is). Where two hips meet at the
+  * At the foot, at the eaves, each half (each slope's side of the hip) is cut on a plumb
+    plane along its own slope's eaves, HIP_PROJECT past the trays' ends, so the batten and
+    the flashing come to a point on plan at the corner (as the zinc hip cap's legs do), and
+    each half of the flashing's end is closed by a stop end in its plane. Where two hips meet at the
     top of a hip end they are mitred on the vertical plane between them; the ridge cap,
     which then runs whole to the ridge's end, laps over the joint.
   * **A hip under a gable** (a gablet: the hip runs up to the foot of the gable's rake): the
@@ -142,8 +144,20 @@ def _sections(na, da, fa, nb, db, fb, sa, t, seam_h):
     b_ring, b_end = _ccw(batten, flat)
     c_ring, c_end = _ccw(pts, ends)
     xo_a, xo_b = cx + sa * (a + t), cx + sb * (a + t)               # the flashing's open end, down to the trays
-    mouth = [(xo_a, face(xo_a)), (xo_a, top + t), (xo_b, top + t), (xo_b, face(xo_b)), (cx, fq[1])]
-    return (b_ring, b_end), (c_ring, c_end), mouth
+    mouth = {sa: [(cx, fq[1]), (xo_a, face(xo_a)), (xo_a, top + t), (cx, top + t)],
+             sb: [(cx, fq[1]), (xo_b, face(xo_b)), (xo_b, top + t), (cx, top + t)]}
+    return (b_ring, b_end), (c_ring, c_end), mouth, cx
+
+
+def _half(ring, cx, side):
+    """The part of a section on one side (*side*: +1 or -1 along x) of the line x = cx."""
+    from shapely.geometry import Polygon, box
+    from shapely.geometry.polygon import orient
+    big = 1e5
+    cut = Polygon(ring).buffer(0).intersection(box(cx, -big, cx + big, big) if side > 0 else box(cx - big, -big, cx, big))
+    if cut.is_empty or cut.geom_type != "Polygon" or cut.area < 1.0:
+        return None
+    return [[round(x, 4), round(y, 4)] for x, y in list(orient(cut, 1.0).exterior.coords)[:-1]]
 
 
 def _taper_shift(ring, end, s0, length):
@@ -156,8 +170,9 @@ def _taper_shift(ring, end, s0, length):
 
 
 def _stop_end(mouth, frame, foot, phi, t, title, name):
-    """The flashing's end at the eaves closed: a plate *t* thick lying in the foot's plane
-    (vertical, square to the hip on plan), over the flashing's section seen along the hip."""
+    """Half the flashing's end at the eaves closed: a plate *t* thick lying in the plane
+    through *foot* square to *phi* (plumb, pointing back up the hip), over that half of the
+    flashing's section seen along the hip."""
     O, X, Y, L = frame["origin"], frame["u"], frame["v"], frame["n"]
     out = [-c for c in phi]
     U = _unit(_cross([0.0, 0.0, 1.0], out))
@@ -226,18 +241,21 @@ def hip1_parts(meshes, p, infos):
             into = _add([c * h["m"][0] for c in fa["u"]], [c * h["m"][1] for c in (fa.get("v") or (0, 0, 1))])
             sa = 1.0 if _dot(into, X) > 0 else -1.0
             stand = SEAM_STANDOFF + t
-            (b_ring, b_end), (c_ring, c_end), mouth = _sections(na, da, da + stand, nb, db, db + stand, sa, t, seam_h)
-            # the foot: past the trays' ends at the eaves, on a vertical plane square to the hip on plan
+            (b_ring, b_end), (c_ring, c_end), mouth, cx = _sections(na, da, da + stand, nb, db, db + stand, sa, t, seam_h)
+            # the foot: each half cut on a plumb plane along its own slope's eaves, past the trays'
+            # ends, so the two come to a point on plan; square to the hip where a slope has no eaves
             phi = _plan(L)
-            foot, eaves = lo, False
-            if has_eaves(elev, p) or has_eaves(other, p):
-                (x1, y1), (x2, y2) = h["p1"], h["p2"]
-                dx, dy = (plo[0] - (x1 + x2 - plo[0])) / h["length"], (plo[1] - (y1 + y2 - plo[1])) / h["length"]
-                if dy < -0.1:
-                    e_more = (EAVES_TRAY + HIP_PROJECT) / -dy
-                    foot = frame_to_world(fa, plo[0] + dx * e_more, plo[1] + dy * e_more, 0.0)
-                    eaves = True
-            s_foot = _dot(_sub(foot, lo), L)
+            feet = {}                                                    # side: (a point of the plane, its normal up the hip)
+            for e, side in ((elev, sa), (other, -sa)):
+                V = [float(c) for c in (e["frame"].get("v") or (0, 0, 1))]
+                level = _plan(V)
+                if has_eaves(e, p) and level and _dot(level, phi or level) > 0.05:
+                    feet[side] = (_add(lo, V, -(EAVES_TRAY + HIP_PROJECT)), level)
+                elif phi:
+                    feet[side] = (lo, phi)
+            eaves = any(has_eaves(e, p) for e in (elev, other))
+            s_feet = [_dot(_sub(q, lo), n) / _dot(L, n) for q, n in feet.values()]
+            s_foot = min(s_feet) if s_feet else 0.0
             s_top = _dot(_sub(hi, lo), L)
             # the top: tapered under a gable, or mitred to the hip it meets
             S = tops.get(frozenset((name, h["with"])))
@@ -266,7 +284,7 @@ def hip1_parts(meshes, p, infos):
                         break
             origin = lo
             frame = {"origin": origin, "u": X, "v": Y, "n": L}
-            start = s_foot - 300.0 if phi else s_foot
+            start = s_foot - 300.0 if feet else s_foot
             end = s_top + (300.0 if top_cut else 0.0)
             short = lambda n: str(n or "").replace("Elevation ", "")              # noqa: E731
             for ring, flat, kind, label in ((b_ring, b_end, "batten", "Hip Batten"), (c_ring, c_end, "ridge_cap", "Hip Flashing")):
@@ -275,9 +293,12 @@ def hip1_parts(meshes, p, infos):
                 piece = _prism(ring, start, run_end - start, frame, kind, title, name)
                 piece.update(hip_part=True, hip1=True)
                 pieces = [piece]
-                if phi and s_foot > start:
-                    cut = _cut_end(piece, [(None, foot, phi, "Foot")], at_start=True)
+                if feet:
+                    halves = [(_half(ring, cx, side), q, n, "Foot %s" % ("L" if side > 0 else "R")) for side, (q, n) in feet.items()]
+                    cut = _cut_end(piece, [c for c in halves if c[0]], at_start=True)
                     if cut:
+                        for pc in cut:
+                            pc.pop("drip_end", None)
                         pieces = cut
                 if top_cut:
                     last = pieces[0]
@@ -299,8 +320,9 @@ def hip1_parts(meshes, p, infos):
                                              "between": [name, h["with"]], "batten": [HIP1_W, HIP1_H],
                                              "taper": round(taper[1], 1) if taper else None}
                 extra += pieces
-            if eaves and phi:
-                extra.append(_stop_end(mouth, frame, foot, phi, t, "%s Hip Stop End %s" % (name, short(h["with"])), name))
+            if eaves:
+                for side, (q, n) in feet.items():
+                    extra.append(_stop_end(mouth[side], frame, q, n, t, "%s Hip Stop End %s %s" % (name, short(h["with"]), "L" if side > 0 else "R"), name))
             for e, hh in ((elev, h), (other, None)):
                 info = info_by.get(e.get("name"))
                 if info is None:
