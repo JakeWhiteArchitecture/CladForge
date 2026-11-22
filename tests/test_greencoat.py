@@ -112,13 +112,17 @@ def test_under_a_gablet_hip_1_is_cut_on_the_rake_seam_and_chamfered_down_to_it()
     assert not [m for m in g if m.get("hip1") and "Taper" in m["name"]]
     for part in ("Batten", "Flashing"):
         names = {m["name"] for m in g if m.get("hip1") and m["name"].startswith("South Hip %s West" % part)}
-        assert "South Hip %s West Seam End" % part in names and "South Hip %s West Chamfer End" % part in names
-    # the chamfer: its top lower at the seam than where it starts, HIP1_CHAMFER back down the hip
-    from cladding_greencoat import HIP1_CHAMFER
-    tip = next(m for m in g if m["name"] == "South Hip Flashing West Chamfer End")
-    at = lambda d: max(frame_to_world(tip["frame"], x, y, d)[2] for x, y in ring_at(tip, 0, d))       # noqa: E731
-    rise = HIP1_CHAMFER * math.sin(math.atan(math.tan(math.radians(30.0)) / math.sqrt(2)))           # the hip's own rise over it
-    assert at(0.0) < at(float(tip["thickness"])) + rise - 5.0
+        assert "South Hip %s West Seam End" % part in names and not any("Gable" in n for n in names)
+    # the chamfer: on the cut, the flashing's top at its far corner (furthest up the hip) comes down to the standing
+    # seams' top, measured off the main slope; nothing is taken off where the seam first meets the hip
+    from cladding_constants import SEAM_STANDOFF
+    south = next(e for e in out_params(gablet) if e["name"] == "South")
+    deck = max(m["depth"] + m["thickness"] for m in g if m["elevation"] == "South" and m["ifc_type"] == "deck")
+    level = deck + SEAM_STANDOFF + 0.6 + 25.0
+    tip = next(m for m in g if m["name"] == "South Hip Flashing West Seam End")
+    N, O = south["frame"]["n"], south["frame"]["origin"]
+    off = [sum((a - b) * n for a, b, n in zip(frame_to_world(tip["frame"], x, y, 0.0), O, N)) for x, y in ring_at(tip, 0, 0.0)]
+    assert min(abs(o - level) for o in off) < 5.0                   # within the sheet and its projection
     # nothing bare at the top: no deck or backing stands above the main slope's trays within reach of the hip's top
     t = math.tan(math.radians(30.0))
     top = (900.0 / t, 900.0 / t, 900.0)

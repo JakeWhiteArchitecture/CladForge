@@ -21,9 +21,10 @@ and the hip flashing (a T-cap, lapped and sealed end to end) is fixed over it.
     end: the cap ends in a pyramid over the apex (cladding_hip.hip_parts).
   * **A hip under a gable** (a gablet: the hip runs up to the foot of the gable's rake): cut
     as the zinc hip cap is there, full height, batten, flashing and upstands alike, on the
-    vertical plane of the seam on the rake's line, and its top chamfered across its whole
-    width down to that seam's top along the cut, so it meets the standing seam line. Past
-    the seam both slopes' trays run to the hip's plane (hip1_lines, "past").
+    vertical plane of the seam on the rake's line, and its top chamfered: one face from the
+    line square across the hip where that seam first meets it, falling to the cut, so the
+    top comes down to the seam's top at the far corner. Past the seam both slopes' trays run
+    to the hip's plane (hip1_lines, "past").
 
 The dimensions are placeholders, the detail's proportions, until GreenCoat's are given."""
 
@@ -38,7 +39,6 @@ HIP1_GAP = 5.0         # mm – the trays' turned-up ends clear of the batten's 
 HIP1_UNDER = 1.0       # mm – the trays' turned-up ends, under the batten's top
 HIP1_CAP_OVER = 15.0   # mm – the flashing out past the upstands, each side (placeholder)
 HIP1_CAP_DROP = 10.0   # mm – its edges turned down (placeholder)
-HIP1_CHAMFER = 100.0   # mm – under a gablet: the chamfer at Hip 1's top, along the hip, back from the rake's seam
 HIP1_LAP = 100.0       # mm – a hip run up under the ridge cap's little hip: its end this far inside the cap's
 HIP1_OVERSAIL = 50.0   # mm – the hip's foot past the front of the eaves bullnose, on plan
 
@@ -242,26 +242,43 @@ def _half(ring, cx, side):
     return [[round(x, 4), round(y, 4)] for x, y in list(orient(cut, 1.0).exterior.coords)[:-1]]
 
 
-def _chamfer(end, frame, chamfer):
-    """The end of a length cut on a plane (cladding_verge._cut_end's sheared end piece), its
-    top chamfered: every corner above *chamfer*[0] (the section's height) brought down by
-    *chamfer*[1] at the plane, nothing at the piece's far end, so the top falls over the end
-    to line through with the abutting seam's top."""
-    above, drop = chamfer
-    if drop <= 0.5:
-        return
+def _chamfer(end, frame, chamfer, square, slope=None):
+    """The end of a length cut on a plane (cladding_verge._cut_end's sheared end piece, its
+    depth 0 on the plane), its top chamfered: one flat face falling from the length's square
+    end (the plane square to the hip through *square*: where the cut plane first meets it)
+    to the cut, so that at the corner furthest up the hip the top comes down to the abutting
+    seam's top. *chamfer*: (the section's height above which a corner is the top, a function
+    giving how far a world point's top must come down to reach the seam's top there). *slope*:
+    the fall per mm back from the square end, where another part has set it (the flashing's,
+    so the batten and the upstands stay under it). Returns the slope."""
+    above, need = chamfer
     f = end["frame"]
-    Y = frame["v"]
-    du, dv = -drop * _dot(Y, f["u"]), -drop * _dot(Y, f["v"])                # down, in the end piece's own (u, v)
-    run = float(end["thickness"])
+    L, Y = frame["n"], frame["v"]
     rows = (end.get("vshift") or [[[0.0] * 4 for _q in end["profile"]]])[0]
-    out = []
-    for (x, y), (a, b, c, d) in zip(end["profile"], rows):
-        w = _add(_add(_add(f["origin"], f["u"], x + a), f["v"], y + c), f["n"], 0.0)
-        if _dot(_sub(w, frame["origin"]), Y) > above:                # at the plane (depth 0) all of it, none at the far end
-            a, b, c, d = a + du, b - du / run, c + dv, d - dv / run
-        out.append([a, b, c, d])
+    tops = []
+    for k, ((x, y), (a, b, c, d)) in enumerate(zip(end["profile"], rows)):
+        w = _add(_add(f["origin"], f["u"], x + a), f["v"], y + c)            # the corner, on the cut plane
+        if _dot(_sub(w, frame["origin"]), Y) <= above:
+            continue
+        run = _add(_add([b * cu for cu in f["u"]], f["v"], d), f["n"])       # its line, per mm of the piece's depth
+        along = _dot(run, L)
+        back = _dot(_sub(square, w), L) / along if abs(along) > 1e-9 else 0.0  # depth to the square end
+        tops.append((k, w, max(0.0, back)))
+    if not tops:
+        return slope
+    if slope is None:
+        far = max(tops, key=lambda t: t[2])
+        if far[2] < 1.0:
+            return None
+        slope = max(0.0, need(far[1])) / far[2]                               # one face: the fall per mm back from the square end
+    du, dv = -_dot(Y, f["u"]), -_dot(Y, f["v"])                                # down, in the piece's own (u, v)
+    out = [list(r_) for r_ in rows]
+    for k, _w, back in tops:
+        drop = slope * back
+        a, b, c, d = out[k]
+        out[k] = [a + du * drop, b - du * slope, c + dv * drop, d - dv * slope]   # all of it at the cut, none at the square end
     end["vshift"] = [out]
+    return slope
 
 
 def _stop_end(mouth, frame, foot, phi, t, title, name):
@@ -386,10 +403,15 @@ def hip1_parts(meshes, p, infos):
             little = little_hip(elev, h, _cap_lines(elev, by)) if gable is None else None
             top_cut = None
             if gable is not None:
-                _main, gable = gable
+                main, gable = gable
                 top_y = max(q[1] for q in sections[-1][0])                   # the flashing's top, in the section
-                seam_top = _meet(na, da + stand + seam_h, nb, db + stand + seam_h)[1]
-                chamfer = (top_y - HIP1_CAP_DROP - 1.0, top_y - seam_top)     # what drops at the seam, and by how much
+                mf, md = (fa, da) if main == name else (fb, db)               # the main slope, and its deck's top
+                MN = [float(c) for c in mf["n"]]
+                seam_level = md + stand + seam_h                                # the standing seams' tops, off its face
+
+                def need(w, MN=MN, mo=mf["origin"], level=seam_level, Y=Y):
+                    return (_dot(_sub(w, mo), MN) - level) / max(0.2, _dot(Y, MN))    # down to the seam's top, along the section's up
+                chamfer = (top_y - HIP1_CAP_DROP - 1.0, need)
                 gable = {lab: (q, n) for q, n, lab in gable if n and _dot(L, n) > 0.05}       # planes that stop it going up the hip
                 if len(gable) < 2:
                     gable = None
@@ -416,6 +438,7 @@ def hip1_parts(meshes, p, infos):
             start = s_foot - 300.0 if feet else s_foot
             end = s_top + (300.0 if top_cut or gable else 0.0)
             short = lambda n: str(n or "").replace("Elevation ", "")              # noqa: E731
+            tips = []                                                    # the cut ends to chamfer, all on the flashing's slope
             for ring, flat, kind, label, part_side in sections:
                 title = "%s %s %s" % (name, label, short(h["with"]))
                 if part_side:                                            # an upstand: the tray of its own slope
@@ -441,19 +464,17 @@ def hip1_parts(meshes, p, infos):
                     if cut:
                         pieces = cut + pieces[1:]
                 if gable:
-                    # ended on the rake's seam's plane: the run cut on a plane parallel to it HIP1_CHAMFER back down
-                    # the hip, and between the two one length chamfered across its whole width down to the seam's top
-                    q, n = gable["Seam"]
-                    run = _cut_end(pieces[0], [(None, _add(q, L, -HIP1_CHAMFER), n, "Seam")], at_start=False)
-                    tip = _cut_end(pieces[0], [(None, q, n, "Chamfer")], at_start=False)
-                    tip = [pc for pc in (tip or []) if pc.get("frame") is not frame]
-                    if run and tip:
-                        for pc in run + tip:
+                    # ended on the rake's seam's plane: the length cut square where the seam first meets it, and the
+                    # end piece from there to the plane chamfered, from nothing on the square line down to the seam's top
+                    cut = _cut_end(pieces[0], [(None, *gable["Seam"], "Seam")], at_start=False)
+                    if cut:
+                        keep = next((pc for pc in cut if pc.get("frame") is frame), None)
+                        square = _add(frame["origin"], L, float(keep["depth"]) + float(keep["thickness"])) if keep else None
+                        for pc in cut:
                             pc.pop("drip_end", None)
-                        for pc in tip:
-                            pc["thickness"] = round(HIP1_CHAMFER * abs(_dot(L, pc["frame"]["n"])), 4)    # back to the parallel plane
-                            _chamfer(pc, frame, chamfer)
-                        pieces = run + tip + pieces[1:]
+                            if pc is not keep and square is not None:
+                                tips.append((kind, pc, square))
+                        pieces = cut + pieces[1:]
                 for k, pc in enumerate(pieces):
                     if k and not pc.get("of"):
                         pc["of"] = title
@@ -464,6 +485,9 @@ def hip1_parts(meshes, p, infos):
                                              "between": [name, h["with"]], "batten": [HIP1_W, HIP1_H],
                                              "gablet": bool(gable)}
                 extra += pieces
+            slope = None
+            for kind, pc, square in sorted(tips, key=lambda t: t[0] != "ridge_cap"):
+                slope = _chamfer(pc, frame, chamfer, square, slope)
             if eaves:
                 for side, (q, n) in feet.items():
                     extra.append(_stop_end(mouth[side], frame, q, n, t, "%s Hip Stop End %s %s" % (name, short(h["with"]), "L" if side > 0 else "R"), name))
