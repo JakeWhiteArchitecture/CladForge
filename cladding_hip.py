@@ -41,7 +41,7 @@ import math
 from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
-from cladding_constants import _prism
+from cladding_constants import _prism, frame_to_world
 from cladding_edges import settings as edge_settings
 from cladding_primitives import ring_at
 from cladding_ridge import (RIDGE_GAP, RIDGE_UPSTAND, RIDGE_OVERSAIL, RIDGE_LEG, RIDGE_REST, MEET, CLAD, JOIN_TOL,
@@ -162,7 +162,9 @@ def hip_ends(meshes, p, infos):
     clear of a batten on the hip line, every layer behind meets on the plane (cladding_greencoat)."""
     from cladding_greencoat import steel, hip1_lines, hip1_cut
     if steel(p):
-        return cut_to_lines(meshes, p, infos, lambda e: hip1_lines(hips_of(e)), hip1_cut)     # its upstands: hip1_parts
+        from cladding_greencoat import gablet_seams
+        seams = gablet_seams(p, infos)
+        return cut_to_lines(meshes, p, infos, lambda e: hip1_lines(hips_of(e), e.get("name"), seams), hip1_cut)     # upstands: hip1_parts
     return cut_to_lines(meshes, p, infos, hips_of, _hip_cut, upstands=True)
 
 
@@ -190,6 +192,10 @@ def cut_to_lines(meshes, p, infos, lines_of, cut, upstands=False):
         rings = [m["profile"]] + list(m.get("holes") or [])
         for h in hips:
             target, lean = cut(h, kind, near, t, face, board, elev, p)
+            past = h.get("past")            # a gablet's hip top: past the rake's seam the cladding meets on the plane
+            if past and kind in CLAD and all(sum((w - a) * b for w, a, b in zip(frame_to_world(m["frame"], q[0], q[1], mid), *past)) >= -1.0
+                                             for q in m["profile"]):
+                target, lean = -h["k"] * mid, h["k"]
             old = m.get("vshift") or []
             shifts, moved = [], []
             for j, ring in enumerate(rings):

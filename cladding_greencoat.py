@@ -18,12 +18,12 @@ and the hip flashing (a T-cap, lapped and sealed end to end) is fixed over it.
     faces, over the end of the batten; the batten and the trays' upstands stop with the plywood. The flashing comes to a point on plan at the corner,
     as the zinc hip cap's legs do. Where two hips meet at the
     top of a hip end, or run up into a ridge, they stop square HIP1_LAP inside the ridge cap's
-    end: the cap carries on over the apex as a little hip of its own (cladding_hip.hip_parts).
-  * **A hip under a gable** (a gablet: the hip runs up to the foot of the gable's rake): the
-    batten tapers to nothing at the seam on the rake's line, its top laid HIP1_FALL off level
-    (falling down the hip, so it drains), and the flashing comes down with it to lie on the
-    trays there. How far the taper runs depends on the hip's pitch: the batten's depth over
-    the difference between the hip's rise and the fall.
+    end: the cap ends in a pyramid over the apex (cladding_hip.hip_parts).
+  * **A hip under a gable** (a gablet: the hip runs up to the foot of the gable's rake): cut
+    as the zinc hip cap is there (cladding_hip.gablet_hip_tops), full height, batten,
+    flashing and upstands alike: the main slope's half on the vertical plane of the seam on
+    the rake's line, past which that slope's trays run to the hip's plane; the hip end's
+    half on up to the hip's top, cut square across where the verge's drip comes down to it.
 
 The dimensions are placeholders, the detail's proportions, until GreenCoat's are given."""
 
@@ -38,10 +38,8 @@ HIP1_GAP = 5.0         # mm – the trays' turned-up ends clear of the batten's 
 HIP1_UNDER = 1.0       # mm – the trays' turned-up ends, under the batten's top
 HIP1_CAP_OVER = 15.0   # mm – the flashing out past the upstands, each side (placeholder)
 HIP1_CAP_DROP = 10.0   # mm – its edges turned down (placeholder)
-HIP1_FALL = 3.0        # degrees – the batten's top off level where it tapers under a gable
 HIP1_LAP = 100.0       # mm – a hip run up under the ridge cap's little hip: its end this far inside the cap's
 HIP1_OVERSAIL = 50.0   # mm – the hip's foot past the front of the eaves bullnose, on plan
-TAPER_MAX = 1500.0     # mm – the longest taper, along the hip, however flat the hip
 
 
 def steel(p):
@@ -49,12 +47,37 @@ def steel(p):
     return bool(p.get("seam")) and p.get("seam_metal") == "steel"
 
 
-def hip1_lines(hips):
-    """The face's hips (cladding_hip.hips_of) with the trays stood back clear of the batten."""
+def gablet_seams(p, infos):
+    """Every hip that runs up under a gablet's gable, by its two faces: (a point on the
+    rake's seam's plane, the level unit normal pointing past it, up to the hip's top), the
+    plane Hip 1 is cut on there (cladding_hip._hip_tops)."""
+    from cladding_hip import _hip_tops
+    info_by = {i["elevation"]: i for i in infos}
+    out = {}
+    for e in p.get("elevations", []):
+        info = info_by.get(e.get("name"))
+        if info is None:
+            continue
+        for g, S, T, u_s in _hip_tops(e, p, info):
+            U = [float(c) for c in e["frame"]["u"]]
+            past = U if T[0] > u_s else [-c for c in U]
+            out[(e.get("name"), g["with"])] = (frame_to_world(e["frame"], S[0], S[1], 0.0), past)
+    return out
+
+
+def hip1_lines(hips, name=None, seams=None):
+    """The face's hips (cladding_hip.hips_of) with the trays stood back clear of the batten.
+    Where a hip runs up under a gablet's gable (*seams*: gablet_seams), Hip 1 is cut on the
+    rake's seam's plane on the main slope's side, so past it ("past": the plane) that slope's
+    cladding runs to the hip's plane; on the hip end's side Hip 1 runs on to the hip's top."""
     out = []
     for h in hips:
         back = (HIP1_W / 2.0 + HIP1_GAP) * math.sqrt(1.0 + h["k"] ** 2)
-        out.append(dict(h, back=back, hip1=True))
+        line = dict(h, back=back, hip1=True)
+        past = (seams or {}).get((name, h["with"]))          # the main slope's side: its half of Hip 1 stops at the seam
+        if past:
+            line["past"] = past
+        out.append(line)
     return out
 
 
@@ -218,15 +241,6 @@ def _half(ring, cx, side):
     return [[round(x, 4), round(y, 4)] for x, y in list(orient(cut, 1.0).exterior.coords)[:-1]]
 
 
-def _taper_shift(ring, end, s0, length):
-    """vshift rows taking *ring* at depth s0 to *end* at s0 + length."""
-    rows = []
-    for (x, y), (xe, ye) in zip(ring, end):
-        bu, bv = (xe - x) / length, (ye - y) / length
-        rows.append([-bu * s0, bu, -bv * s0, bv])
-    return [rows]
-
-
 def _stop_end(mouth, frame, foot, phi, t, title, name):
     """Half the flashing's end at the eaves closed: a plate *t* thick lying in the plane
     through *foot* square to *phi* (plumb, pointing back up the hip), over that half of the
@@ -296,8 +310,12 @@ def hip1_parts(meshes, p, infos):
                 segs.append((e.get("name"), h["with"], frame_to_world(e["frame"], *h["p1"], 0.0), frame_to_world(e["frame"], *h["p2"], 0.0)))
         info = info_by.get(e.get("name"))
         if info is not None:
-            for h, S, _T, _u in _hip_tops(e, p, info):
-                tops[frozenset((e.get("name"), h["with"]))] = frame_to_world(e["frame"], S[0], S[1], 0.0)
+            for h, S, T, u_s in _hip_tops(e, p, info):          # cut as the zinc cap is there (cladding_hip.gablet_hip_tops)
+                U, V = [float(c) for c in e["frame"]["u"]], [float(c) for c in (e["frame"].get("v") or (0, 0, 1))]
+                out_dir = [-c for c in U] if T[0] > u_s else U
+                tops[frozenset((e.get("name"), h["with"]))] = e.get("name"), [
+                    (frame_to_world(e["frame"], S[0], S[1], 0.0), [-c for c in out_dir], "Seam"),     # the rake's seam's plane
+                    (frame_to_world(e["frame"], T[0], T[1], 0.0), _plan(V), "Gable")]                 # square across at the hip's top
     extra = []
     for elev in p.get("elevations", []):
         name = elev.get("name")
@@ -339,19 +357,19 @@ def hip1_parts(meshes, p, infos):
             s_feet = [_dot(_sub(q, lo), n) / _dot(L, n) for q, n in feet.values()]
             s_foot = min(s_feet) if s_feet else 0.0
             s_top = _dot(_sub(hi, lo), L)
-            # the top: tapered under a gable, or mitred to the hip it meets
-            S = tops.get(frozenset((name, h["with"])))
-            little = little_hip(elev, h, _cap_lines(elev, by)) if S is None else None
-            taper = None
+            # the top: under a gablet's gable, cut on the rake seam's plane and across at the hip's top;
+            # under the ridge cap's pyramid, square; or mitred to the hip it meets
+            gable = tops.get(frozenset((name, h["with"])))
+            little = little_hip(elev, h, _cap_lines(elev, by)) if gable is None else None
             top_cut = None
-            if S is not None:
-                s_s = _dot(_sub(S, lo), L)
-                rise = L[2] - math.hypot(L[0], L[1]) * math.tan(math.radians(HIP1_FALL))
-                length = TAPER_MAX if rise <= HIP1_H / TAPER_MAX else HIP1_H / rise
-                length = min(length, s_s - s_foot - 50.0)
-                if length > 10.0:
-                    taper = (s_s - length, length)
-                    s_top = s_s
+            if gable is not None:
+                main, gable = gable
+                main_side = sa if main == name else -sa                      # the main slope's half of the section
+                gable = {lab: (q, n) for q, n, lab in gable if n and _dot(L, n) > 0.05}       # planes that stop it going up the hip
+                if len(gable) < 2:
+                    gable = None
+                else:
+                    s_top = max(_dot(_sub(q, lo), n) / _dot(L, n) for q, n in gable.values())
             elif little is not None:
                 q = frame_to_world(fa, little[0][0], little[0][1], 0.0)
                 top_cut = (_add(q, L, HIP1_LAP), phi or L)              # square across, inside the cap's end
@@ -371,14 +389,13 @@ def hip1_parts(meshes, p, infos):
             origin = lo
             frame = {"origin": origin, "u": X, "v": Y, "n": L}
             start = s_foot - 300.0 if feet else s_foot
-            end = s_top + (300.0 if top_cut else 0.0)
+            end = s_top + (300.0 if top_cut or gable else 0.0)
             short = lambda n: str(n or "").replace("Elevation ", "")              # noqa: E731
             for ring, flat, kind, label, part_side in sections:
                 title = "%s %s %s" % (name, label, short(h["with"]))
                 if part_side:                                            # an upstand: the tray of its own slope
                     title = "%s Hip Upstand %s" % ((name, short(h["with"])) if part_side == sa else (h["with"], short(name)))
-                run_end = taper[0] if taper else end
-                piece = _prism(ring, start, run_end - start, frame, kind, title, name)
+                piece = _prism(ring, start, end - start, frame, kind, title, name)
                 piece.update(hip_part=True, hip1=True, opacity=1.0)
                 if part_side:
                     piece["elevation"] = name if part_side == sa else h["with"]
@@ -398,11 +415,19 @@ def hip1_parts(meshes, p, infos):
                     cut = _cut_end(last, [(None, top_cut[0], top_cut[1], "Mitre")], at_start=False)
                     if cut:
                         pieces = cut + pieces[1:]
-                if taper:
-                    tp = _prism(ring, taper[0], taper[1], frame, kind, title + " Taper", name)
-                    tp["vshift"] = _taper_shift(ring, flat, taper[0], taper[1])
-                    tp.update(hip_part=True, hip1=True, of=title)
-                    pieces.append(tp)
+                if gable:
+                    # the main slope's half ends on the rake's seam's plane, the hip end's half runs on to its top
+                    halves = [(side, "Seam" if side == main_side else "Gable") for side in (sa, -sa)]
+                    if part_side:
+                        cuts = [(None, *gable["Seam" if part_side == main_side else "Gable"], "Top")]
+                    else:
+                        cuts = [(_half(ring, cx, side), *gable[lab], lab) for side, lab in halves]
+                        cuts = [c for c in cuts if c[0]]
+                    cut = _cut_end(pieces[0], cuts, at_start=False)
+                    if cut:
+                        for pc in cut:
+                            pc.pop("drip_end", None)
+                        pieces = cut + pieces[1:]
                 for k, pc in enumerate(pieces):
                     if k and not pc.get("of"):
                         pc["of"] = title
@@ -411,7 +436,7 @@ def hip1_parts(meshes, p, infos):
                 if kind == "ridge_cap":
                     pieces[0]["hip_info"] = {"length": round(s_top - s_foot, 1), "detail": "Hip 1", "thickness": t,
                                              "between": [name, h["with"]], "batten": [HIP1_W, HIP1_H],
-                                             "taper": round(taper[1], 1) if taper else None}
+                                             "gablet": bool(gable)}
                 extra += pieces
             if eaves:
                 for side, (q, n) in feet.items():
@@ -423,5 +448,5 @@ def hip1_parts(meshes, p, infos):
                 info.setdefault("hips", []).append({
                     "with": h["with"] if hh else name, "master": hh is not None, "length": round(h["length"], 1),
                     "detail": "Hip 1", "batten": [HIP1_W, HIP1_H], "gap": HIP1_GAP,
-                    "taper": round(taper[1], 1) if taper else None, "angle": round(math.degrees(2.0 * math.atan(h["k"])), 1)})
+                    "gablet": bool(gable), "angle": round(math.degrees(2.0 * math.atan(h["k"])), 1)})
     return meshes + extra

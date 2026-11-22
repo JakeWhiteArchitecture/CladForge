@@ -103,21 +103,32 @@ def test_hips_meeting_at_the_top_of_a_hip_end_stop_under_the_ridge_cap():
     assert len([m for m in g if m.get("hip1") and m["name"].endswith("Mitre End")]) == 16
 
 
-def test_under_a_gablet_the_batten_tapers_to_nothing_at_level_plus_three_degrees():
+def test_under_a_gablet_hip_1_is_cut_on_the_rake_seam_like_the_zinc_cap():
+    """No taper: full height to the top. The main slope's half is cut on the plane of the seam on
+    the rake's line, and past it that slope's trays run to the hip's plane; the hip end's half
+    runs on up to the hip's top and is cut square across there."""
     out = gablet(seam_metal="steel")[2]
     g = out["geometry"]
-    tapers = [m for m in g if m.get("hip1") and m["name"].endswith("Taper")]
-    assert len(tapers) == 8                                       # batten, flashing and both upstands, each hip
-    hip = next(h for i in out["info"] for h in i.get("hips", []) if h.get("taper"))
-    # 30° slopes: the hip rises at atan(tan30 / √2); the batten's depth over its rise less 3°
-    rise = math.sin(math.atan(math.tan(math.radians(30)) / math.sqrt(2)))
-    run = math.cos(math.atan(math.tan(math.radians(30)) / math.sqrt(2)))
-    want = HIP1_H / (rise - run * math.tan(math.radians(3.0)))
-    assert abs(hip["taper"] - want) < 1.0
-    b = next(m for m in tapers if m["ifc_type"] == "batten")
-    end = float(b["depth"]) + float(b["thickness"])
-    ys = [q[1] for q in ring_at(b, 0, end)]
-    assert max(ys) - min(ys) < 30.0                               # flat on the decks at its end
+    assert not [m for m in g if m.get("hip1") and "Taper" in m["name"]]
+    for part in ("Batten", "Flashing"):
+        names = {m["name"] for m in g if m.get("hip1") and m["name"].startswith("South Hip %s West" % part)}
+        assert "South Hip %s West Seam End" % part in names and "South Hip %s West Gable End" % part in names
+    # nothing bare at the top: no deck or backing stands above the main slope's trays within reach of the hip's top
+    t = math.tan(math.radians(30.0))
+    top = (900.0 / t, 900.0 / t, 900.0)
+    trays = [m for m in g if m["elevation"] == "South" and m["ifc_type"] == "plank"]
+    near = [m for m in trays if min(math.dist(p, top) for p in _corners(m)) < 300.0]
+    assert near
+    # past the seam the South tray runs to within a few mm of the hip's plane (not 28 clear of a batten)
+    from cladding_hip import hips_of
+    south = next(e for e in out_params(gablet) if e["name"] == "South")
+    h = next(x for x in hips_of(south) if x["with"] == "West")
+    gap = min(abs((q[0] - h["p1"][0]) * h["m"][0] + (q[1] - h["p1"][1]) * h["m"][1]) for m in near for q in m["profile"])
+    assert gap < 10.0
+
+
+def out_params(builder):
+    return builder(seam_metal="steel")[1]["elevations"]
 
 
 def test_the_trays_are_turned_up_to_the_batten_s_top_and_the_flashing_is_a_flat_cap():
