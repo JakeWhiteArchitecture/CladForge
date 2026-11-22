@@ -158,7 +158,11 @@ def _whole_corners(ring, rows, h, tol, keep):
 
 def hip_ends(meshes, p, infos):
     """Bring every part's end to the hip (module docstring). Returns the meshes with the
-    trays' turned-up ends added."""
+    trays' turned-up ends added. A steel chain's hips are GreenCoat's Hip 1: the trays stand
+    clear of a batten on the hip line, every layer behind meets on the plane (cladding_greencoat)."""
+    from cladding_greencoat import steel, hip1_lines, hip1_cut
+    if steel(p):
+        return cut_to_lines(meshes, p, infos, lambda e: hip1_lines(hips_of(e)), hip1_cut, upstands=True)
     return cut_to_lines(meshes, p, infos, hips_of, _hip_cut, upstands=True)
 
 
@@ -229,7 +233,7 @@ def _upstand(tray, h, moved):
     a, b = (a[0] + 3.0 * dx, a[1] + 3.0 * dy), (b[0] - 3.0 * dx, b[1] - 3.0 * dy)
     t, (mx, my) = float(tray["thickness"]), h["m"]
     strip = orient(Polygon([a, b, (b[0] + t * mx, b[1] + t * my), (a[0] + t * mx, a[1] + t * my)]), 1.0)
-    up = _prism([[round(x, 3), round(y, 3)] for x, y in list(strip.exterior.coords)[:-1]], outer, RIDGE_UPSTAND,
+    up = _prism([[round(x, 3), round(y, 3)] for x, y in list(strip.exterior.coords)[:-1]], outer, h.get("upstand", RIDGE_UPSTAND),
                 tray["frame"], "seam", "%s Hip Upstand" % tray.get("name", "Tray"), tray.get("elevation"))
     up.update(opacity=1.0, hip_part=True)
     return up
@@ -334,7 +338,11 @@ def _leg(line, lines, rest, t, elev, drop, ends):
 def hip_parts(meshes, p, infos):
     """The cap over each hip, and over a ridge that hips run into: each face lays the leg
     that lies on it (_leg), so the two slopes of a hip need not be built together. Records
-    each face's hips on its info ("hips", "hip_strips")."""
+    each face's hips on its info ("hips", "hip_strips"). A steel chain's: GreenCoat's Hip 1
+    (cladding_greencoat), and its ridge cap stays whole."""
+    from cladding_greencoat import steel, hip1_parts
+    if steel(p):
+        return hip1_parts(meshes, p, infos)
     info_by = {i["elevation"]: i for i in infos}
     by = {e.get("name"): e for e in p.get("elevations", [])}
     up_slope = _up_slope(p)

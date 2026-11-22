@@ -1046,6 +1046,7 @@ function formSettings() {
     s.plank_profile = toggleValue('plank-profile') || 'board';
     Object.assign(s, customProfileParams());
     s.seam_deck = val('seam_deck');
+    s.seam_metal = val('seam_metal');
     s.counter_batten = val('counter_batten');
     return s;
 }
@@ -1061,6 +1062,7 @@ function applySettings(s) {
     if (s.custom_profile && document.querySelector('#custom_profile option[value="' + CSS.escape(s.custom_profile) + '"]'))
         document.getElementById('custom_profile').value = s.custom_profile;
     if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
+    if (s.seam_metal) document.getElementById('seam_metal').value = s.seam_metal;
     if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
 }
 // ── custom plank profiles (cladding_profiles.py) ──
@@ -1215,6 +1217,7 @@ function getParams() {
     p.plank_profile = toggleValue('plank-profile') || 'board';
     Object.assign(p, customProfileParams());
     p.seam_deck = val('seam_deck');
+    p.seam_metal = val('seam_metal');
     p.counter_batten = val('counter_batten');
     return p;
 }
@@ -1447,6 +1450,7 @@ function snapshotState() {
     for (const k of STATE_TOGGLES) settings[k] = toggleValue(k);
     settings.counter_batten = val('counter_batten');
     settings.seam_deck = val('seam_deck');
+    settings.seam_metal = val('seam_metal');
     settings.ifc_schema = ifcSchema();
     Object.assign(settings, customProfileParams());
     const elevation = e => ({
@@ -1583,7 +1587,7 @@ function chainSettingsOf(s) {
     for (const k of CHAIN_CHECKS) if (typeof s[k] === 'boolean') out[k] = s[k];
     const toggles = { 'corner-type': 'corner', 'cladding-type': 'cladding_type', 'plank-orient': 'plank_orient', 'plank-profile': 'plank_profile' };
     for (const [from, to] of Object.entries(toggles)) if (s[from]) out[to] = s[from];
-    for (const k of ['seam_deck', 'counter_batten', 'custom_profile', 'custom_section']) if (s[k]) out[k] = s[k];
+    for (const k of ['seam_deck', 'seam_metal', 'counter_batten', 'custom_profile', 'custom_section']) if (s[k]) out[k] = s[k];
     return Object.keys(out).length ? out : null;
 }
 
@@ -1648,6 +1652,7 @@ function restoreState(st, add, fileName) {
         for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
         if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
         if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
+        if (s.seam_metal) document.getElementById('seam_metal').value = s.seam_metal;
         if (s.ifc_schema) { document.getElementById('ifc_schema').value = s.ifc_schema; onIfcSchema(); }
         if (s.custom_section) addCustomProfile(s.custom_section, true);
         else if (s.custom_profile && CUSTOM_LIBRARY[s.custom_profile]) document.getElementById('custom_profile').value = s.custom_profile;
