@@ -177,12 +177,12 @@ def _tray_reach(p, elev, depth):
     verges = verge_sides(elev, p)
     reach, limits, held = [], [], []
     for (k, _ext), detail, side in ((left, d_left, "l"), (right, d_right, "r")):
-        held.append(side in verges and not k and verge_type(elev) == "cladding")
+        held.append(side in verges and not k and verge_type(elev, side) == "cladding")
         if k and k > 0 and detail != "butt":
             k_end, ext = _seam_end(p, elev, depth + p["plank_t"], k, detail, side)
             reach.append(max(0.0, ext + k_end * depth))
             limits.append((max(SEAM_MIN_CLOSE, reach[-1] + 20.0), p["plank_w"]))
-        elif side in verges and not k and verge_type(elev) == "cladding":
+        elif side in verges and not k and verge_type(elev, side) == "cladding":
             reach.append(verge_over(elev, side) + verge_seam_out())     # out over the cladding below, to the seam at the plywood's edge
             limits.append((SEAM_MIN_CLOSE, p["plank_w"]))
         elif side in verges and not k:
@@ -1147,6 +1147,39 @@ def _tray_seams(p, meshes, frame, name, face, laid, holes, mirror=False):
                 m["clip_v_at"] = strip
 
 
+def _inner_verges(p, elev, lo, hi):
+    """(lo, hi) to set the trays out between: the clad part of the face, except that a verge
+    whose edge stands in from it (a gablet's rake, starting at the top of the hip, with the
+    slope running on out past it lower down to the hip) is set out from that edge, so the
+    verge's last tray ends at it and no verge falls part way across a tray."""
+    from cladding_verge import _outline_sides, verge_sides
+    sides = verge_sides(elev, p)
+    if not sides:
+        return lo, hi
+    edges = _outline_sides(elev)
+    a, b = lo, hi
+    if "l" in sides and "l" in edges and edges["l"][0] > lo + 1.0:
+        a = edges["l"][0]
+    if "r" in sides and "r" in edges and edges["r"][0] < hi - 1.0:
+        b = edges["r"][0]
+    return (a, b) if b - a > 1.0 else (lo, hi)
+
+
+def _beyond_verges(cols, cover, lo, hi, inner):
+    """The tray columns carried on past a verge set in from the face's end (_inner_verges):
+    at *cover* centres out to the face's own end, where the outline (a hip) cuts them."""
+    if not cols:
+        return cols
+    cols = list(cols)
+    if inner[0] > lo + 1.0:
+        while cols[0][0] > lo + 1.0:
+            cols.insert(0, (cols[0][0] - cover, cols[0][0]))
+    if inner[1] < hi - 1.0:
+        while cols[-1][1] < hi - 1.0:
+            cols.append((cols[-1][1], cols[-1][1] + cover))
+    return cols
+
+
 def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     """Vertical standing seam trays: vertical battens (on the model's columns where it has
     them), the deck, then trays a seam-centre wide set out across the face like vertical
@@ -1162,7 +1195,10 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
     cover = p["plank_w"]
     jambs = [u for o in openings(elev) for u in (o[0], o[1])] if p["set_out_from_openings"] else []
     reach, limits, held = _tray_reach(p, elev, depth)
-    cols = seam_columns(W, cover, offset, jambs, clip_bounds(elev), reach, limits, held)
+    lo, hi = clip_bounds(elev)
+    inner = _inner_verges(p, elev, lo, hi) if not jambs else (lo, hi)
+    cols = seam_columns(W, cover, offset, jambs, inner, reach, limits, held)
+    cols = _beyond_verges(cols, cover, lo, hi, inner)
     link = elev.get("seam_lines") or {}
     follow = followed_columns(cols, link, cover, clip_bounds(elev), reach, limits) if link.get("lines") else None
     if follow:                                   # its seams are another face's, carried on to it

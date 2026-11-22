@@ -105,6 +105,9 @@ def _parse(params):
     # slope, or run to the tray's end and stopped square, flush with it.
     p["seam_end"] = "flat" if params.get("seam_end") == "flat" else "folded"
     p["deck_t"] = DECK_T[p["seam_deck"]]
+    # The metal, and with it whose standard details are drawn: zinc (the G3 details), or coated
+    # galvanised steel (GreenCoat PLX: Hip 1, the low profile abutment, the cladding drip).
+    p["seam_metal"] = "steel" if params.get("seam_metal") == "steel" else "zinc"
     # every job-wide corner detail the toggle offers (cladding_primitives.CORNER_DETAILS)
     p["corner"] = params.get("corner") if params.get("corner") in ("mitre", "lap", "profile", "butt") else "mitre"
     p["trim"] = bool(params.get("trim", True))

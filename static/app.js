@@ -12,7 +12,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 const ABUTS = ['auto', 'g3', 'below', 'mitre', 'none'];   // a roof run up to a wall that stands on above it: by what that wall is clad in, the G3 flashing, the trays turned up under its cladding, or nothing
 const HEADS = ['auto', 'g3', 'none'];       // a monopitch's head verge: over a picked wall, on every level top edge, or not at all
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', vergeLast: 'vmz', eaves: 'on', head: 'auto', windows: 'on', abutment: 'auto', capEnds: 'edge', ridgeEnd: 'square', ridgeAngle: 90 };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'auto', vergeLast: 'vmz', eaves: 'on', head: 'auto', windows: 'on', abutment: 'auto', capEnds: 'edge', ridgeEnd: 'square', ridgeAngle: 90 };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -116,7 +116,7 @@ function chainLabel(e) { return e.chain.members.length > 1 ? e.chain.name + ' ·
 const VERGES = ['both', 'start', 'end', 'none'];
 // What a verge is built as: the G3 strip the last tray is welted over, or the flashing down
 // over a clad wall's head from a seam at the roof's edge (VMZ-SN-MA-ZI-05).
-const VERGE_TYPES = ['g3', 'cladding'];
+const VERGE_TYPES = ['auto', 'g3', 'cladding'];   // auto: the flashing over cladding where a picked wall stands under the verge, else the G3 strip
 const RIDGE_ENDS = ['square', 'v', 'flat'];                 // a ridge cap's stop end over a verge: the cap's section, or a skirt down over the apex to a point or a short level edge
 
 // The panel's edge fields show the active elevation's chain and write to all of it.
@@ -134,12 +134,12 @@ function syncEdgeFields() {
         el.disabled = ed.fold === 'off';
     }
     document.getElementById('edge-verge').value = VERGES.includes(ed.verge) ? ed.verge : 'both';
-    document.getElementById('edge-vergeType').value = VERGE_TYPES.includes(ed.vergeType) ? ed.vergeType : 'g3';
+    document.getElementById('edge-vergeType').value = VERGE_TYPES.includes(ed.vergeType) ? ed.vergeType : 'auto';
     document.getElementById('edge-vergeLast').value = ed.vergeLast === 'full' ? 'full' : 'vmz';
     document.getElementById('edge-vergeLast').disabled = ed.vergeType === 'cladding';
     const over = document.getElementById('edge-vergeOver');           // blank: taken from the cladding on the wall below
     if (document.activeElement !== over) over.value = ed.vergeOver == null ? '' : ed.vergeOver;
-    over.disabled = ed.vergeType !== 'cladding';
+    over.disabled = ed.vergeType === 'g3';
     document.getElementById('edge-eaves').value = ed.eaves === 'none' ? 'none' : 'on';
     document.getElementById('edge-windows').value = ed.windows === 'none' ? 'none' : 'on';
     document.getElementById('edge-head').value = HEADS.includes(ed.head) ? ed.head : 'auto';
@@ -163,7 +163,7 @@ function setEdge(e, key, value) {
     else if (key === 'fold') e.chain.edges.fold = value === 'off' ? 'off' : 'on';
     else if (key === 'seamTop' || key === 'seamBottom') e.chain.edges[key] = value === 'flat' ? 'flat' : 'folded';
     else if (key === 'verge') e.chain.edges.verge = VERGES.includes(value) ? value : 'both';
-    else if (key === 'vergeType') e.chain.edges.vergeType = VERGE_TYPES.includes(value) ? value : 'g3';
+    else if (key === 'vergeType') e.chain.edges.vergeType = VERGE_TYPES.includes(value) ? value : 'auto';
     else if (key === 'vergeLast') e.chain.edges.vergeLast = value === 'full' ? 'full' : 'vmz';
     else if (key === 'vergeOver') { const v = parseFloat(value); e.chain.edges.vergeOver = isFinite(v) ? Math.max(0, Math.min(400, v)) : null; }
     else if (key === 'eaves') e.chain.edges.eaves = value === 'none' ? 'none' : 'on';
@@ -1046,6 +1046,7 @@ function formSettings() {
     s.plank_profile = toggleValue('plank-profile') || 'board';
     Object.assign(s, customProfileParams());
     s.seam_deck = val('seam_deck');
+    s.seam_metal = val('seam_metal');
     s.counter_batten = val('counter_batten');
     return s;
 }
@@ -1061,6 +1062,7 @@ function applySettings(s) {
     if (s.custom_profile && document.querySelector('#custom_profile option[value="' + CSS.escape(s.custom_profile) + '"]'))
         document.getElementById('custom_profile').value = s.custom_profile;
     if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
+    if (s.seam_metal) document.getElementById('seam_metal').value = s.seam_metal;
     if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
 }
 // ── custom plank profiles (cladding_profiles.py) ──
@@ -1154,7 +1156,7 @@ function elevationRecords() {
                                                    frame_setback: chain.edges.frame === undefined ? 50 : chain.edges.frame,
                                                    seam_fold: chain.edges.fold !== 'off',
                                                    verge: VERGES.includes(chain.edges.verge) ? chain.edges.verge : 'both',
-                                                   verge_type: VERGE_TYPES.includes(chain.edges.vergeType) ? chain.edges.vergeType : 'g3',
+                                                   verge_type: VERGE_TYPES.includes(chain.edges.vergeType) ? chain.edges.vergeType : 'auto',
                                                    verge_last: chain.edges.vergeLast === 'full' ? 'full' : 'vmz',
                                                    verge_oversail: chain.edges.vergeOver == null ? null : chain.edges.vergeOver,
                                                    eaves: chain.edges.eaves === 'none' ? 'none' : 'on',
@@ -1215,6 +1217,7 @@ function getParams() {
     p.plank_profile = toggleValue('plank-profile') || 'board';
     Object.assign(p, customProfileParams());
     p.seam_deck = val('seam_deck');
+    p.seam_metal = val('seam_metal');
     p.counter_batten = val('counter_batten');
     return p;
 }
@@ -1447,6 +1450,7 @@ function snapshotState() {
     for (const k of STATE_TOGGLES) settings[k] = toggleValue(k);
     settings.counter_batten = val('counter_batten');
     settings.seam_deck = val('seam_deck');
+    settings.seam_metal = val('seam_metal');
     settings.ifc_schema = ifcSchema();
     Object.assign(settings, customProfileParams());
     const elevation = e => ({
@@ -1583,7 +1587,7 @@ function chainSettingsOf(s) {
     for (const k of CHAIN_CHECKS) if (typeof s[k] === 'boolean') out[k] = s[k];
     const toggles = { 'corner-type': 'corner', 'cladding-type': 'cladding_type', 'plank-orient': 'plank_orient', 'plank-profile': 'plank_profile' };
     for (const [from, to] of Object.entries(toggles)) if (s[from]) out[to] = s[from];
-    for (const k of ['seam_deck', 'counter_batten', 'custom_profile', 'custom_section']) if (s[k]) out[k] = s[k];
+    for (const k of ['seam_deck', 'seam_metal', 'counter_batten', 'custom_profile', 'custom_section']) if (s[k]) out[k] = s[k];
     return Object.keys(out).length ? out : null;
 }
 
@@ -1648,6 +1652,7 @@ function restoreState(st, add, fileName) {
         for (const k of STATE_TOGGLES) if (s[k]) selectToggle(k, s[k]);
         if (s.counter_batten) document.getElementById('counter_batten').value = s.counter_batten;
         if (s.seam_deck) document.getElementById('seam_deck').value = s.seam_deck;
+        if (s.seam_metal) document.getElementById('seam_metal').value = s.seam_metal;
         if (s.ifc_schema) { document.getElementById('ifc_schema').value = s.ifc_schema; onIfcSchema(); }
         if (s.custom_section) addCustomProfile(s.custom_section, true);
         else if (s.custom_profile && CUSTOM_LIBRARY[s.custom_profile]) document.getElementById('custom_profile').value = s.custom_profile;
@@ -2331,8 +2336,8 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_window', 'cladding_lod', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_hip', 'cladding_eaves', 'cladding_head', 'cladding_abut', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles', 'cladding_union',
-                         'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator',
+        const modules = ['cladding_constants', 'cladding_window', 'cladding_lod', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_greencoat', 'cladding_hip', 'cladding_eaves', 'cladding_head', 'cladding_abut', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles', 'cladding_union',
+                         'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator', 'cladding_elevations',
                          'ifc_generator'];
         const v = Date.now();
         for (const mod of modules) {
