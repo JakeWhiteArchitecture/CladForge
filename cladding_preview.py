@@ -18,7 +18,7 @@ from cladding_checks import check_rules as _check_rules
 from cladding_ridge import ridge_ends, ridge_parts
 from cladding_verge import close_cap_ends, join_drips, join_hip_drips, verge_parts, join_verges
 from cladding_valley import valley_cut, valley_parts
-from cladding_hip import hip_ends, hip_parts
+from cladding_hip import gablet_hip_tops, hip_ends, hip_parts
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
 from cladding_abut import abut_over, abut_parts, abut_ridges, join_abuts
@@ -208,6 +208,7 @@ def _preview_one(p, ready=None):
     meshes = abut_parts(meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
     meshes = abut_over(meshes, p, infos)     # and that wall's layers stop above the roof
     meshes = close_cap_ends(meshes, p)       # a ridge or head verge cap that ends at a verge: the verge up to its plane, a stop end
+    meshes = gablet_hip_tops(meshes, p, infos)   # a hip under a gablet's gable: its cap stops on the rake's seam, the slope dressed out to it
     meshes = break_at_seams(meshes, p)       # last: each tray's flat drawn back to its own upstand, clear of the next tray's
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
         meshes = profile_planks(meshes, p)

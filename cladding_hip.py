@@ -383,3 +383,171 @@ def hip_parts(meshes, p, infos):
             info.setdefault("hip_strips", []).append(
                 [[x1, y1], [x2, y2], [x2 + RIDGE_LEG * mx, y2 + RIDGE_LEG * my], [x1 + RIDGE_LEG * mx, y1 + RIDGE_LEG * my]])
     return meshes + extra
+
+
+def _clip_sheet(m, n, c):
+    """Keep the part of a sheet laid in its face's frame (a cap leg, an upstand: one ring in
+    the face's (u, v), its corners' shifts with depth in "vshift") on the side n·x <= c of a
+    line, a new corner where an edge crosses it, its shift taken pro rata. False if nothing
+    is left of it, True otherwise (*m* changed in place)."""
+    ring = [list(q) for q in m["profile"]]
+    old = m.get("vshift") or []
+    rows = [list(r) for r in old[0]] if old and old[0] else [[0.0] * 4 for _q in ring]
+    side = [n[0] * q[0] + n[1] * q[1] - c for q in ring]
+    if all(s <= 1e-6 for s in side):
+        return True
+    if all(s >= -1e-6 for s in side):
+        return False
+    pts, shifts = [], []
+    for i in range(len(ring)):
+        j = (i + 1) % len(ring)
+        if side[i] <= 1e-6:
+            pts.append(ring[i])
+            shifts.append(rows[i])
+        if (side[i] < -1e-6 < side[j]) or (side[j] < -1e-6 < side[i]):
+            f = side[i] / (side[i] - side[j])
+            pts.append([round(ring[i][k] + f * (ring[j][k] - ring[i][k]), 3) for k in (0, 1)])
+            shifts.append([rows[i][k] + f * (rows[j][k] - rows[i][k]) for k in range(4)])
+    if len(pts) < 3:
+        return False
+    m["profile"] = pts
+    if old:
+        m["vshift"] = [shifts] + list(old[1:])
+    return True
+
+
+def _hip_tops(elev, p, info):
+    """Where a hip on this face runs up to the foot of a verge set in from the face's end (a
+    gablet: the hip ends at the top of the hip end, under the small gable, and the slope's
+    rake rises from there), the seam on the rake's line meets the hip a little below the
+    hip's top. [(the hip record, S: where that seam meets it, T: the hip's top, the seam's
+    u)], in the face's own (u, v)."""
+    from cladding_verge import _outline_sides, verge_sides
+    sides = verge_sides(elev, p)
+    edges = _outline_sides(elev)
+    lines = sorted(float(u) for u in (info.get("seam_lines") or []))
+    out = []
+    if not sides or not lines:
+        return out
+    for side in sides:
+        if side not in edges:
+            continue
+        u_v = edges[side][0]
+        foot = min((q[1] for pg in elev.get("polygons") or [] for q in pg["exterior"] if abs(q[0] - u_v) < 1.0), default=None)
+        if foot is None:
+            continue
+        for h in hips_of(elev):
+            lo, hi = sorted((h["p1"], h["p2"]), key=lambda q: q[1])
+            if math.hypot(hi[0] - u_v, hi[1] - foot) > JOIN_TOL:
+                continue                                                 # this hip does not run up to the rake's foot
+            near = [u for u in lines if (u <= u_v + 1.0 if side == "l" else u >= u_v - 1.0)]
+            if not near:
+                continue
+            u_s = max(near) if side == "l" else min(near)
+            if abs(u_s - u_v) > 400.0 or abs(hi[0] - lo[0]) < 1.0:
+                continue
+            f = (u_s - lo[0]) / (hi[0] - lo[0])
+            if not 0.0 < f < 1.0:
+                continue
+            out.append((h, (u_s, lo[1] + f * (hi[1] - lo[1])), (hi[0], hi[1]), u_s))
+    return out
+
+
+def gablet_hip_tops(meshes, p, infos):
+    """The top of a hip under a gablet's gable, after the G3 hip: the cap, which would run up
+    into the corner where the gable's rake starts, **stops on the seam on the rake's line**,
+    where that seam meets the hip a little below the hip's top (S), closed by a stop end; and
+    above S **the slope's own surface is dressed on out to that seam**, a sheet in its plane
+    from the hip to the seam's line (part of the verge's last tray: one element with it), so
+    the seam runs on unbroken from the eaves to the ridge. The trays' upstands along the hip
+    stop at S too, and the verge's edge seam comes down to it."""
+    from cladding_constants import frame_to_world, world_to_frame
+    if not p.get("seam") or not _up_slope(p):
+        return meshes
+    info_by = {i["elevation"]: i for i in infos}
+    by = {e.get("name"): e for e in p.get("elevations", [])}
+    short = lambda n: str(n or "").replace("Elevation ", "")              # noqa: E731
+    out = list(meshes)
+    for elev in p.get("elevations", []):
+        name, info = elev.get("name"), info_by.get(elev.get("name"))
+        if info is None:
+            continue
+        for h, S, T, u_s in _hip_tops(elev, p, info):
+            frame = elev["frame"]
+            size = math.hypot(T[0] - S[0], T[1] - S[1])
+            if size < 1.0:
+                continue
+            d = ((T[0] - S[0]) / size, (T[1] - S[1]) / size)               # up the hip, on this face
+            world_s = frame_to_world(frame, S[0], S[1], 0.0)
+            other = by.get(h["with"])
+            # the cap legs and the upstands, on this face and the other, stop at S
+            cuts = {name: (d, d[0] * S[0] + d[1] * S[1])}
+            if other is not None:
+                oh = next((x for x in hips_of(other) if x["with"] == name), None)
+                if oh is not None:
+                    lo, hi = sorted((oh["p1"], oh["p2"]), key=lambda q: q[1])
+                    s_o = world_to_frame(other["frame"], world_s)
+                    L = math.hypot(hi[0] - lo[0], hi[1] - lo[1])
+                    if L > 1.0:
+                        do = ((hi[0] - lo[0]) / L, (hi[1] - lo[1]) / L)
+                        cuts[h["with"]] = (do, do[0] * s_o[0] + do[1] * s_o[1])
+            for face, (n, c) in cuts.items():
+                ef = by[face]
+                legs = [m for m in out if m.get("elevation") == face and m.get("cap_leg") and not m.get("ridge_info")
+                        and m.get("name") == "%s Hip Cap %s" % (face, short(name if face != name else h["with"]))]
+                ups = [m for m in out if m.get("elevation") == face and m.get("hip_part") and " Hip Upstand" in m.get("name", "")]
+                for m in legs + ups:
+                    if not _same_frame(m["frame"], ef["frame"]):
+                        continue
+                    if not _clip_sheet(m, n, c):
+                        out.remove(m)
+                        continue
+                    if m in legs:
+                        # the cap's top closed: a stop end across the leg at S, from its underside down to the trays' face
+                        on = [q for q in m["profile"] if abs(n[0] * q[0] + n[1] * q[1] - c) < 0.05]
+                        face_d = float((info_by.get(face) or {}).get("total_depth") or 0.0)
+                        rest, t = float(m["depth"]), float(m["thickness"])
+                        if len(on) >= 2 and rest - face_d > 1.0:
+                            a, b = on[0], on[-1]
+                            ring = [a, b, [b[0] - t * n[0], b[1] - t * n[1]], [a[0] - t * n[0], a[1] - t * n[1]]]
+                            pg = orient(Polygon(ring), 1.0)
+                            stop = _prism([[round(x, 3), round(y, 3)] for x, y in list(pg.exterior.coords)[:-1]], face_d, rest - face_d,
+                                          ef["frame"], "ridge_cap", "%s Hip Top Stop End %s" % (face, short(name if face != name else h["with"])), face)
+                            stop.update(tray_sheet=True, of=m["name"], stop_end=True, color=m.get("color", stop["color"]))
+                            out.append(stop)
+            # the slope's surface dressed on out from the hip to the seam's line, above S
+            C = (u_s, T[1])
+            m_in = h["m"]                                                  # into the face, square to the hip
+            gap = RIDGE_GAP
+            S_in, T_in = (S[0] + gap * m_in[0], S[1] + gap * m_in[1]), (T[0] + gap * m_in[0], T[1] + gap * m_in[1])
+            tray = None
+            for m in out:
+                if m.get("elevation") != name or m.get("ifc_type") != "plank":
+                    continue
+                us = [q[0] for q in m["profile"]]
+                vs = [q[1] for q in m["profile"]]
+                if min(us) - 2.0 <= u_s + (1.0 if C[0] <= T[0] else -1.0) * 2.0 <= max(us) + 2.0 and min(vs) <= T[1] <= max(vs) \
+                        and abs((min(us) if C[0] <= T[0] else max(us)) - u_s) < 2.0:
+                    tray = m
+                    break
+            if tray is None:
+                continue
+            pg = Polygon([S, T, T_in, C, S_in]).convex_hull
+            pg = orient(pg, 1.0)
+            ring = [[round(x, 3), round(y, 3)] for x, y in list(pg.exterior.coords)[:-1]]
+            dress = _prism(ring, float(tray["depth"]), float(tray["thickness"]), frame, "seam", "%s Hip Dressing" % tray["name"], name)
+            dress.update(of=tray["name"], tray_sheet=True, color=tray.get("color", dress["color"]))
+            out.append(dress)
+            # the verge's edge seam carried down the rake's line to S
+            for m in out:
+                if m.get("elevation") != name or not m.get("verge_seam") or not _same_frame(m["frame"], frame):
+                    continue
+                vs = [q[1] for q in m["profile"]]
+                us = [q[0] for q in m["profile"]]
+                if abs(min(vs) - T[1]) > 120.0 or abs(sum(us) / len(us) - u_s) > 20.0:
+                    continue
+                low = min(vs)
+                for q in m["profile"]:
+                    if q[1] <= low + 0.5:
+                        q[1] = round(S[1], 3)
+    return out

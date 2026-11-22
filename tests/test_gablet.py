@@ -110,3 +110,36 @@ def test_a_seam_is_set_on_the_gable_line_so_no_verge_falls_part_way_across_a_tra
         # the verge's last tray ends at the line, and a tray beyond it runs up to the hip
         assert any(abs((s[0] if side == "l" else s[1]) - line) < 1.5 and s[2] > rake_v + 50.0 for s in spans), (name, line)
         assert any(abs((s[1] if side == "l" else s[0]) - line) < 1.5 and s[2] < rake_v + 50.0 for s in spans), (name, line)
+
+
+def test_the_hip_cap_stops_on_the_rake_seam_and_the_slope_is_dressed_out_to_it():
+    """At the top of each hip, under the gable: the seam on the rake's line meets the hip a
+    little below its top; the cap (both legs) stops there, closed by a stop end, the trays'
+    upstands along the hip stop there too, and above it the slope's own surface is dressed on
+    out to the seam's line, part of the verge's last tray; the verge's edge seam comes down to it."""
+    from cladding_hip import _hip_tops
+    from ifc_generator import tray_owners
+    _found, params, out = gablet()
+    geo = out["geometry"]
+    by = {e["name"]: e for e in params["elevations"]}
+    info = {i["elevation"]: i for i in out["info"]}
+    for name in ("South", "North"):
+        ((h, S, T, u_s),) = _hip_tops(by[name], dict(SEAM, seam=True, seam_h=25.0), info[name])
+        assert 0.0 < T[1] - S[1] < 200.0                                        # just below the hip's top
+        d = ((T[0] - S[0]), (T[1] - S[1]))
+        c = d[0] * S[0] + d[1] * S[1]
+        for m in geo:
+            if m["elevation"] == name and (m.get("cap_leg") and " Hip Cap " in m["name"] or " Hip Upstand" in m["name"]):
+                assert max(d[0] * q[0] + d[1] * q[1] for q in m["profile"]) <= c + 0.5, m["name"]   # nothing past S
+        tops = [m for m in geo if m["elevation"] == name and "Hip Top Stop End" in m["name"]]
+        assert len(tops) == 1 and tops[0]["stop_end"]
+        (dress,) = [m for m in geo if m["elevation"] == name and m["name"].endswith("Hip Dressing")]
+        us = [q[0] for q in dress["profile"]]
+        assert min(abs(u - u_s) for u in us) < 0.5 and max(q[1] for q in dress["profile"]) == pytest.approx(T[1], abs=0.5)
+        group = [m for m in geo if m.get("elevation") == name]
+        assert tray_owners(group)[id(dress)]["name"] == dress["of"]               # one element with the verge's tray
+        seams = [m for m in geo if m["elevation"] == name and m.get("verge_seam")]
+        assert seams and min(min(q[1] for q in m["profile"]) for m in seams) == pytest.approx(S[1], abs=0.5)
+    # the other face's leg of each hip stops at the same point
+    west = [m for m in geo if m["elevation"] == "West" and "Hip Top Stop End" in m["name"]]
+    assert len(west) == 2
