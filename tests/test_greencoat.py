@@ -63,19 +63,21 @@ def test_at_the_eaves_the_hip_comes_to_a_point_on_plan():
     # and they meet at the corner: their nearest points within a few mm of each other, out past the eaves
     a, b = (_corners(m) for m in stops)
     assert min(math.dist(p, q) for p in a for q in b) < 3.0
-    assert max(p[0] for p in a + b) < 60.0 and max(p[1] for p in a + b) < 60.0
+    # 50 past the front of the eaves bullnose, which stands about 60 out from the wall line on plan
+    assert -160.0 < min(p[0] for p in a + b) < -80.0 and -160.0 < min(p[1] for p in a + b) < -80.0
 
 
 def test_hips_meeting_at_the_top_of_a_hip_end_are_mitred():
     g = _hipped_roof(seam_metal="steel")[2]["geometry"]
-    assert len([m for m in g if m.get("hip1") and m["name"].endswith("Mitre End")]) == 8
+    # batten, flashing and the two slopes' upstands, at both ends of the ridge
+    assert len([m for m in g if m.get("hip1") and m["name"].endswith("Mitre End")]) == 16
 
 
 def test_under_a_gablet_the_batten_tapers_to_nothing_at_level_plus_three_degrees():
     out = gablet(seam_metal="steel")[2]
     g = out["geometry"]
     tapers = [m for m in g if m.get("hip1") and m["name"].endswith("Taper")]
-    assert len(tapers) == 4                                       # batten and flashing, each hip
+    assert len(tapers) == 8                                       # batten, flashing and both upstands, each hip
     hip = next(h for i in out["info"] for h in i.get("hips", []) if h.get("taper"))
     # 30° slopes: the hip rises at atan(tan30 / √2); the batten's depth over its rise less 3°
     rise = math.sin(math.atan(math.tan(math.radians(30)) / math.sqrt(2)))
@@ -86,3 +88,28 @@ def test_under_a_gablet_the_batten_tapers_to_nothing_at_level_plus_three_degrees
     end = float(b["depth"]) + float(b["thickness"])
     ys = [q[1] for q in ring_at(b, 0, end)]
     assert max(ys) - min(ys) < 30.0                               # flat on the decks at its end
+
+
+def test_the_trays_are_turned_up_to_the_batten_s_top_and_the_flashing_is_a_flat_cap():
+    g = _hipped_roof(seam_metal="steel")[2]["geometry"]
+    ups = [m for m in g if m.get("hip1") and m["ifc_type"] == "seam" and not m.get("of")]
+    assert len(ups) == 8                                          # each slope's, on each hip
+    b = next(m for m in g if m.get("hip1") and m["ifc_type"] == "batten" and not m.get("of"))
+    top = max(q[1] for q in b["profile"])
+    for u in ups:
+        assert top - 2.0 < max(q[1] for q in u["profile"]) < top
+    cap = next(m for m in g if m.get("hip1") and m["name"].startswith("South Hip Flashing") and not m.get("of"))
+    ys = [q[1] for q in cap["profile"]]
+    assert max(ys) - min(ys) < 15.0                               # a flat cap, its edges turned down 10
+
+
+def test_a_seam_running_out_on_a_steel_hip_is_not_folded():
+    g = _hipped_roof(seam_metal="steel")[2]["geometry"]
+    z = _hipped_roof()[2]["geometry"]
+    name = "South Tray C3-1 Seam overcloak"
+    steel = next(m for m in g if m["name"] == name)
+    zinc = next(m for m in z if m["name"] == name)
+    def top_shift(m):            # how far its top end moves up the slope with depth: a 45° fold is 1 more than the hip's lean
+        q, r = max(zip(m["profile"], m["vshift"][0]), key=lambda qr: qr[0][1])
+        return r[3]
+    assert abs(top_shift(steel) - top_shift(zinc) - 1.0) < 0.05    # zinc: the hip's lean less the fold; steel: the lean alone

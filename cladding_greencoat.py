@@ -5,14 +5,15 @@ they differ from the zinc (G3) ones. Chosen per chain: "seam_metal" = "steel".
 and the hip flashing (a T-cap, lapped and sealed end to end) is fixed over it.
 
   * The deck and every layer behind it meet on the plane that bisects the hip: no vent slot.
-  * The trays stop HIP1_GAP clear of the batten's sides and are turned up HIP1_UPSTAND
-    against it (cladding_hip.hip_ends, with this module's cut).
+  * The trays stop HIP1_GAP clear of the batten's sides (cladding_hip.hip_ends, with this
+    module's cut) and are turned up against it to just under its top, their seams run up
+    full height to the turned-up end (never folded there: cladding_edges.finish_seams).
   * The batten: HIP1_W wide, its sides parallel to the bisecting plane, seated on both decks
     (its underside cut to their V), HIP1_H deep at its sides, its top square to the plane.
-  * The flashing: its top on the batten, its legs down each side outside the trays'
-    upstands, their feet clear of the standing seams.
+  * The flashing: a flat T-cap on the batten's top, out HIP1_CAP_OVER past the upstands each
+    side, its edges turned down HIP1_CAP_DROP.
   * At the foot, at the eaves, each half (each slope's side of the hip) is cut on a plumb
-    plane along its own slope's eaves, HIP_PROJECT past the trays' ends, so the batten and
+    plane along its own slope's eaves, HIP1_OVERSAIL past the front of its eaves bullnose, so the batten and
     the flashing come to a point on plan at the corner (as the zinc hip cap's legs do), and
     each half of the flashing's end is closed by a stop end in its plane. Where two hips meet at the
     top of a hip end they are mitred on the vertical plane between them; the ridge cap,
@@ -33,10 +34,11 @@ from cladding_ridge import JOIN_TOL, CLAD, MEET  # noqa: F401 — MEET kept for 
 HIP1_W = 47.0          # mm – the batten's width (placeholder)
 HIP1_H = 50.0          # mm – its depth at its sides, off the deck (placeholder)
 HIP1_GAP = 5.0         # mm – the trays' turned-up ends clear of the batten's sides
-HIP1_UPSTAND = 35.0    # mm – the trays turned up against the batten, off their face
-HIP1_CLEAR = 2.0       # mm – the flashing's legs off the trays' upstands
-HIP1_SEAM_CLEAR = 5.0  # mm – the legs' feet above the standing seams' tops
+HIP1_UNDER = 1.0       # mm – the trays' turned-up ends, under the batten's top
+HIP1_CAP_OVER = 15.0   # mm – the flashing out past the upstands, each side (placeholder)
+HIP1_CAP_DROP = 10.0   # mm – its edges turned down (placeholder)
 HIP1_FALL = 3.0        # degrees – the batten's top off level where it tapers under a gable
+HIP1_OVERSAIL = 50.0   # mm – the hip's foot past the front of the eaves bullnose, on plan
 TAPER_MAX = 1500.0     # mm – the longest taper, along the hip, however flat the hip
 
 
@@ -50,8 +52,20 @@ def hip1_lines(hips):
     out = []
     for h in hips:
         back = (HIP1_W / 2.0 + HIP1_GAP) * math.sqrt(1.0 + h["k"] ** 2)
-        out.append(dict(h, back=back, hip1=True, upstand=HIP1_UPSTAND))
+        out.append(dict(h, back=back, hip1=True))
     return out
+
+
+def on_hip(q, hips, tol=80.0):
+    """The point *q* of a face lies on (within *tol* of) one of its hips (hips_of)."""
+    for h in hips:
+        (x1, y1), (x2, y2) = h["p1"], h["p2"]
+        dx, dy = (x2 - x1) / h["length"], (y2 - y1) / h["length"]
+        along = (q[0] - x1) * dx + (q[1] - y1) * dy
+        across = abs((q[0] - x1) * dy - (q[1] - y1) * dx)
+        if across <= tol and -tol <= along <= h["length"] + tol:
+            return True
+    return False
 
 
 def hip1_cut(h, kind, near, t, _face, _board, _elev, _p):
@@ -109,44 +123,52 @@ def _ccw(ring, *rows):
     return (ring[::-1],) + tuple(r[::-1] for r in rows)
 
 
-def _sections(na, da, fa, nb, db, fb, sa, t, seam_h):
-    """The batten's and the flashing's sections, each as (ring, the ring where it has
-    tapered to nothing). *na*, *nb*: the faces' normals in the section; *da*, *db*: their
+def _sections(na, da, fa, nb, db, fb, sa, t):
+    """The parts' sections across the hip, each (ring, the ring where it has tapered to
+    nothing, kind, label, the side of the hip it is on or 0 for both), and the flashing's
+    open end on each side. *na*, *nb*: the faces' normals in the section; *da*, *db*: their
     decks' tops; *fa*, *fb*: their trays' faces; *sa*: which way along x face a lies."""
     sb = -sa
     q0 = _meet(na, da, nb, db)                                    # the decks' arris
+    fq = _meet(na, fa, nb, fb)                                    # the trays' faces' arris
     cx = q0[0]
     side = lambda x: (na, da, fa) if (x - cx) * sa > 0 else (nb, db, fb)       # noqa: E731
     deck = lambda x: _line_y(side(x)[0], side(x)[1], x)                         # noqa: E731
     face = lambda x: _line_y(side(x)[0], side(x)[2], x)                         # noqa: E731
     xa, xb = cx + sa * HIP1_W / 2.0, cx + sb * HIP1_W / 2.0
     top = max(deck(xa), deck(xb)) + HIP1_H
-    batten = [(xa, deck(xa)), q0, (xb, deck(xb)), (xb, top), (xa, top)]
+    out = []
+    # the batten, seated on both decks, with a point over the arris for the taper
+    batten = [(xa, deck(xa)), q0, (xb, deck(xb)), (xb, top), (cx, top), (xa, top)]
     flat = [(xa, deck(xa)), q0, (xb, deck(xb)), (xb, deck(xb) + 1.0), (cx, q0[1] + 1.0), (xa, deck(xa) + 1.0)]
-    batten = batten[:4] + [(cx, top)] + batten[4:]                # a point over the arris, for the taper
-    # the flashing: an inverted U over the batten and the upstands, its legs' feet clear of the seams
-    a = HIP1_W / 2.0 + HIP1_GAP + t + HIP1_CLEAR
-    fq = _meet(na, fa, nb, fb)                                    # the trays' faces' arris
+    out.append(_ccw(batten, flat) + ("batten", "Hip Batten", 0))
+    # each slope's trays turned up against it, to just under its top, parallel to its side
+    for sd in (sa, sb):
+        x0, x1 = cx + sd * (HIP1_W / 2.0 + HIP1_GAP), cx + sd * (HIP1_W / 2.0 + HIP1_GAP + t)
+        up = [(x0, face(x0) - t), (x1, face(x1) - t), (x1, top - HIP1_UNDER), (x0, top - HIP1_UNDER)]
+        down = [(x0, face(x0) - t), (x1, face(x1) - t), (x1, face(x1)), (x0, face(x0))]
+        out.append(_ccw(up, down) + ("seam", "Hip Upstand" if sd == sa else "Hip Upstand Far", sd))
+    # the flashing: a flat T-cap on the batten, out over the upstands, each edge turned down
+    e = HIP1_W / 2.0 + HIP1_GAP + t + HIP1_CAP_OVER
     pts, ends = [], []
     for x, y, end in (
-            (cx + sa * (a + t), face(cx + sa * (a + t)) + seam_h + HIP1_SEAM_CLEAR, (face(cx + sa * (a + t)) + 1.0)),
-            (cx + sa * (a + t), top + t, face(cx + sa * (a + t)) + 1.0 + t),
+            (cx + sa * e, top - HIP1_CAP_DROP, face(cx + sa * e) + 1.0 + t / 2.0),
+            (cx + sa * e, top + t, face(cx + sa * e) + 1.0 + t),
             (cx, top + t, fq[1] + 1.0 + t),
-            (cx + sb * (a + t), top + t, face(cx + sb * (a + t)) + 1.0 + t),
-            (cx + sb * (a + t), face(cx + sb * (a + t)) + seam_h + HIP1_SEAM_CLEAR, face(cx + sb * (a + t)) + 1.0),
-            (cx + sb * a, face(cx + sb * a) + seam_h + HIP1_SEAM_CLEAR, face(cx + sb * a) + 1.0),
-            (cx + sb * a, top, face(cx + sb * a) + 1.0),
+            (cx + sb * e, top + t, face(cx + sb * e) + 1.0 + t),
+            (cx + sb * e, top - HIP1_CAP_DROP, face(cx + sb * e) + 1.0 + t / 2.0),
+            (cx + sb * (e - t), top - HIP1_CAP_DROP, face(cx + sb * (e - t)) + 1.0 + t / 2.0),
+            (cx + sb * (e - t), top, face(cx + sb * (e - t)) + 1.0),
             (cx, top, fq[1] + 1.0),
-            (cx + sa * a, top, face(cx + sa * a) + 1.0),
-            (cx + sa * a, face(cx + sa * a) + seam_h + HIP1_SEAM_CLEAR, face(cx + sa * a) + 1.0)):
+            (cx + sa * (e - t), top, face(cx + sa * (e - t)) + 1.0),
+            (cx + sa * (e - t), top - HIP1_CAP_DROP, face(cx + sa * (e - t)) + 1.0 + t / 2.0)):
         pts.append((x, y))
         ends.append((x, end))
-    b_ring, b_end = _ccw(batten, flat)
-    c_ring, c_end = _ccw(pts, ends)
-    xo_a, xo_b = cx + sa * (a + t), cx + sb * (a + t)               # the flashing's open end, down to the trays
+    out.append(_ccw(pts, ends) + ("ridge_cap", "Hip Flashing", 0))
+    xo_a, xo_b = cx + sa * e, cx + sb * e                          # the flashing's open end, down to the trays
     mouth = {sa: [(cx, fq[1]), (xo_a, face(xo_a)), (xo_a, top + t), (cx, top + t)],
              sb: [(cx, fq[1]), (xo_b, face(xo_b)), (xo_b, top + t), (cx, top + t)]}
-    return (b_ring, b_end), (c_ring, c_end), mouth, cx
+    return out, mouth, cx
 
 
 def _half(ring, cx, side):
@@ -189,6 +211,28 @@ def _stop_end(mouth, frame, foot, phi, t, title, name):
     return plate
 
 
+def _bullnose_front(meshes, elev, corner, V, t):
+    """(The outermost point of a slope's eaves bullnose, level with its middle; the plywood's
+    end, at its underside) in the world (cladding_eaves.eaves_paths: the trays' sheet rolled
+    round the plywood's end), beside the eaves *corner* (a point on its eaves edge, on its face)."""
+    from cladding_eaves import apron_drop, EAVES_SUPPORT_T
+    from cladding_ridge import _same_frame
+    frame = elev["frame"]
+    mine = [m for m in meshes if m.get("elevation") == elev.get("name") and _same_frame(m["frame"], frame)]
+    trays = [float(m["depth"]) for m in mine if m.get("ifc_type") == "plank"]
+    decks = [float(m["depth"]) for m in mine if m.get("ifc_type") == "deck"]
+    back = min(trays) if trays else 0.0
+    soffit = min(decks) if decks else back
+    pitch = min(float(elev.get("pitch") or 0.0), 80.0)
+    sn, cs = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+    nose, out, _below = apron_drop(soffit, pitch)
+    yt, yb = back + t / 2.0, soffit - EAVES_SUPPORT_T - t
+    end = (out - soffit * sn) / cs + nose                             # down the slope from the edge to the plywood's end
+    down = end + (yt - yb) / 2.0                                      # and to the roll's front
+    N = [float(c) for c in frame["n"]]
+    return _add(_add(corner, V, -down), N, (yt + yb) / 2.0), _add(_add(corner, V, -end), N, soffit)
+
+
 def _deck_top(meshes, name, frame):
     from cladding_ridge import _same_frame
     tops = [float(m["depth"]) + float(m["thickness"]) for m in meshes
@@ -200,8 +244,8 @@ def hip1_parts(meshes, p, infos):
     """The batten and the flashing over every hip of a steel chain, built once per hip by its
     master face, along the hip in a frame of its own (u across, v out of the hip, n up it).
     Records each face's hips on its info as cladding_hip.hip_parts does."""
-    from cladding_hip import hips_of, _hip_tops, HIP_PROJECT
-    from cladding_eaves import EAVES_TRAY, has_eaves
+    from cladding_hip import hips_of, _hip_tops
+    from cladding_eaves import has_eaves
     from cladding_ridge import _up_slope
     from cladding_verge import _cut_end
     by = {e.get("name"): e for e in p.get("elevations", [])}
@@ -241,18 +285,20 @@ def hip1_parts(meshes, p, infos):
             into = _add([c * h["m"][0] for c in fa["u"]], [c * h["m"][1] for c in (fa.get("v") or (0, 0, 1))])
             sa = 1.0 if _dot(into, X) > 0 else -1.0
             stand = SEAM_STANDOFF + t
-            (b_ring, b_end), (c_ring, c_end), mouth, cx = _sections(na, da, da + stand, nb, db, db + stand, sa, t, seam_h)
+            sections, mouth, cx = _sections(na, da, da + stand, nb, db, db + stand, sa, t)
             # the foot: each half cut on a plumb plane along its own slope's eaves, past the trays'
             # ends, so the two come to a point on plan; square to the hip where a slope has no eaves
             phi = _plan(L)
-            feet = {}                                                    # side: (a point of the plane, its normal up the hip)
+            feet, timber = {}, {}                                        # side: (a point of the plane, its normal up the hip)
             for e, side in ((elev, sa), (other, -sa)):
                 V = [float(c) for c in (e["frame"].get("v") or (0, 0, 1))]
                 level = _plan(V)
                 if has_eaves(e, p) and level and _dot(level, phi or level) > 0.05:
-                    feet[side] = (_add(lo, V, -(EAVES_TRAY + HIP_PROJECT)), level)
+                    front, ply = _bullnose_front(meshes, e, lo, V, t)
+                    feet[side] = (_add(front, level, -HIP1_OVERSAIL), level)
+                    timber[side] = (ply, level)                          # the batten stops with the plywood
                 elif phi:
-                    feet[side] = (lo, phi)
+                    feet[side] = timber[side] = (lo, phi)
             eaves = any(has_eaves(e, p) for e in (elev, other))
             s_feet = [_dot(_sub(q, lo), n) / _dot(L, n) for q, n in feet.values()]
             s_foot = min(s_feet) if s_feet else 0.0
@@ -287,15 +333,22 @@ def hip1_parts(meshes, p, infos):
             start = s_foot - 300.0 if feet else s_foot
             end = s_top + (300.0 if top_cut else 0.0)
             short = lambda n: str(n or "").replace("Elevation ", "")              # noqa: E731
-            for ring, flat, kind, label in ((b_ring, b_end, "batten", "Hip Batten"), (c_ring, c_end, "ridge_cap", "Hip Flashing")):
+            for ring, flat, kind, label, part_side in sections:
                 title = "%s %s %s" % (name, label, short(h["with"]))
+                if part_side:                                            # an upstand: the tray of its own slope
+                    title = "%s Hip Upstand %s" % ((name, short(h["with"])) if part_side == sa else (h["with"], short(name)))
                 run_end = taper[0] if taper else end
                 piece = _prism(ring, start, run_end - start, frame, kind, title, name)
-                piece.update(hip_part=True, hip1=True)
+                piece.update(hip_part=True, hip1=True, opacity=1.0)
+                if part_side:
+                    piece["elevation"] = name if part_side == sa else h["with"]
                 pieces = [piece]
                 if feet:
-                    halves = [(_half(ring, cx, side), q, n, "Foot %s" % ("L" if side > 0 else "R")) for side, (q, n) in feet.items()]
-                    cut = _cut_end(piece, [c for c in halves if c[0]], at_start=True)
+                    planes = timber if kind == "batten" else feet
+                    halves = [(_half(ring, cx, side) if not part_side else (None if side == part_side else False), q, n,
+                               "Foot %s" % ("L" if side > 0 else "R")) for side, (q, n) in planes.items()]
+                    halves = [c for c in halves if c[0] is not False and (c[0] or part_side)]
+                    cut = _cut_end(piece, halves, at_start=True)
                     if cut:
                         for pc in cut:
                             pc.pop("drip_end", None)
@@ -329,6 +382,6 @@ def hip1_parts(meshes, p, infos):
                     continue
                 info.setdefault("hips", []).append({
                     "with": h["with"] if hh else name, "master": hh is not None, "length": round(h["length"], 1),
-                    "detail": "Hip 1", "batten": [HIP1_W, HIP1_H], "gap": HIP1_GAP, "upstand": HIP1_UPSTAND,
+                    "detail": "Hip 1", "batten": [HIP1_W, HIP1_H], "gap": HIP1_GAP,
                     "taper": round(taper[1], 1) if taper else None, "angle": round(math.degrees(2.0 * math.atan(h["k"])), 1)})
     return meshes + extra

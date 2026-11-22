@@ -162,7 +162,7 @@ def hip_ends(meshes, p, infos):
     clear of a batten on the hip line, every layer behind meets on the plane (cladding_greencoat)."""
     from cladding_greencoat import steel, hip1_lines, hip1_cut
     if steel(p):
-        return cut_to_lines(meshes, p, infos, lambda e: hip1_lines(hips_of(e)), hip1_cut, upstands=True)
+        return cut_to_lines(meshes, p, infos, lambda e: hip1_lines(hips_of(e)), hip1_cut)     # its upstands: hip1_parts
     return cut_to_lines(meshes, p, infos, hips_of, _hip_cut, upstands=True)
 
 

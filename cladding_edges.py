@@ -505,9 +505,18 @@ def finish_seams(meshes, p):
 
     "folded": the seam is folded down onto the tray, its end sloping from the tray to its full
     height over the seam height (a shift with depth, "vshift"). "flat": the seam runs to the
-    tray's end and stops square, flush with it, so nothing changes."""
+    tray's end and stops square, flush with it, so nothing changes.
+
+    On coated galvanised steel (GreenCoat's Hip 1) a seam that runs out on a hip is never
+    folded: the tray is turned up against the hip's batten, the seam with it, so the seam
+    runs at its full height to the turned-up end (cladding_greencoat)."""
     if not p.get("seam"):
         return meshes
+    from cladding_greencoat import steel, on_hip
+    hips = {}
+    if steel(p):
+        from cladding_hip import hips_of
+        hips = {e.get("name"): hips_of(e) for e in p.get("elevations", [])}
     sh = float(p["seam_h"])
     default = p.get("seam_end") != "flat"
     rules = {}
@@ -532,6 +541,11 @@ def finish_seams(meshes, p):
                 free_lo, free_hi = free_lo and fold and bottom, free_hi and fold and top
             else:
                 free_lo, free_hi = free_lo and fold, free_hi and fold
+            if hips.get(m.get("elevation")):
+                line = float(m["seam_line"])
+                at = (lambda w: (line, w)) if m["seam_v"] else (lambda w: (w, line))       # noqa: E731
+                free_lo = free_lo and not on_hip(at(lo), hips[m.get("elevation")])
+                free_hi = free_hi and not on_hip(at(hi), hips[m.get("elevation")])
             if not (free_lo or free_hi):
                 continue
             room = (hi - lo) / (2.0 if free_lo and free_hi else 1.0) - 1.0
