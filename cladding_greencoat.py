@@ -66,6 +66,54 @@ def gablet_seams(p, infos):
     return out
 
 
+def past_fill(meshes, p, main, end, h, S, T):
+    """Under a gablet, past the rake's seam (where Hip 1 is cut, cladding_hip.gablet_hip_tops):
+    a tray that crosses the seam's line keeps its end clear of the batten all along the hip,
+    so on each slope a strip of the deck between the tray's end and the hip's plane, from the
+    seam up to the hip's top, would be left open. It is filled with the trays' own sheet, laid
+    as they are, clipped to the slope's outline and clear of the trays already there."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    from cladding_hip import hips_of
+    from cladding_ridge import _same_frame
+    from cladding_primitives import ring_at
+    if end is None:
+        return []
+    out = []
+    t = float(p["seam_t"])
+    world_s = frame_to_world(main["frame"], S[0], S[1], 0.0)
+    world_t = frame_to_world(main["frame"], T[0], T[1], 0.0)
+    for face, other in ((main, end), (end, main)):
+        f = face["frame"]
+        O, U, V = f["origin"], [float(c) for c in f["u"]], [float(c) for c in (f.get("v") or (0, 0, 1))]
+        local = lambda w: (_dot(_sub(w, O), U), _dot(_sub(w, O), V))        # noqa: E731
+        line = next((x for x in hips_of(face) if x["with"] == other.get("name")), None)
+        trays = [m for m in meshes if m.get("elevation") == face.get("name") and m.get("ifc_type") == "plank" and _same_frame(m["frame"], f)]
+        if line is None or not trays:
+            continue
+        depth = min(float(m["depth"]) for m in trays)
+        mid = depth + t / 2.0
+        # from the hip's plane (beyond the hip's line on the face, as the plane leans over it) to the trays' ends
+        near = -line["k"] * mid
+        far = (HIP1_W / 2.0 + HIP1_GAP + t) * math.sqrt(1.0 + line["k"] ** 2) - line["k"] * mid
+        (sx, sy), (tx, ty), (mx, my) = local(world_s), local(world_t), line["m"]
+        strip = Polygon([(sx + near * mx, sy + near * my), (tx + near * mx, ty + near * my),
+                         (tx + far * mx, ty + far * my), (sx + far * mx, sy + far * my)])
+        try:
+            covered = unary_union([Polygon(ring_at(m, 0, mid)).buffer(0) for m in trays])
+            fill = strip.buffer(0).difference(covered)
+        except (ValueError, TypeError):
+            continue
+        for k, g in enumerate(getattr(fill, "geoms", [fill])):
+            if g.geom_type != "Polygon" or g.area < 25.0:
+                continue
+            ring = [[round(x, 3), round(y, 3)] for x, y in list(g.exterior.coords)[:-1]]
+            piece = _prism(ring, depth, t, f, "seam", "%s Hip Fill %d" % (face.get("name"), k + 1), face.get("name"))
+            piece.update(opacity=1.0, hip_part=True, hip1=True)
+            out.append(piece)
+    return out
+
+
 def hip1_lines(hips, name=None, seams=None):
     """The face's hips (cladding_hip.hips_of) with the trays stood back clear of the batten.
     Where a hip runs up under a gablet's gable (*seams*: gablet_seams), Hip 1 is cut on the

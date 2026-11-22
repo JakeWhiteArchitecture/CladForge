@@ -614,6 +614,7 @@ def gablet_hip_tops(meshes, p, infos):
     where they rise through the slope's plane at its corner, are cut back to the underside
     of the slope's plywood."""
     from cladding_constants import frame_to_world, frame_v
+    from cladding_greencoat import steel
     if not p.get("seam") or not _up_slope(p):
         return meshes
     info_by = {i["elevation"]: i for i in infos}
@@ -658,6 +659,9 @@ def gablet_hip_tops(meshes, p, infos):
             # the verge's edge seam carried down the rake's line to meet the tray seam below it, on that
             # seam's own line, so the two read as one seam from the eaves to the ridge
             _join_rake_seam(out, name, frame, u_s, T)
+            if steel(p):                     # Hip 1 cut on the seam: the deck past it, beside the hip, covered
+                from cladding_greencoat import past_fill
+                out += past_fill(out, p, elev, by.get(h["with"]), h, S, T)
             # the hip end's abutment parts at the gable's foot, cut back under this slope's plywood
             decks = [m for m in out if m.get("elevation") == name and m.get("ifc_type") == "deck" and _same_frame(m["frame"], frame)]
             if not decks:
