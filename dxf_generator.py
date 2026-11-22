@@ -200,6 +200,75 @@ def _schedule(p, info, meshes):
 
 # ── entry points ─────────────────────────────────────────────────────────
 
+def _building_elevations(dxf, meshes, top):
+    """The building's four elevations (cladding_elevations), side by side under the faces'
+    own, their tops at *top*. Returns the lowest y used."""
+    from cladding_elevations import elevation
+    ox, low = 0.0, top
+    for view in ("north", "east", "south", "west"):
+        lines = elevation(meshes, view)
+        if not lines:
+            continue
+        xs = [x for pts, _k in lines for x, _y in pts]
+        zs = [z for pts, _k in lines for _x, z in pts]
+        x0, z1 = min(xs), max(zs)
+        dx, dy = ox - x0, top - 400.0 - z1                  # its left edge at ox, its top under the title
+        for pts, kind in lines:
+            layer = "CORNER_PROFILE" if kind in ("ridge_cap", "verge_strip", "valley_gutter", "eaves_strip", "window_flashing") \
+                else _LAYER_FOR_TYPE.get(kind, "0")
+            for a, b in zip(pts, pts[1:]):
+                dxf.add_line((a[0] + dx, a[1] + dy), (b[0] + dx, b[1] + dy), layer)
+        dxf.add_text("%s ELEVATION" % view.upper(), (ox, top), _TITLE, "NOTES")
+        dxf.add_text("The whole model seen square from the %s (project north: the model's +Y), hidden lines removed." % view,
+                     (ox, top - 170.0), _TEXT, "NOTES")
+        low = min(low, min(zs) + dy - 300.0)
+        ox += max(xs) - x0 + _ELEV_GAP
+    return low
+
+
+def _hip1_plan(meshes, elev):
+    """GreenCoat's Hip 1 (cladding_greencoat) as it shows on a slope: each batten and each
+    flashing length seen square to the face, clipped to the face's own outline, as
+    [(ring in the face's (u, v), layer)]."""
+    from shapely.geometry import MultiPoint, Polygon
+    from shapely.ops import unary_union
+    from cladding_constants import frame_to_world, frame_v
+    f = elev["frame"]
+    O, U, V = f["origin"], [float(c) for c in f["u"]], [float(c) for c in frame_v(f)]
+    try:
+        face = unary_union([Polygon(pg["exterior"]) for pg in elev.get("polygons") or []]).buffer(1.0)
+    except (ValueError, TypeError):
+        return []
+    groups = {}
+    for m in meshes:
+        if not m.get("hip1") or m.get("ifc_type") not in ("batten", "ridge_cap"):
+            continue
+        d0, d1 = float(m["depth"]), float(m["depth"]) + float(m["thickness"])
+        pts = [frame_to_world(m["frame"], x, y, d) for d in (d0, d1) for x, y in _corner_ring_at(m, d)]
+        flat = [(sum((w - o) * u for w, o, u in zip(q, O, U)), sum((w - o) * v for w, o, v in zip(q, O, V))) for q in pts]
+        hull = MultiPoint(flat).convex_hull
+        if hull.geom_type == "Polygon" and hull.intersects(face):
+            layer = "BATTEN" if m["ifc_type"] == "batten" else "CORNER_PROFILE"
+            groups.setdefault(layer, []).append(hull)
+    out = []
+    for layer, hulls in groups.items():
+        shape = unary_union(hulls).intersection(face)
+        for g in getattr(shape, "geoms", [shape]):
+            if g.geom_type == "Polygon" and g.area > 10.0:
+                out.append((list(g.exterior.coords)[:-1], layer))
+    return out
+
+
+def _corner_ring_at(m, d):
+    from cladding_primitives import ring_at
+    return ring_at(m, 0, d)
+
+
+def _same_frame(a, b):
+    from cladding_ridge import _same_frame as same
+    return same(a, b)
+
+
 def meshes_to_dxf_string(meshes, params, infos=None):
     p = _parse(params)
     from cladding_preview import build_all_groups
@@ -231,12 +300,16 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for m in by_elev.get(name, []):
             if m["ifc_type"] == "reveal":
                 continue        # a reveal lining is perpendicular to this view
+            if m.get("hip1") or not _same_frame(m["frame"], elev["frame"]):
+                continue        # laid in a frame of its own (a section run along an edge): drawn below, or not at all
             if m["ifc_type"] in ("corner_profile", "corner_trim", "ridge_cap", "verge_strip", "valley_gutter", "eaves_strip") \
                     and not m.get("cap_leg"):
                 continue        # its profile is a section; the elevation shows its strip
             layer = "CORNER_PROFILE" if m.get("cap_leg") else _LAYER_FOR_TYPE.get(m["ifc_type"], "0")   # a cap's leg lies on the face
             for k in range(1 + len(m.get("holes") or [])):
                 dxf.add_ring(_corner_ring(m, k), layer, ox, 0.0)
+        for ring, layer in _hip1_plan(meshes, elev):         # GreenCoat's Hip 1 over this slope: its batten and flashing
+            dxf.add_ring(ring, layer, ox, 0.0)
         for ring in info.get("profile_strips") or []:      # the nose of each corner profile, D wide
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         if info.get("ridge_strip") and not (info.get("ridge") or {}).get("legs"):   # the leg of a folded ridge cap over this slope
@@ -269,6 +342,11 @@ def meshes_to_dxf_string(meshes, params, infos=None):
     notes = ["%s  -  %s companion export  -  units mm" % (TOOL_NAME, IFC_SCHEMA_LABEL), DISCLAIMER]
     notes += _wrap(SCOPE_NOTE) + _wrap(QUANTITY_NOTE)
     notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING CLOSER CORNER_PROFILE DIMS NOTES")
-    _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), sheet_min_y - 600.0, 60.0)
+    try:
+        y_low = _building_elevations(dxf, meshes, sheet_min_y - 2500.0)
+    except Exception as exc:                         # never lose the whole export to them
+        y_low = sheet_min_y - 2500.0
+        dxf.add_text("Building elevations left out: %s" % str(exc)[:120], (0.0, y_low), _TEXT, "NOTES")
+    _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), y_low - 600.0, 60.0)
     return dxf.to_string()
 

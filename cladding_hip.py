@@ -41,7 +41,7 @@ import math
 from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
-from cladding_constants import _prism
+from cladding_constants import _prism, frame_to_world
 from cladding_edges import settings as edge_settings
 from cladding_primitives import ring_at
 from cladding_ridge import (RIDGE_GAP, RIDGE_UPSTAND, RIDGE_OVERSAIL, RIDGE_LEG, RIDGE_REST, MEET, CLAD, JOIN_TOL,
@@ -158,7 +158,13 @@ def _whole_corners(ring, rows, h, tol, keep):
 
 def hip_ends(meshes, p, infos):
     """Bring every part's end to the hip (module docstring). Returns the meshes with the
-    trays' turned-up ends added."""
+    trays' turned-up ends added. A steel chain's hips are GreenCoat's Hip 1: the trays stand
+    clear of a batten on the hip line, every layer behind meets on the plane (cladding_greencoat)."""
+    from cladding_greencoat import steel, hip1_lines, hip1_cut
+    if steel(p):
+        from cladding_greencoat import gablet_seams
+        seams = gablet_seams(p, infos)
+        return cut_to_lines(meshes, p, infos, lambda e: hip1_lines(hips_of(e), e.get("name"), seams), hip1_cut)     # upstands: hip1_parts
     return cut_to_lines(meshes, p, infos, hips_of, _hip_cut, upstands=True)
 
 
@@ -186,6 +192,10 @@ def cut_to_lines(meshes, p, infos, lines_of, cut, upstands=False):
         rings = [m["profile"]] + list(m.get("holes") or [])
         for h in hips:
             target, lean = cut(h, kind, near, t, face, board, elev, p)
+            past = h.get("past")            # a gablet's hip top: past the rake's seam the cladding meets on the plane
+            if past and kind in CLAD and all(sum((w - a) * b for w, a, b in zip(frame_to_world(m["frame"], q[0], q[1], mid), *past)) >= -1.0
+                                             for q in m["profile"]):
+                target, lean = -h["k"] * mid, h["k"]
             old = m.get("vshift") or []
             shifts, moved = [], []
             for j, ring in enumerate(rings):
@@ -229,7 +239,7 @@ def _upstand(tray, h, moved):
     a, b = (a[0] + 3.0 * dx, a[1] + 3.0 * dy), (b[0] - 3.0 * dx, b[1] - 3.0 * dy)
     t, (mx, my) = float(tray["thickness"]), h["m"]
     strip = orient(Polygon([a, b, (b[0] + t * mx, b[1] + t * my), (a[0] + t * mx, a[1] + t * my)]), 1.0)
-    up = _prism([[round(x, 3), round(y, 3)] for x, y in list(strip.exterior.coords)[:-1]], outer, RIDGE_UPSTAND,
+    up = _prism([[round(x, 3), round(y, 3)] for x, y in list(strip.exterior.coords)[:-1]], outer, h.get("upstand", RIDGE_UPSTAND),
                 tray["frame"], "seam", "%s Hip Upstand" % tray.get("name", "Tray"), tray.get("elevation"))
     up.update(opacity=1.0, hip_part=True)
     return up
@@ -284,7 +294,7 @@ def _roof_edge(elev, end, d):
     return None if best is None else (best[1], best[2])
 
 
-def _leg(line, lines, rest, t, elev, drop, ends):
+def _leg(line, lines, rest, t, elev, drop, ends, pyramid=False):
     """One leg of a cap, as a sheet lying on its slope: its outline in the face's own
     (u, v) at the sheet's mid-depth, and each corner's shift with depth. From the cap's
     apex, on the plane that bisects the hip (or ridge), RIDGE_LEG down the slope.
@@ -293,7 +303,9 @@ def _leg(line, lines, rest, t, elev, drop, ends):
     their apexes meet on and their edges meet on. Any other end is the chain's to choose
     (*ends*): "edge", the cap runs on and is cut back to the line of the roof's own edge
     there, and where that edge is downhill of it (the eaves) to HIP_PROJECT beyond the
-    trays' ends, *drop* past the edge; or "square", cut square at the end of its line."""
+    trays' ends, *drop* past the edge; or "square", cut square at the end of its line.
+    *pyramid*: an end that meets another line is cut on that line's bisecting plane, edge and
+    apex alike (the ridge cap's pyramid end over Hip 1), not mitred to a cap along it."""
     mid = rest + t / 2.0
     m, k = line["m"], line["k"]
     (x1, y1), (x2, y2) = line["p1"], line["p2"]
@@ -308,7 +320,8 @@ def _leg(line, lines, rest, t, elev, drop, ends):
         if near:                                    # mitred to the cap it meets
             o = near[0]
             ob = o["m"][0] * o["p1"][0] + o["m"][1] * o["p1"][1]
-            cut = (_solve(apex, (o["m"], ob - o["k"] * mid, -o["k"])), _solve(edge, (o["m"], ob - o["k"] * mid + RIDGE_LEG, 0.0)))
+            on = (o["m"], ob - o["k"] * mid, -o["k"])                  # the plane bisecting the line it meets
+            cut = (_solve(apex, on), _solve(edge, on if pyramid else (o["m"], ob - o["k"] * mid + RIDGE_LEG, 0.0)))
         elif ends != "square":                      # run on, and cut back to the roof's edge
             found = _roof_edge(elev, (ex, ey), d)
             if found:
@@ -334,7 +347,17 @@ def _leg(line, lines, rest, t, elev, drop, ends):
 def hip_parts(meshes, p, infos):
     """The cap over each hip, and over a ridge that hips run into: each face lays the leg
     that lies on it (_leg), so the two slopes of a hip need not be built together. Records
-    each face's hips on its info ("hips", "hip_strips")."""
+    each face's hips on its info ("hips", "hip_strips").
+
+    A steel chain's hips are GreenCoat's Hip 1 (cladding_greencoat.hip1_parts). Where they
+    run up into a ridge or meet at the top of a hip end, the ridge cap carries on over the
+    apex as a little hip of its own: the same legs as the zinc cap's, raised to clear the
+    Hip 1 flashing, the hips' legs cut square across where the ridge cap's edge line meets
+    them (little_hip); each Hip 1 stops HIP1_LAP inside that, under the cap."""
+    from cladding_greencoat import steel, hip1_parts, little_hip, little_rest
+    metal = steel(p)
+    if metal:
+        meshes = hip1_parts(meshes, p, infos)
     info_by = {i["elevation"]: i for i in infos}
     by = {e.get("name"): e for e in p.get("elevations", [])}
     up_slope = _up_slope(p)
@@ -346,11 +369,28 @@ def hip_parts(meshes, p, infos):
             continue
         rest = float(info.get("total_depth") or 0.0) + (float(p["seam_h"]) if up_slope else 0.0) + RIDGE_REST
         t = float(p["seam_t"]) if p.get("seam") else 0.7
+        if metal:
+            raised = max(rest, little_rest(meshes, elev, t) or rest)
+            if raised > rest and any(x["kind"] == "ridge" for x in lines):
+                # the cap raised over Hip 1 along the whole ridge: its vented fillers made up to meet it
+                for m in meshes:
+                    if m.get("ifc_type") == "ridge_filler" and m.get("elevation") == name and _same_frame(m["frame"], frame):
+                        m["thickness"] = round(raised - float(m["depth"]), 3)
+            rest = raised
         drop = EAVES_TRAY if has_eaves(elev, p) else 0.0
         short = lambda n: str(n or "").replace("Elevation ", "")              # noqa: E731
+        if metal:
+            end = _pyramid_end(lines, rest, t, elev)                         # a hip end's face: the cap's end triangle
+            if end is not None:
+                ring, shifts = end
+                leg = _prism(ring, rest, t, frame, "ridge_cap", "%s Ridge Cap End" % name, name)
+                leg.update(vshift=[shifts], cap_leg=True, pyramid_end=True)
+                extra.append(leg)
         for h in lines:
-            ring, shifts = _leg(h, lines, rest, t, elev, drop, cap_ends(elev))
             ridge = h["kind"] == "ridge"
+            if metal and not ridge:
+                continue                                                     # Hip 1 (hip1_parts): no zinc cap along it
+            ring, shifts = _leg(h, lines, rest, t, elev, drop, cap_ends(elev), pyramid=metal)
             leg = _prism(ring, rest, t, frame, "ridge_cap", "%s Ridge Cap" % name if ridge else "%s Hip Cap %s" % (name, short(h["with"])), name)
             leg["vshift"] = [shifts]
             leg["cap_leg"] = True
@@ -383,3 +423,294 @@ def hip_parts(meshes, p, infos):
             info.setdefault("hip_strips", []).append(
                 [[x1, y1], [x2, y2], [x2 + RIDGE_LEG * mx, y2 + RIDGE_LEG * my], [x1 + RIDGE_LEG * mx, y1 + RIDGE_LEG * my]])
     return meshes + extra
+
+
+def _pyramid_end(lines, rest, t, elev):
+    """On a face whose hips meet at its top (a hip end) under a ridge cap that runs on over
+    the apex (a steel chain: cladding_greencoat.little_hip), the cap's end: one triangle on
+    the slope, from the apex down between the two hips' bisecting planes to a level edge
+    RIDGE_LEG down the slope, so with the ridge cap's legs (cut on the same planes: _leg,
+    *pyramid*) it closes the cap's end as a pyramid. (ring, shifts) as _leg gives, or None."""
+    from cladding_greencoat import little_hip
+    hips = [h for h in lines if h["kind"] == "hip" and little_hip(elev, h, lines) is not None]
+    if len(hips) != 2 or any(h["kind"] == "ridge" for h in lines):
+        return None
+    mid = rest + t / 2.0
+    planes = [(h["m"], h["m"][0] * h["p1"][0] + h["m"][1] * h["p1"][1] - h["k"] * mid, -h["k"]) for h in hips]
+    apex = _solve(planes[0], planes[1])
+    if apex is None:
+        return None
+    edge = ((0.0, 1.0), apex[0][1] - RIDGE_LEG, 0.0)
+    pts = [apex, _solve(planes[0], edge), _solve(planes[1], edge)]
+    if any(q is None for q in pts):
+        return None
+    ring = [[round(q[0], 3), round(q[1], 3)] for q, _r in pts]
+    shifts = [[-r_[0] * mid, r_[0], -r_[1] * mid, r_[1]] for _q, r_ in pts]
+    area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(ring, ring[1:] + ring[:1]))
+    if area < 0:
+        ring, shifts = ring[::-1], shifts[::-1]
+    return ring, shifts
+
+
+def _clip_sheet(m, n, c):
+    """Keep the part of a sheet laid in its face's frame (a cap leg, an upstand: one ring in
+    the face's (u, v), its corners' shifts with depth in "vshift") on the side n·x <= c of a
+    line, a new corner where an edge crosses it, its shift taken pro rata. False if nothing
+    is left of it, True otherwise (*m* changed in place)."""
+    ring = [list(q) for q in m["profile"]]
+    old = m.get("vshift") or []
+    rows = [list(r) for r in old[0]] if old and old[0] else [[0.0] * 4 for _q in ring]
+    side = [n[0] * q[0] + n[1] * q[1] - c for q in ring]
+    if all(s <= 1e-6 for s in side):
+        return True
+    if all(s >= -1e-6 for s in side):
+        return False
+    pts, shifts = [], []
+    for i in range(len(ring)):
+        j = (i + 1) % len(ring)
+        if side[i] <= 1e-6:
+            pts.append(ring[i])
+            shifts.append(rows[i])
+        if (side[i] < -1e-6 < side[j]) or (side[j] < -1e-6 < side[i]):
+            f = side[i] / (side[i] - side[j])
+            pts.append([round(ring[i][k] + f * (ring[j][k] - ring[i][k]), 3) for k in (0, 1)])
+            shifts.append([rows[i][k] + f * (rows[j][k] - rows[i][k]) for k in range(4)])
+    if len(pts) < 3:
+        return False
+    m["profile"] = pts
+    if old:
+        m["vshift"] = [shifts] + list(old[1:])
+    return True
+
+
+def _hip_tops(elev, p, info):
+    """Where a hip on this face runs up to the foot of a verge set in from the face's end (a
+    gablet: the hip ends at the top of the hip end, under the small gable, and the slope's
+    rake rises from there), the seam on the rake's line meets the hip a little below the
+    hip's top. [(the hip record, S: where that seam meets it, T: the hip's top, the seam's
+    u)], in the face's own (u, v)."""
+    from cladding_verge import _outline_sides, verge_sides
+    sides = verge_sides(elev, p)
+    edges = _outline_sides(elev)
+    lines = sorted(float(u) for u in (info.get("seam_lines") or []))
+    out = []
+    if not sides or not lines:
+        return out
+    for side in sides:
+        if side not in edges:
+            continue
+        u_v = edges[side][0]
+        foot = min((q[1] for pg in elev.get("polygons") or [] for q in pg["exterior"] if abs(q[0] - u_v) < 1.0), default=None)
+        if foot is None:
+            continue
+        for h in hips_of(elev):
+            lo, hi = sorted((h["p1"], h["p2"]), key=lambda q: q[1])
+            if math.hypot(hi[0] - u_v, hi[1] - foot) > JOIN_TOL:
+                continue                                                 # this hip does not run up to the rake's foot
+            near = [u for u in lines if (u <= u_v + 1.0 if side == "l" else u >= u_v - 1.0)]
+            if not near:
+                continue
+            u_s = max(near) if side == "l" else min(near)
+            if abs(u_s - u_v) > 400.0 or abs(hi[0] - lo[0]) < 1.0:
+                continue
+            f = (u_s - lo[0]) / (hi[0] - lo[0])
+            if not 0.0 < f < 1.0:
+                continue
+            out.append((h, (u_s, lo[1] + f * (hi[1] - lo[1])), (hi[0], hi[1]), u_s))
+    return out
+
+
+def _plane_line(m, point, normal, force=False):
+    """The plane through *point* with *normal* (world) where it crosses a sheet laid in its
+    frame and extruded square to it, as a line in the sheet's (u, v) at its mid-depth:
+    (n, c), the plane's front (the side *normal* points to) where n·x > c. None where the
+    plane is not square to the sheet's face (it would cut it on a slant through its
+    thickness)."""
+    f = m["frame"]
+    fu, fn = [float(c) for c in f["u"]], [float(c) for c in f["n"]]
+    fv = f.get("v") or [fn[1] * fu[2] - fn[2] * fu[1], fn[2] * fu[0] - fn[0] * fu[2], fn[0] * fu[1] - fn[1] * fu[0]]
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    size = math.sqrt(dot(normal, normal))
+    nn = [c / size for c in normal]
+    if abs(dot(fn, nn)) > 0.02 and float(m["thickness"]) > 2.0 and not force:
+        return None                                  # a thin sheet is cut at its mid-depth whatever the plane's slant (or *force*d)
+    a, b = dot(fu, nn), dot(fv, nn)
+    k = math.hypot(a, b)
+    if k < 1e-9:
+        return None
+    mid = float(m["depth"]) + float(m["thickness"]) / 2.0
+    c = dot([p - o for p, o in zip(point, f["origin"])], nn) - mid * dot(fn, nn)
+    return (a / k, b / k), c / k
+
+
+def _as_plate(m):
+    """A box (a rectangular outline square to its frame, run along its frame's n with no
+    shift) as the same solid laid across its thinnest dimension: a plate whose outline is
+    its biggest face and whose thickness is that dimension. A board run along a wall's foot,
+    or a sheet standing off a face, can then be cut by a plane as a line on that face
+    (_plane_line). None where it is not such a box."""
+    if m.get("vshift") or m.get("holes") or m.get("corner") or len(m["profile"]) != 4:
+        return None
+    us = sorted({round(q[0], 3) for q in m["profile"]})
+    vs = sorted({round(q[1], 3) for q in m["profile"]})
+    if len(us) != 2 or len(vs) != 2:
+        return None
+    f = m["frame"]
+    fu, fn = [float(c) for c in f["u"]], [float(c) for c in f["n"]]
+    fv = [float(c) for c in (f.get("v") or [fn[1] * fu[2] - fn[2] * fu[1], fn[2] * fu[0] - fn[0] * fu[2], fn[0] * fu[1] - fn[1] * fu[0]])]
+    d0, L = float(m["depth"]), float(m["thickness"])
+    axes = [(us[1] - us[0], fu, us[0]), (vs[1] - vs[0], fv, vs[0]), (L, fn, d0)]   # (size, direction, start)
+    thin = min(range(3), key=lambda k: axes[k][0])
+    a, b = [axes[k] for k in range(3) if k != thin]
+    origin = [o + axes[0][2] * x + axes[1][2] * y + axes[2][2] * z for o, x, y, z in zip(f["origin"], fu, fv, fn)]
+    origin = [o - axes[thin][2] * t + 0.0 for o, t in zip(origin, axes[thin][1])]     # the thin axis is the plate's depth
+    plate = dict(m, frame={"origin": origin, "u": a[1], "v": b[1], "n": axes[thin][1]},
+                 profile=[[0.0, 0.0], [a[0], 0.0], [a[0], b[0]], [0.0, b[0]]], depth=axes[thin][2], thickness=axes[thin][0])
+    plate.pop("vshift", None)
+    return plate
+
+
+def _join_rake_seam(out, name, frame, u_s, T):
+    """The verge's edge seam (its sheets laid in the face's frame, standing on the rake's line)
+    carried down from the rake's foot *T* to the tray seam on the same line below it, each
+    sheet to the top of the same sheet of that seam (the overcloak to the overcloak, its bend
+    to its bend: the tray seam's head is cut on the hip's slant, so its sheets end at
+    different heights), and set on that seam's line, so the two meet end to end. Nothing
+    where there is no tray seam there."""
+    on = lambda m: abs(float(m.get("seam_line") or -1e9) - u_s) < 3.0 and _same_frame(m["frame"], frame)   # noqa: E731
+    def part(m):                                                            # "overcloak bend", "undercloak", ...
+        tail = m.get("name", "").split(" Seam ", 1)[-1]
+        return tail[2:] if tail[:2] in ("L ", "R ") else tail
+    trays = [m for m in out if m.get("elevation") == name and m.get("seam_part") and not m.get("verge_seam") and on(m)]
+    edge = [m for m in out if m.get("elevation") == name and m.get("verge_seam") and on(m)
+            and abs(min(q[1] for q in m["profile"]) - T[1]) < 150.0]
+    if not trays or not edge:
+        return
+    tops = {}
+    for m in trays:
+        top = max(q[1] for dd in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for q in ring_at(m, 0, dd))
+        tops[part(m)] = min(tops.get(part(m), top), top)
+    line = float(trays[0]["seam_line"])
+    for m in edge:
+        top = tops.get(part(m), min(tops.values()))
+        shift = line - float(m["seam_line"])
+        low = min(q[1] for q in m["profile"])
+        for q in m["profile"]:
+            q[0] = round(q[0] + shift, 3)
+            if q[1] <= low + 0.5:
+                q[1] = round(min(q[1], top - 2.0), 3)                   # a little into its partner: no gap between
+        m["seam_line"] = line
+
+
+def gablet_hip_tops(meshes, p, infos):
+    """The top of a hip under a gablet's gable, after the G3 hip. The seam on the rake's line
+    meets the hip a little below the hip's top, and stands in the plane of the gable
+    cladding's face, which the verge's drip or flashing hangs in front of. **The hip cap is
+    cut on that plane**: on the hip end's side its leg runs on up to meet the verge's drip
+    face, and is cut square across where the drip's foot comes down to it (a vertical plane
+    square to the gable face through the rake's foot); on the slope's side its leg, which would ride over the
+    seam, ends against it. The trays' upstands along the hip are cut on it too. **The abutment parts at the gable's foot**, the hip end's (the plywood stood up
+    the gable, the trays' upstands, the saddles) and the gable's own (its edge flashing),
+    where they rise through the slope's plane at its corner, are cut back to the underside
+    of the slope's plywood."""
+    from cladding_constants import frame_to_world, frame_v
+    from cladding_greencoat import steel
+    if not p.get("seam") or not _up_slope(p):
+        return meshes
+    info_by = {i["elevation"]: i for i in infos}
+    by = {e.get("name"): e for e in p.get("elevations", [])}
+    out = list(meshes)
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    for elev in p.get("elevations", []):
+        name, info = elev.get("name"), info_by.get(elev.get("name"))
+        if info is None:
+            continue
+        for h, S, T, u_s in _hip_tops(elev, p, info):
+            frame = elev["frame"]
+            world_s = frame_to_world(frame, S[0], S[1], 0.0)
+            world_t = frame_to_world(frame, T[0], T[1], 0.0)                 # the rake's foot: where the drip comes down
+            U = [float(c) for c in frame["u"]]
+            out_dir = [-c for c in U] if T[0] > u_s else U                  # out past the verge
+            V = [float(c) for c in frame_v(frame)]
+            size = math.hypot(V[0], V[1])
+            up_rake = [V[0] / size, V[1] / size, 0.0]                        # level, up the rake: the drip's foot is square to it
+            # the cap legs and the upstands, on this face and the hip end, cut on the seam's plane
+            for face in (name, h["with"]):
+                ef = by.get(face)
+                if ef is None:
+                    continue
+                for m in [x for x in out if x.get("elevation") == face and _same_frame(x["frame"], ef["frame"])
+                          and ((x.get("cap_leg") and not x.get("ridge_info") and " Hip Cap " in x.get("name", ""))
+                               or (x.get("hip_part") and " Hip Upstand" in x.get("name", "")))]:
+                    near = min(math.dist(frame_to_world(m["frame"], q[0], q[1], float(m["depth"])), world_s) for q in m["profile"])
+                    if near > 1500.0:
+                        continue                                             # another hip's
+                    kept = True
+                    for at, normal in ((world_s, [-c for c in out_dir]), (world_t, up_rake)):
+                        line = _plane_line(m, at, normal, force=True)       # an upstand cut at its mid-height: under the cap
+                        if line is None:
+                            continue
+                        (n, c) = line                                        # keep its back: out past the verge, down the rake
+                        if not _clip_sheet(m, n, c):
+                            kept = False
+                            break
+                    if not kept:
+                        out.remove(m)
+            # the verge's edge seam carried down the rake's line to meet the tray seam below it, on that
+            # seam's own line, so the two read as one seam from the eaves to the ridge
+            _join_rake_seam(out, name, frame, u_s, T)
+            if steel(p):                     # Hip 1 cut on the seam: the deck past it, beside the hip, covered
+                from cladding_greencoat import past_fill
+                out += past_fill(out, p, elev, by.get(h["with"]), h, S, T)
+            # the hip end's abutment parts at the gable's foot, cut back under this slope's plywood
+            decks = [m for m in out if m.get("elevation") == name and m.get("ifc_type") == "deck" and _same_frame(m["frame"], frame)]
+            if not decks:
+                continue
+            soffit = min(float(m["depth"]) for m in decks)
+            N = [float(c) for c in frame["n"]]
+            under = [o + soffit * n for o, n in zip(frame["origin"], N)]
+            walls = set((elev.get("verge_walls") or {}).values())               # the gable standing on the hip end, and its parts
+            for m in [x for x in out if (x.get("elevation") == h["with"] or x.get("elevation") in walls) and "Abutment" in x.get("name", "")]:
+                pts = [frame_to_world(m["frame"], q[0], q[1], float(m["depth"]) + dd) for q in m["profile"] for dd in (0.0, float(m["thickness"]))]
+                if max(dot([a - b for a, b in zip(q, under)], N) for q in pts) <= 0.5:
+                    continue                                                 # below the slope's plywood already
+                if min(math.dist(q, world_s) for q in pts) > 2500.0:
+                    continue
+                line = _plane_line(m, under, N)
+                if line is not None:                                         # a sheet on the hip end: cut as a line on it
+                    (n, c) = line
+                    if not _clip_sheet(m, n, c):
+                        out.remove(m)
+                    continue
+                # a board run along the gable's foot: laid as a plate across its thinnest dimension and cut on
+                # the slope's line; a folded section run along it (a tray's upstand): its end cut on the plane
+                plate = _as_plate(m)
+                if plate is None:
+                    from cladding_verge import _cut_end
+                    fn = [float(c) for c in m["frame"]["n"]]
+                    ends = [[frame_to_world(m["frame"], q[0], q[1], float(m["depth"]) + dd) for q in m["profile"]]
+                            for dd in (0.0, float(m["thickness"]))]
+                    high = [max(dot([a - b for a, b in zip(q, under)], N) for q in e) for e in ends]
+                    at_start = high[0] > high[1]
+                    pieces = _cut_end(m, [(None, under, N, "Slope")], at_start=at_start)
+                    if pieces:
+                        old_end = ends[0] if at_start else ends[1]
+                        axis = fn if not at_start else [-c for c in fn]          # out past that end
+                        o_e = old_end[0]
+                        reach = max(dot([a - b for a, b in zip(q, o_e)], axis) for pc in pieces
+                                    for q in (frame_to_world(pc["frame"], x, y, dd) for x, y in ring_at(pc, 0, 0.0)
+                                              for dd in (float(pc["depth"]), float(pc["depth"]) + float(pc["thickness"]))))
+                        if reach <= 60.0:                                    # it may nudge its foot a little on, no further
+                            i = out.index(m)
+                            out[i:i + 1] = pieces
+                    continue
+                line = _plane_line(plate, under, N)
+                if line is None:
+                    continue
+                (n, c) = line
+                i = out.index(m)
+                if _clip_sheet(plate, n, c):
+                    out[i] = plate
+                else:
+                    out.pop(i)
+    return out
