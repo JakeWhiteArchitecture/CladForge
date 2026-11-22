@@ -381,8 +381,9 @@ def test_the_verge_with_cladding_exports():
     assert len(folds) == 16 and not [m for m in folds if any(m is x for x in own_elements(out["geometry"]))]
     for e in ifc.by_type("IfcCovering"):
         if "Verge Flashing" in e.Name:
-            # the flashing, its five sheets of the seam, and its end piece at the eaves corner
-            assert sum(len(r.Items) for r in e.Representation.Representations) == 1 + 5 + 1
+            # the flashing, its five sheets of the seam and its end piece at the eaves corner: one closed solid
+            from solid_checks import one_closed_solid
+            one_closed_solid(e)
     assert len(out["info"][0]["verge_strips"]) == 2 and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
 
 

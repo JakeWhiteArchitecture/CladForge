@@ -239,13 +239,16 @@ def test_trimmed_and_exported(wall, tmp_path, end):
     assert "CLADDING" in meshes_to_dxf_string(out["geometry"], params, out["info"])
     trays = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "Standing seam tray"]
     assert len(trays) == len(_of(out, "plank"))
-    solids = sum(len(r.Items) for e in trays for r in e.Representation.Representations)
-    lips = [m for m in out["geometry"] if m.get("of")]                        # a tray's head turned out under a window's sill
-    assert solids == len(_of(out, "plank")) + len(_of(out, "seam")) + len(lips)   # every fold is there, in its tray
     assert all(len(e.Representation.Representations) == 1 for e in trays)
-    if end == "folded":     # the sloped ends go out as closed breps, beside the swept solids
-        assert any(i.is_a("IfcFacetedBrep") for e in trays for r in e.Representation.Representations for i in r.Items)
-        assert any(r.RepresentationType == "SolidModel" for e in trays for r in e.Representation.Representations)
+    # every tray, with the folds of its seams, its ends and any lip turned out under a sill, is one solid:
+    # a closed brep, their union; a tray with nothing folded on it its own plain solid
+    from solid_checks import one_closed_solid
+    folded = {m.get("of") or m["name"].split(" Seam ")[0] for m in out["geometry"] if m["ifc_type"] == "seam" or m.get("of")}
+    assert all(len([i for r in e.Representation.Representations for i in r.Items]) == 1 for e in trays)
+    assert sum(1 for e in trays if e.Name in folded) > len(trays) / 2
+    for e in trays:
+        if e.Name in folded:
+            one_closed_solid(e)
 
 
 def test_the_deck_is_what_spans_the_battens():

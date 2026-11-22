@@ -25,6 +25,7 @@ import ifcopenshell.guid
 from cladding_constants import (_parse, frame_v, chain_params, TOOL_NAME, TOOL_URL, IFC_SCHEMA_LABEL, SCOPE_NOTE,
                                 QUANTITY_NOTE, DISCLAIMER, frame_to_world)
 from cladding_primitives import corner_ring, ring_at
+from cladding_union import faces as _union_faces, piece_mesh, union_pieces
 
 IFC_SCHEMA_VERSIONS = ("IFC4X3", "IFC4X3_ADD2", "IFC4")
 # What params["ifc_schema"] can ask for, and what is tried for each, in order. IFC4X3 is the
@@ -305,6 +306,34 @@ def _corner_brep(ifc, mesh):
     return ifc.createIfcFacetedBrep(ifc.createIfcClosedShell([f for f in faces if f is not None]))
 
 
+def _union_brep(ifc, group):
+    """One closed brep for an element made of several pieces (a tray with its seam folds
+    and drip, a flashing with its end pieces, a cap with its stop ends): their union
+    (cladding_union), its coplanar triangles merged back into polygon faces. None where a
+    piece cannot be meshed or there is no union to be had: the pieces then go out as
+    separate solids, as before."""
+    pieces = [piece_mesh(m) for m in group]
+    if any(p is None for p in pieces):
+        return None
+    got = union_pieces(pieces)
+    if got is None:
+        return None
+    verts, tris = got
+    out = []
+    pts = [None] * len(verts)
+
+    def at(i):              # a point per vertex of the union: where two pieces only touch along a line it
+        if pts[i] is None:  # keeps two, a hair apart, and merging them would leave an edge with four faces
+            pts[i] = ifc.createIfcCartesianPoint(tuple(float(c) for c in verts[i]))
+        return pts[i]
+
+    for outer, inner in _union_faces(verts, tris):
+        face = _face(ifc, [at(i) for i in outer], [[at(i) for i in h] for h in inner])
+        if face is not None:
+            out.append(face)
+    return ifc.createIfcFacetedBrep(ifc.createIfcClosedShell(out)) if out else None
+
+
 def _make_element(ifc, body, ifc_class, name, solid, predefined=None, object_type=None):
     element = ifcopenshell.api.run("root.create_entity", ifc, ifc_class=ifc_class, name=name)
     solid, kind = solid
@@ -561,6 +590,10 @@ def meshes_to_ifc(meshes, params, infos=None):
                     solids = solids + more
                     kind = kind if its == kind else "SolidModel"
                     marks.append(_mesh_fingerprint(other))
+                if joined.get(id(mesh)):              # one sheet: its pieces unioned into one solid
+                    whole = _union_brep(ifc, [mesh] + joined[id(mesh)])
+                    if whole is not None:
+                        solids, kind = [whole], "Brep"
                 elem = _make_element(ifc, body, ifc_class, mesh.get("name") or label, (solids, kind),
                                      predefined, label)
             except Exception:
