@@ -141,15 +141,15 @@ def test_the_hip_cap_is_cut_on_the_rake_seam_s_plane_and_nothing_stands_above_th
             assert all(q[0] <= plane_x + slack for q in near), m["name"]         # nothing past the seam's plane
         west_leg = next(m for m in legs if m["elevation"] == "West")
         assert max(q[0] for q in pts(west_leg)) == pytest.approx(plane_x, abs=1.0)   # the hip end's leg runs on to it
-        s_y = frame_to_world(by[name]["frame"], S[0], S[1], 0.0)[1]
+        t_y = frame_to_world(by[name]["frame"], T[0], T[1], 0.0)[1]
         ys = [q[1] for m in legs for q in pts(m)]
-        assert (max(ys) if sign > 0 else min(ys)) == pytest.approx(s_y, abs=1.0)    # and is cut across at the drip's foot
+        assert (max(ys) if sign > 0 else min(ys)) == pytest.approx(t_y, abs=1.0)    # and is cut across at the drip's foot
         seams = [m for m in geo if m["elevation"] == name and m.get("verge_seam")]
         assert min(min(q[1] for q in m["profile"]) for m in seams) == pytest.approx(S[1], abs=0.5)
     assert not [m for m in geo if "Hip Dressing" in m["name"] or "Hip Top Stop End" in m["name"]]
-    # nothing of the hip end's abutment stands above the slopes' plywood at the gable's corners
+    # nothing of the abutment at the gable's foot (the hip end's, the gable's own) stands above the slopes' plywood
     for m in geo:
-        if m["elevation"] == "West" and "Abutment" in m["name"]:
+        if m["elevation"] in ("West", "Gable") and "Abutment" in m["name"]:
             for q in pts(m):
                 above = max(q[2] - q[1] * t, q[2] - (6000.0 - q[1]) * t)
                 assert above < 45.0, (m["name"], above)

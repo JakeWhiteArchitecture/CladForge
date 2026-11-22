@@ -508,13 +508,14 @@ def gablet_hip_tops(meshes, p, infos):
     meets the hip a little below the hip's top, and stands in the plane of the gable
     cladding's face, which the verge's drip or flashing hangs in front of. **The hip cap is
     cut on that plane**: on the hip end's side its leg runs on up to meet the verge's drip
-    face, and is cut square across where the drip's foot comes down to it (a level line up
-    the rake, through that point); on the slope's side its leg, which would ride over the
+    face, and is cut square across where the drip's foot comes down to it (a vertical plane
+    square to the gable face through the rake's foot); on the slope's side its leg, which would ride over the
     seam, ends against it. The
     trays' upstands along the hip are cut on it too, and the verge's edge seam comes down to
-    the hip. **The hip end's abutment parts at the gable's foot** (the plywood stood up it,
-    the flashings), where they rise through the slope's plane at its corner, are cut back
-    to the underside of the slope's plywood."""
+    the hip. **The abutment parts at the gable's foot**, the hip end's (the plywood stood up
+    the gable, the trays' upstands, the saddles) and the gable's own (its edge flashing),
+    where they rise through the slope's plane at its corner, are cut back to the underside
+    of the slope's plywood."""
     from cladding_constants import frame_to_world, frame_v
     if not p.get("seam") or not _up_slope(p):
         return meshes
@@ -529,6 +530,7 @@ def gablet_hip_tops(meshes, p, infos):
         for h, S, T, u_s in _hip_tops(elev, p, info):
             frame = elev["frame"]
             world_s = frame_to_world(frame, S[0], S[1], 0.0)
+            world_t = frame_to_world(frame, T[0], T[1], 0.0)                 # the rake's foot: where the drip comes down
             U = [float(c) for c in frame["u"]]
             out_dir = [-c for c in U] if T[0] > u_s else U                  # out past the verge
             V = [float(c) for c in frame_v(frame)]
@@ -546,8 +548,8 @@ def gablet_hip_tops(meshes, p, infos):
                     if near > 1500.0:
                         continue                                             # another hip's
                     kept = True
-                    for normal in ([-c for c in out_dir], up_rake):
-                        line = _plane_line(m, world_s, normal, force=True)  # an upstand cut at its mid-height: under the cap
+                    for at, normal in ((world_s, [-c for c in out_dir]), (world_t, up_rake)):
+                        line = _plane_line(m, at, normal, force=True)       # an upstand cut at its mid-height: under the cap
                         if line is None:
                             continue
                         (n, c) = line                                        # keep its back: out past the verge, down the rake
@@ -575,7 +577,8 @@ def gablet_hip_tops(meshes, p, infos):
             soffit = min(float(m["depth"]) for m in decks)
             N = [float(c) for c in frame["n"]]
             under = [o + soffit * n for o, n in zip(frame["origin"], N)]
-            for m in [x for x in out if x.get("elevation") == h["with"] and "Abutment" in x.get("name", "")]:
+            walls = set((elev.get("verge_walls") or {}).values())               # the gable standing on the hip end, and its parts
+            for m in [x for x in out if (x.get("elevation") == h["with"] or x.get("elevation") in walls) and "Abutment" in x.get("name", "")]:
                 pts = [frame_to_world(m["frame"], q[0], q[1], float(m["depth"]) + dd) for q in m["profile"] for dd in (0.0, float(m["thickness"]))]
                 if max(dot([a - b for a, b in zip(q, under)], N) for q in pts) <= 0.5:
                     continue                                                 # below the slope's plywood already
