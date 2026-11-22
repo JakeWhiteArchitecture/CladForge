@@ -20,11 +20,10 @@ and the hip flashing (a T-cap, lapped and sealed end to end) is fixed over it.
     top of a hip end, or run up into a ridge, they stop square HIP1_LAP inside the ridge cap's
     end: the cap ends in a pyramid over the apex (cladding_hip.hip_parts).
   * **A hip under a gable** (a gablet: the hip runs up to the foot of the gable's rake): cut
-    as the zinc hip cap is there (cladding_hip.gablet_hip_tops), full height, batten,
-    flashing and upstands alike: the main slope's half on the vertical plane of the seam on
-    the rake's line, its top chamfered down over the cut end to line through with that
-    seam's top, and past it that slope's trays run to the hip's plane; the hip end's
-    half on up to the hip's top, cut square across where the verge's drip comes down to it.
+    as the zinc hip cap is there, full height, batten, flashing and upstands alike, on the
+    vertical plane of the seam on the rake's line, and its top chamfered across its whole
+    width down to that seam's top along the cut, so it meets the standing seam line. Past
+    the seam both slopes' trays run to the hip's plane (hip1_lines, "past").
 
 The dimensions are placeholders, the detail's proportions, until GreenCoat's are given."""
 
@@ -39,6 +38,7 @@ HIP1_GAP = 5.0         # mm – the trays' turned-up ends clear of the batten's 
 HIP1_UNDER = 1.0       # mm – the trays' turned-up ends, under the batten's top
 HIP1_CAP_OVER = 15.0   # mm – the flashing out past the upstands, each side (placeholder)
 HIP1_CAP_DROP = 10.0   # mm – its edges turned down (placeholder)
+HIP1_CHAMFER = 100.0   # mm – under a gablet: the chamfer at Hip 1's top, along the hip, back from the rake's seam
 HIP1_LAP = 100.0       # mm – a hip run up under the ridge cap's little hip: its end this far inside the cap's
 HIP1_OVERSAIL = 50.0   # mm – the hip's foot past the front of the eaves bullnose, on plan
 
@@ -62,20 +62,20 @@ def gablet_seams(p, infos):
         for g, S, T, u_s in _hip_tops(e, p, info):
             U = [float(c) for c in e["frame"]["u"]]
             past = U if T[0] > u_s else [-c for c in U]
-            out[(e.get("name"), g["with"])] = (frame_to_world(e["frame"], S[0], S[1], 0.0), past)
+            out[frozenset((e.get("name"), g["with"]))] = (frame_to_world(e["frame"], S[0], S[1], 0.0), past)
     return out
 
 
 def hip1_lines(hips, name=None, seams=None):
     """The face's hips (cladding_hip.hips_of) with the trays stood back clear of the batten.
     Where a hip runs up under a gablet's gable (*seams*: gablet_seams), Hip 1 is cut on the
-    rake's seam's plane on the main slope's side, so past it ("past": the plane) that slope's
-    cladding runs to the hip's plane; on the hip end's side Hip 1 runs on to the hip's top."""
+    rake's seam's plane, so past it ("past": the plane) both slopes' cladding runs to the
+    hip's plane, as plain slopes meet."""
     out = []
     for h in hips:
         back = (HIP1_W / 2.0 + HIP1_GAP) * math.sqrt(1.0 + h["k"] ** 2)
         line = dict(h, back=back, hip1=True)
-        past = (seams or {}).get((name, h["with"]))          # the main slope's side: its half of Hip 1 stops at the seam
+        past = (seams or {}).get(frozenset((name, h["with"])))
         if past:
             line["past"] = past
         out.append(line)
@@ -386,8 +386,7 @@ def hip1_parts(meshes, p, infos):
             little = little_hip(elev, h, _cap_lines(elev, by)) if gable is None else None
             top_cut = None
             if gable is not None:
-                main, gable = gable
-                main_side = sa if main == name else -sa                      # the main slope's half of the section
+                _main, gable = gable
                 top_y = max(q[1] for q in sections[-1][0])                   # the flashing's top, in the section
                 seam_top = _meet(na, da + stand + seam_h, nb, db + stand + seam_h)[1]
                 chamfer = (top_y - HIP1_CAP_DROP - 1.0, top_y - seam_top)     # what drops at the seam, and by how much
@@ -442,20 +441,19 @@ def hip1_parts(meshes, p, infos):
                     if cut:
                         pieces = cut + pieces[1:]
                 if gable:
-                    # the main slope's half ends on the rake's seam's plane, the hip end's half runs on to its top
-                    halves = [(side, "Seam" if side == main_side else "Gable") for side in (sa, -sa)]
-                    if part_side:
-                        cuts = [(None, *gable["Seam" if part_side == main_side else "Gable"], "Top")]
-                    else:
-                        cuts = [(_half(ring, cx, side), *gable[lab], lab) for side, lab in halves]
-                        cuts = [c for c in cuts if c[0]]
-                    cut = _cut_end(pieces[0], cuts, at_start=False)
-                    if cut:
-                        for pc in cut:
+                    # ended on the rake's seam's plane: the run cut on a plane parallel to it HIP1_CHAMFER back down
+                    # the hip, and between the two one length chamfered across its whole width down to the seam's top
+                    q, n = gable["Seam"]
+                    run = _cut_end(pieces[0], [(None, _add(q, L, -HIP1_CHAMFER), n, "Seam")], at_start=False)
+                    tip = _cut_end(pieces[0], [(None, q, n, "Chamfer")], at_start=False)
+                    tip = [pc for pc in (tip or []) if pc.get("frame") is not frame]
+                    if run and tip:
+                        for pc in run + tip:
                             pc.pop("drip_end", None)
-                            if pc["name"].endswith(" Seam End") or (part_side == main_side and pc.get("frame") is not frame):
-                                _chamfer(pc, frame, chamfer)          # the main slope's half: down to the seam's top
-                        pieces = cut + pieces[1:]
+                        for pc in tip:
+                            pc["thickness"] = round(HIP1_CHAMFER * abs(_dot(L, pc["frame"]["n"])), 4)    # back to the parallel plane
+                            _chamfer(pc, frame, chamfer)
+                        pieces = run + tip + pieces[1:]
                 for k, pc in enumerate(pieces):
                     if k and not pc.get("of"):
                         pc["of"] = title

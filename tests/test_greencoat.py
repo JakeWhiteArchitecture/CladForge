@@ -103,16 +103,22 @@ def test_hips_meeting_at_the_top_of_a_hip_end_stop_under_the_ridge_cap():
     assert len([m for m in g if m.get("hip1") and m["name"].endswith("Mitre End")]) == 16
 
 
-def test_under_a_gablet_hip_1_is_cut_on_the_rake_seam_like_the_zinc_cap():
-    """No taper: full height to the top. The main slope's half is cut on the plane of the seam on
-    the rake's line, and past it that slope's trays run to the hip's plane; the hip end's half
-    runs on up to the hip's top and is cut square across there."""
+def test_under_a_gablet_hip_1_is_cut_on_the_rake_seam_and_chamfered_down_to_it():
+    """No taper: full height up to a chamfer across its whole width, which brings its top down to
+    the standing seam's top along the plane of the seam on the rake's line, where it is cut; past
+    it both slopes' trays run to the hip's plane."""
     out = gablet(seam_metal="steel")[2]
     g = out["geometry"]
     assert not [m for m in g if m.get("hip1") and "Taper" in m["name"]]
     for part in ("Batten", "Flashing"):
         names = {m["name"] for m in g if m.get("hip1") and m["name"].startswith("South Hip %s West" % part)}
-        assert "South Hip %s West Seam End" % part in names and "South Hip %s West Gable End" % part in names
+        assert "South Hip %s West Seam End" % part in names and "South Hip %s West Chamfer End" % part in names
+    # the chamfer: its top lower at the seam than where it starts, HIP1_CHAMFER back down the hip
+    from cladding_greencoat import HIP1_CHAMFER
+    tip = next(m for m in g if m["name"] == "South Hip Flashing West Chamfer End")
+    at = lambda d: max(frame_to_world(tip["frame"], x, y, d)[2] for x, y in ring_at(tip, 0, d))       # noqa: E731
+    rise = HIP1_CHAMFER * math.sin(math.atan(math.tan(math.radians(30.0)) / math.sqrt(2)))           # the hip's own rise over it
+    assert at(0.0) < at(float(tip["thickness"])) + rise - 5.0
     # nothing bare at the top: no deck or backing stands above the main slope's trays within reach of the hip's top
     t = math.tan(math.radians(30.0))
     top = (900.0 / t, 900.0 / t, 900.0)
