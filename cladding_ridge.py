@@ -200,7 +200,6 @@ def _cap_ring(d_a, n_a, rest_a, d_b, n_b, rest_b, t):
 def ridge_parts(p, meshes, infos):
     """The cap over each ridge and the vented fillers under it, built once per pair by its
     master. Records what was built on both faces' info ("ridge")."""
-    from cladding_greencoat import steel
     by = {e.get("name"): e for e in p.get("elevations", [])}
     info_by = {i["elevation"]: i for i in infos}
     out = []
@@ -230,7 +229,7 @@ def ridge_parts(p, meshes, infos):
         angle = round(math.degrees(2.0 * math.atan(r["k"])), 1)
         cap_info = {"length": round(length, 1), "leg": RIDGE_LEG, "hem": RIDGE_HEM, "thickness": t,
                     "gap": RIDGE_GAP, "angle": angle, "between": [name, other.get("name")],
-                    "legs": (meets_hip(elev, r) or meets_hip(other, ro)) and not steel(p)}   # Hip 1 runs under it
+                    "legs": meets_hip(elev, r) or meets_hip(other, ro)}
         if not cap_info["legs"]:        # one folded sheet; mitred to hip caps it is two legs, one a slope
             cap = _prism(ring, 0.0, length, {"origin": frame_to_world(frame, start, r["v"], 0.0), "u": level,
                                              "v": [0.0, 0.0, 1.0], "n": along},

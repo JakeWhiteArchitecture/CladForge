@@ -39,8 +39,38 @@ def test_steel_hips_are_hip_1_a_batten_and_flashing_on_each_hip():
     assert len(battens) == 4 and len(flashings) == 4            # one of each per hip, built by its master
     hips = [h for i in out["info"] for h in i.get("hips", [])]
     assert len(hips) == 8 and all(h["detail"] == "Hip 1" for h in hips)
-    # the ridge cap runs whole: no legs mitred to hip caps
-    assert [m for m in g if m["name"].endswith("Ridge Cap") and not m.get("cap_leg")]
+    # where hips run into the ridge the ridge cap's end is a pyramid: its two legs and a triangle on each hip end
+    assert len([m for m in g if m.get("pyramid_end")]) == 2
+    assert not [m for m in g if " Ridge Cap Hip " in m["name"]]
+
+
+def test_the_ridge_cap_ends_in_a_pyramid_over_the_apex_raised_clear_of_hip_1():
+    g = _hipped_roof(seam_metal="steel")[2]["geometry"]
+    z = _hipped_roof()[2]["geometry"]
+    cap = next(m for m in g if m["name"] == "South Ridge Cap")
+    zcap = next(m for m in z if m["name"] == "South Ridge Cap")
+    assert cap["depth"] > zcap["depth"] + 20.0                    # up on the Hip 1 flashing, not the seams
+    fillers = [m for m in g if m["ifc_type"] == "ridge_filler" and m["elevation"] == "South"]
+    assert fillers and all(abs(m["depth"] + m["thickness"] - cap["depth"]) < 0.01 for m in fillers)
+    # the end triangle: three corners, its apex at the top, its edge level RIDGE_LEG down the slope
+    from cladding_ridge import RIDGE_LEG
+    end = next(m for m in g if m["name"] == "West Ridge Cap End")
+    assert len(end["profile"]) == 3
+    vs = sorted(q[1] for q in end["profile"])
+    assert abs(vs[1] - vs[0]) < 0.5 and abs(vs[2] - vs[0] - RIDGE_LEG) < 0.5
+    # the pyramid's legs meet its triangle on the hip: the South leg's corner at the eaves end of its edge
+    # and the triangle's corner there are the same point
+    world = lambda m, q, r: frame_to_world(m["frame"], q[0] + r[0] + r[1] * (m["depth"] + t / 2), q[1] + r[2] + r[3] * (m["depth"] + t / 2),   # noqa: E731
+                                           m["depth"] + t / 2)
+    t = cap["thickness"]
+    a = [world(cap, q, r) for q, r in zip(cap["profile"], cap["vshift"][0])]
+    b = [world(end, q, r) for q, r in zip(end["profile"], end["vshift"][0])]
+    assert min(math.dist(p, q) for p in a for q in b if p[2] < max(x[2] for x in b) - 50.0) < 3.0
+    # each Hip 1 stops under the pyramid
+    flash = next(m for m in g if m.get("hip1") and m["name"] == "South Hip Flashing West Mitre End")
+    zs = [frame_to_world(flash["frame"], x, y, d)[2] for d in (float(flash["depth"]), float(flash["depth"]) + float(flash["thickness"]))
+          for x, y in ring_at(flash, 0, d)]
+    assert min(x[2] for x in b) < max(zs) < max(x[2] for x in b)
 
 
 def test_the_batten_stands_its_depth_off_the_deck_and_the_deck_meets_on_the_hip():
@@ -67,9 +97,9 @@ def test_at_the_eaves_the_hip_comes_to_a_point_on_plan():
     assert -160.0 < min(p[0] for p in a + b) < -80.0 and -160.0 < min(p[1] for p in a + b) < -80.0
 
 
-def test_hips_meeting_at_the_top_of_a_hip_end_are_mitred():
+def test_hips_meeting_at_the_top_of_a_hip_end_stop_under_the_ridge_cap():
     g = _hipped_roof(seam_metal="steel")[2]["geometry"]
-    # batten, flashing and the two slopes' upstands, at both ends of the ridge
+    # batten, flashing and the two slopes' upstands, cut square at both ends of the ridge
     assert len([m for m in g if m.get("hip1") and m["name"].endswith("Mitre End")]) == 16
 
 

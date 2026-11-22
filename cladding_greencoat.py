@@ -17,8 +17,8 @@ and the hip flashing (a T-cap, lapped and sealed end to end) is fixed over it.
     eaves bullnose, and its two chamfered ends closed in the metal, plumb, down to the trays'
     faces, over the end of the batten; the batten and the trays' upstands stop with the plywood. The flashing comes to a point on plan at the corner,
     as the zinc hip cap's legs do. Where two hips meet at the
-    top of a hip end they are mitred on the vertical plane between them; the ridge cap,
-    which then runs whole to the ridge's end, laps over the joint.
+    top of a hip end, or run up into a ridge, they stop square HIP1_LAP inside the ridge cap's
+    end: the cap carries on over the apex as a little hip of its own (cladding_hip.hip_parts).
   * **A hip under a gable** (a gablet: the hip runs up to the foot of the gable's rake): the
     batten tapers to nothing at the seam on the rake's line, its top laid HIP1_FALL off level
     (falling down the hip, so it drains), and the flashing comes down with it to lie on the
@@ -39,6 +39,7 @@ HIP1_UNDER = 1.0       # mm – the trays' turned-up ends, under the batten's to
 HIP1_CAP_OVER = 15.0   # mm – the flashing out past the upstands, each side (placeholder)
 HIP1_CAP_DROP = 10.0   # mm – its edges turned down (placeholder)
 HIP1_FALL = 3.0        # degrees – the batten's top off level where it tapers under a gable
+HIP1_LAP = 100.0       # mm – a hip run up under the ridge cap's little hip: its end this far inside the cap's
 HIP1_OVERSAIL = 50.0   # mm – the hip's foot past the front of the eaves bullnose, on plan
 TAPER_MAX = 1500.0     # mm – the longest taper, along the hip, however flat the hip
 
@@ -67,6 +68,40 @@ def on_hip(q, hips, tol=80.0):
         if across <= tol and -tol <= along <= h["length"] + tol:
             return True
     return False
+
+
+def little_hip(elev, h, lines):
+    """Where the ridge cap's little hip ends on this hip of the face: the hip's top runs into
+    a ridge, or meets another hip, and the cap carries on over it, its legs down the hip to
+    where the ridge cap's edge line (cladding_ridge.RIDGE_LEG down the slope from the top)
+    crosses it. (that point, the unit direction down the hip) in the face's (u, v); None
+    where nothing meets the hip's top (or the hip is too short for it)."""
+    from cladding_ridge import RIDGE_LEG
+    (x1, y1), (x2, y2) = h["p1"], h["p2"]
+    up, low = ((x2, y2), (x1, y1)) if y2 > y1 else ((x1, y1), (x2, y2))
+    same = lambda o: o.get("kind", "hip") == "hip" and o["p1"] == h["p1"] and o["p2"] == h["p2"]     # noqa: E731
+    if not any(not same(o) and min(math.hypot(q[0] - up[0], q[1] - up[1]) for q in (o["p1"], o["p2"])) <= JOIN_TOL
+               for o in lines):
+        return None
+    rise = up[1] - low[1]
+    if rise < 1.0 or RIDGE_LEG >= 0.8 * rise:
+        return None
+    f = RIDGE_LEG / rise
+    size = math.hypot(low[0] - up[0], low[1] - up[1])
+    return (up[0] + f * (low[0] - up[0]), up[1] + f * (low[1] - up[1])), ((low[0] - up[0]) / size, (low[1] - up[1]) / size)
+
+
+def little_rest(meshes, elev, t):
+    """How far off a steel face the ridge cap's underside stands where it runs over Hip 1:
+    on the flashing's top (the batten's depth off the deck, and the flashing), and clear of
+    its edges, which stand higher off the slope as it falls away from the hip (by the hip's
+    lean, cladding_valley.valleys_of "k", for each mm out from the batten's side)."""
+    from cladding_hip import hips_of
+    top = _deck_top(meshes, elev.get("name"), elev["frame"])
+    if top is None:
+        return None
+    k = max([h["k"] for h in hips_of(elev)] or [0.0])
+    return top + HIP1_H + t + 2.0 + k * (HIP1_GAP + t + HIP1_CAP_OVER)
 
 
 def hip1_cut(h, kind, near, t, _face, _board, _elev, _p):
@@ -245,7 +280,7 @@ def hip1_parts(meshes, p, infos):
     """The batten and the flashing over every hip of a steel chain, built once per hip by its
     master face, along the hip in a frame of its own (u across, v out of the hip, n up it).
     Records each face's hips on its info as cladding_hip.hip_parts does."""
-    from cladding_hip import hips_of, _hip_tops
+    from cladding_hip import hips_of, _hip_tops, _cap_lines
     from cladding_eaves import has_eaves
     from cladding_ridge import _up_slope
     from cladding_verge import _cut_end
@@ -306,6 +341,7 @@ def hip1_parts(meshes, p, infos):
             s_top = _dot(_sub(hi, lo), L)
             # the top: tapered under a gable, or mitred to the hip it meets
             S = tops.get(frozenset((name, h["with"])))
+            little = little_hip(elev, h, _cap_lines(elev, by)) if S is None else None
             taper = None
             top_cut = None
             if S is not None:
@@ -316,6 +352,9 @@ def hip1_parts(meshes, p, infos):
                 if length > 10.0:
                     taper = (s_s - length, length)
                     s_top = s_s
+            elif little is not None:
+                q = frame_to_world(fa, little[0][0], little[0][1], 0.0)
+                top_cut = (_add(q, L, HIP1_LAP), phi or L)              # square across, inside the cap's end
             else:
                 for nm, wt, q1, q2 in segs:
                     if {nm, wt} == {name, h["with"]}:

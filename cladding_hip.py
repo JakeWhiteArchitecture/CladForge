@@ -288,7 +288,7 @@ def _roof_edge(elev, end, d):
     return None if best is None else (best[1], best[2])
 
 
-def _leg(line, lines, rest, t, elev, drop, ends):
+def _leg(line, lines, rest, t, elev, drop, ends, pyramid=False):
     """One leg of a cap, as a sheet lying on its slope: its outline in the face's own
     (u, v) at the sheet's mid-depth, and each corner's shift with depth. From the cap's
     apex, on the plane that bisects the hip (or ridge), RIDGE_LEG down the slope.
@@ -297,7 +297,9 @@ def _leg(line, lines, rest, t, elev, drop, ends):
     their apexes meet on and their edges meet on. Any other end is the chain's to choose
     (*ends*): "edge", the cap runs on and is cut back to the line of the roof's own edge
     there, and where that edge is downhill of it (the eaves) to HIP_PROJECT beyond the
-    trays' ends, *drop* past the edge; or "square", cut square at the end of its line."""
+    trays' ends, *drop* past the edge; or "square", cut square at the end of its line.
+    *pyramid*: an end that meets another line is cut on that line's bisecting plane, edge and
+    apex alike (the ridge cap's pyramid end over Hip 1), not mitred to a cap along it."""
     mid = rest + t / 2.0
     m, k = line["m"], line["k"]
     (x1, y1), (x2, y2) = line["p1"], line["p2"]
@@ -312,7 +314,8 @@ def _leg(line, lines, rest, t, elev, drop, ends):
         if near:                                    # mitred to the cap it meets
             o = near[0]
             ob = o["m"][0] * o["p1"][0] + o["m"][1] * o["p1"][1]
-            cut = (_solve(apex, (o["m"], ob - o["k"] * mid, -o["k"])), _solve(edge, (o["m"], ob - o["k"] * mid + RIDGE_LEG, 0.0)))
+            on = (o["m"], ob - o["k"] * mid, -o["k"])                  # the plane bisecting the line it meets
+            cut = (_solve(apex, on), _solve(edge, on if pyramid else (o["m"], ob - o["k"] * mid + RIDGE_LEG, 0.0)))
         elif ends != "square":                      # run on, and cut back to the roof's edge
             found = _roof_edge(elev, (ex, ey), d)
             if found:
@@ -338,11 +341,17 @@ def _leg(line, lines, rest, t, elev, drop, ends):
 def hip_parts(meshes, p, infos):
     """The cap over each hip, and over a ridge that hips run into: each face lays the leg
     that lies on it (_leg), so the two slopes of a hip need not be built together. Records
-    each face's hips on its info ("hips", "hip_strips"). A steel chain's: GreenCoat's Hip 1
-    (cladding_greencoat), and its ridge cap stays whole."""
-    from cladding_greencoat import steel, hip1_parts
-    if steel(p):
-        return hip1_parts(meshes, p, infos)
+    each face's hips on its info ("hips", "hip_strips").
+
+    A steel chain's hips are GreenCoat's Hip 1 (cladding_greencoat.hip1_parts). Where they
+    run up into a ridge or meet at the top of a hip end, the ridge cap carries on over the
+    apex as a little hip of its own: the same legs as the zinc cap's, raised to clear the
+    Hip 1 flashing, the hips' legs cut square across where the ridge cap's edge line meets
+    them (little_hip); each Hip 1 stops HIP1_LAP inside that, under the cap."""
+    from cladding_greencoat import steel, hip1_parts, little_hip, little_rest
+    metal = steel(p)
+    if metal:
+        meshes = hip1_parts(meshes, p, infos)
     info_by = {i["elevation"]: i for i in infos}
     by = {e.get("name"): e for e in p.get("elevations", [])}
     up_slope = _up_slope(p)
@@ -354,11 +363,28 @@ def hip_parts(meshes, p, infos):
             continue
         rest = float(info.get("total_depth") or 0.0) + (float(p["seam_h"]) if up_slope else 0.0) + RIDGE_REST
         t = float(p["seam_t"]) if p.get("seam") else 0.7
+        if metal:
+            raised = max(rest, little_rest(meshes, elev, t) or rest)
+            if raised > rest and any(x["kind"] == "ridge" for x in lines):
+                # the cap raised over Hip 1 along the whole ridge: its vented fillers made up to meet it
+                for m in meshes:
+                    if m.get("ifc_type") == "ridge_filler" and m.get("elevation") == name and _same_frame(m["frame"], frame):
+                        m["thickness"] = round(raised - float(m["depth"]), 3)
+            rest = raised
         drop = EAVES_TRAY if has_eaves(elev, p) else 0.0
         short = lambda n: str(n or "").replace("Elevation ", "")              # noqa: E731
+        if metal:
+            end = _pyramid_end(lines, rest, t, elev)                         # a hip end's face: the cap's end triangle
+            if end is not None:
+                ring, shifts = end
+                leg = _prism(ring, rest, t, frame, "ridge_cap", "%s Ridge Cap End" % name, name)
+                leg.update(vshift=[shifts], cap_leg=True, pyramid_end=True)
+                extra.append(leg)
         for h in lines:
-            ring, shifts = _leg(h, lines, rest, t, elev, drop, cap_ends(elev))
             ridge = h["kind"] == "ridge"
+            if metal and not ridge:
+                continue                                                     # Hip 1 (hip1_parts): no zinc cap along it
+            ring, shifts = _leg(h, lines, rest, t, elev, drop, cap_ends(elev), pyramid=metal)
             leg = _prism(ring, rest, t, frame, "ridge_cap", "%s Ridge Cap" % name if ridge else "%s Hip Cap %s" % (name, short(h["with"])), name)
             leg["vshift"] = [shifts]
             leg["cap_leg"] = True
@@ -391,6 +417,33 @@ def hip_parts(meshes, p, infos):
             info.setdefault("hip_strips", []).append(
                 [[x1, y1], [x2, y2], [x2 + RIDGE_LEG * mx, y2 + RIDGE_LEG * my], [x1 + RIDGE_LEG * mx, y1 + RIDGE_LEG * my]])
     return meshes + extra
+
+
+def _pyramid_end(lines, rest, t, elev):
+    """On a face whose hips meet at its top (a hip end) under a ridge cap that runs on over
+    the apex (a steel chain: cladding_greencoat.little_hip), the cap's end: one triangle on
+    the slope, from the apex down between the two hips' bisecting planes to a level edge
+    RIDGE_LEG down the slope, so with the ridge cap's legs (cut on the same planes: _leg,
+    *pyramid*) it closes the cap's end as a pyramid. (ring, shifts) as _leg gives, or None."""
+    from cladding_greencoat import little_hip
+    hips = [h for h in lines if h["kind"] == "hip" and little_hip(elev, h, lines) is not None]
+    if len(hips) != 2 or any(h["kind"] == "ridge" for h in lines):
+        return None
+    mid = rest + t / 2.0
+    planes = [(h["m"], h["m"][0] * h["p1"][0] + h["m"][1] * h["p1"][1] - h["k"] * mid, -h["k"]) for h in hips]
+    apex = _solve(planes[0], planes[1])
+    if apex is None:
+        return None
+    edge = ((0.0, 1.0), apex[0][1] - RIDGE_LEG, 0.0)
+    pts = [apex, _solve(planes[0], edge), _solve(planes[1], edge)]
+    if any(q is None for q in pts):
+        return None
+    ring = [[round(q[0], 3), round(q[1], 3)] for q, _r in pts]
+    shifts = [[-r_[0] * mid, r_[0], -r_[1] * mid, r_[1]] for _q, r_ in pts]
+    area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(ring, ring[1:] + ring[:1]))
+    if area < 0:
+        ring, shifts = ring[::-1], shifts[::-1]
+    return ring, shifts
 
 
 def _clip_sheet(m, n, c):
