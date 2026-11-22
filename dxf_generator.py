@@ -200,6 +200,49 @@ def _schedule(p, info, meshes):
 
 # ── entry points ─────────────────────────────────────────────────────────
 
+def _hip1_plan(meshes, elev):
+    """GreenCoat's Hip 1 (cladding_greencoat) as it shows on a slope: each batten and each
+    flashing length seen square to the face, clipped to the face's own outline, as
+    [(ring in the face's (u, v), layer)]."""
+    from shapely.geometry import MultiPoint, Polygon
+    from shapely.ops import unary_union
+    from cladding_constants import frame_to_world, frame_v
+    f = elev["frame"]
+    O, U, V = f["origin"], [float(c) for c in f["u"]], [float(c) for c in frame_v(f)]
+    try:
+        face = unary_union([Polygon(pg["exterior"]) for pg in elev.get("polygons") or []]).buffer(1.0)
+    except (ValueError, TypeError):
+        return []
+    groups = {}
+    for m in meshes:
+        if not m.get("hip1") or m.get("ifc_type") not in ("batten", "ridge_cap"):
+            continue
+        d0, d1 = float(m["depth"]), float(m["depth"]) + float(m["thickness"])
+        pts = [frame_to_world(m["frame"], x, y, d) for d in (d0, d1) for x, y in _corner_ring_at(m, d)]
+        flat = [(sum((w - o) * u for w, o, u in zip(q, O, U)), sum((w - o) * v for w, o, v in zip(q, O, V))) for q in pts]
+        hull = MultiPoint(flat).convex_hull
+        if hull.geom_type == "Polygon" and hull.intersects(face):
+            layer = "BATTEN" if m["ifc_type"] == "batten" else "CORNER_PROFILE"
+            groups.setdefault(layer, []).append(hull)
+    out = []
+    for layer, hulls in groups.items():
+        shape = unary_union(hulls).intersection(face)
+        for g in getattr(shape, "geoms", [shape]):
+            if g.geom_type == "Polygon" and g.area > 10.0:
+                out.append((list(g.exterior.coords)[:-1], layer))
+    return out
+
+
+def _corner_ring_at(m, d):
+    from cladding_primitives import ring_at
+    return ring_at(m, 0, d)
+
+
+def _same_frame(a, b):
+    from cladding_ridge import _same_frame as same
+    return same(a, b)
+
+
 def meshes_to_dxf_string(meshes, params, infos=None):
     p = _parse(params)
     from cladding_preview import build_all_groups
@@ -231,12 +274,16 @@ def meshes_to_dxf_string(meshes, params, infos=None):
         for m in by_elev.get(name, []):
             if m["ifc_type"] == "reveal":
                 continue        # a reveal lining is perpendicular to this view
+            if m.get("hip1") or not _same_frame(m["frame"], elev["frame"]):
+                continue        # laid in a frame of its own (a section run along an edge): drawn below, or not at all
             if m["ifc_type"] in ("corner_profile", "corner_trim", "ridge_cap", "verge_strip", "valley_gutter", "eaves_strip") \
                     and not m.get("cap_leg"):
                 continue        # its profile is a section; the elevation shows its strip
             layer = "CORNER_PROFILE" if m.get("cap_leg") else _LAYER_FOR_TYPE.get(m["ifc_type"], "0")   # a cap's leg lies on the face
             for k in range(1 + len(m.get("holes") or [])):
                 dxf.add_ring(_corner_ring(m, k), layer, ox, 0.0)
+        for ring, layer in _hip1_plan(meshes, elev):         # GreenCoat's Hip 1 over this slope: its batten and flashing
+            dxf.add_ring(ring, layer, ox, 0.0)
         for ring in info.get("profile_strips") or []:      # the nose of each corner profile, D wide
             dxf.add_ring(ring, "CORNER_PROFILE", ox, 0.0)
         if info.get("ridge_strip") and not (info.get("ridge") or {}).get("legs"):   # the leg of a folded ridge cap over this slope
