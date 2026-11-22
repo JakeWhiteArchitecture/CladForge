@@ -12,7 +12,7 @@ let pyodide = null, pyReady = false, ifcReady = false, _seq = 0, _numTimer = nul
 const ABUTS = ['auto', 'g3', 'below', 'mitre', 'none'];   // a roof run up to a wall that stands on above it: by what that wall is clad in, the G3 flashing, the trays turned up under its cladding, or nothing
 const HEADS = ['auto', 'g3', 'none'];       // a monopitch's head verge: over a picked wall, on every level top edge, or not at all
 const EDGE_DEFAULTS = { top: 10, side: 0, bottom: 10, gap: 10, vent: 'front', air: 10, pgap: 1, frame: 50,
-                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', vergeLast: 'vmz', eaves: 'on', head: 'auto', windows: 'on', abutment: 'auto', capEnds: 'edge' };
+                        fold: 'on', seamTop: 'folded', seamBottom: 'folded', verge: 'both', vergeType: 'g3', vergeLast: 'vmz', eaves: 'on', head: 'auto', windows: 'on', abutment: 'auto', capEnds: 'edge', ridgeEnd: 'square', ridgeAngle: 90 };
 
 // ─── ELEVATIONS AND CHAINS ───
 // An elevation is one coplanar region. A chain is an ordered run of elevations that
@@ -117,6 +117,7 @@ const VERGES = ['both', 'start', 'end', 'none'];
 // What a verge is built as: the G3 strip the last tray is welted over, or the flashing down
 // over a clad wall's head from a seam at the roof's edge (VMZ-SN-MA-ZI-05).
 const VERGE_TYPES = ['g3', 'cladding'];
+const RIDGE_ENDS = ['square', 'v', 'flat'];                 // a ridge cap's stop end over a verge: the cap's section, or a skirt down over the apex to a point or a short level edge
 
 // The panel's edge fields show the active elevation's chain and write to all of it.
 function syncEdgeFields() {
@@ -148,6 +149,10 @@ function syncEdgeFields() {
         + (e ? seamSources(e) : []).map(m => `<option value="${m.name}">${m.name}${m.chain.members.length > 1 ? ' (' + m.chain.name + ')' : ''}</option>`).join('');
     from.value = e && e.seamFrom && seamSources(e).includes(e.seamFrom) ? e.seamFrom.name : '';
     document.getElementById('edge-capEnds').value = ed.capEnds === 'square' ? 'square' : 'edge';
+    document.getElementById('edge-ridgeEnd').value = RIDGE_ENDS.includes(ed.ridgeEnd) ? ed.ridgeEnd : 'square';
+    const angle = document.getElementById('edge-ridgeAngle');
+    if (document.activeElement !== angle) angle.value = ed.ridgeAngle == null ? 90 : ed.ridgeAngle;
+    angle.disabled = !RIDGE_ENDS.includes(ed.ridgeEnd) || ed.ridgeEnd === 'square';
     document.getElementById('edge-air').disabled = ed.vent !== 'back';
     document.getElementById('edge-chain').textContent = e ? 'for ' + e.chain.name : 'for the active chain';
 }
@@ -166,6 +171,8 @@ function setEdge(e, key, value) {
     else if (key === 'head') e.chain.edges.head = HEADS.includes(value) ? value : 'auto';
     else if (key === 'abutment') e.chain.edges.abutment = ABUTS.includes(value) ? value : 'auto';
     else if (key === 'capEnds') e.chain.edges.capEnds = value === 'square' ? 'square' : 'edge';
+    else if (key === 'ridgeEnd') e.chain.edges.ridgeEnd = RIDGE_ENDS.includes(value) ? value : 'square';
+    else if (key === 'ridgeAngle') { const v = parseFloat(value); if (!isFinite(v)) return false; e.chain.edges.ridgeAngle = Math.max(30, Math.min(150, v)); }
     else {
         const v = parseFloat(value);
         if (!isFinite(v)) return false;
@@ -1155,6 +1162,8 @@ function elevationRecords() {
                                                    head: HEADS.includes(chain.edges.head) ? chain.edges.head : 'auto',
                                                    abutment: ABUTS.includes(chain.edges.abutment) ? chain.edges.abutment : 'auto',
                                                    cap_ends: chain.edges.capEnds === 'square' ? 'square' : 'edge',
+                                                   ridge_end: RIDGE_ENDS.includes(chain.edges.ridgeEnd) ? chain.edges.ridgeEnd : 'square',
+                                                   ridge_v_angle: chain.edges.ridgeAngle == null ? 90 : chain.edges.ridgeAngle,
                                                    seam_top: chain.edges.seamTop === 'flat' ? 'flat' : 'folded',
                                                    seam_bottom: chain.edges.seamBottom === 'flat' ? 'flat' : 'folded',
                                                    opening_details: e.openingDetails || {} }));

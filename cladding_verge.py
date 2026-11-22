@@ -53,10 +53,13 @@ Not modelled: the vertical plywood and the timber behind it, the fixings, the li
 strip gives the tray's edge, the insect mesh, and the wall's cladding stopping under the
 roof's plywood (heal the wall up to the roof for that)."""
 
+import math
+
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import orient
 
 from cladding_constants import SEAM_AIR, _prism, frame_to_world, frame_v
+from cladding_primitives import ring_at
 from cladding_ridge import ridge_of, _slot, _same_frame, _up_slope
 
 VERGE_CLEAR = 10.0    # mm – the drop, clear of the edge's face (dimensioned)
@@ -391,7 +394,8 @@ def _cut_end(m, cuts, at_start=True):
         bu, bv = dot(e, u) / em, dot(e, v) / em
         end = dict(m, profile=ring, holes=[], depth=0.0, thickness=round(run * em, 4),
                    frame={"origin": o, "u": u, "v": v, "n": mv}, name="%s %s End" % (m["name"], label),
-                   vshift=[[[0.0, bu, 0.0, bv] for _q in ring]], drip_end=True)
+                   vshift=[[[0.0, bu, 0.0, bv] for _q in ring]], drip_end=True,
+                   of=m.get("of") or m["name"])               # one element with the length it ends (IFC)
         end.pop("drip_runs", None)
         end.pop("corner", None)
         out.append(end)
@@ -402,7 +406,13 @@ def join_drips(meshes, p):
     """Where an eaves meets a G3 verge, close the corner: the eaves drip runs on out to the
     outside of the verge's drip, and **the verge drip comes down the slope to the back of
     the eaves drip** (the inside face of its drop), cut on that face, so the two meet with
-    no gap. Both are their trays' own sheet. Records nothing: the two lengths are longer."""
+    no gap. Both are their trays' own sheet. Records nothing: the two lengths are longer.
+
+    With a verge with cladding (ZI-05) the flashing takes the verge drip's place: it runs
+    on past the eaves drip to one plumb cut, top to bottom, at the front of the eaves
+    drip's bullnose (under the edge seam's end), closing the side of the eaves drip and
+    the space under its bullnose. The eaves drip, bullnose and drop, stops behind it at
+    the flashing's inside face, and the clip is cut at the back of the eaves drip's drop."""
     dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
     out_meshes = list(meshes)
     for elev in p.get("elevations", []):
@@ -411,15 +421,47 @@ def join_drips(meshes, p):
         o = frame["origin"]
         uv = lambda q: (dot([a - b for a, b in zip(q, o)], U), dot([a - b for a, b in zip(q, o)], V))   # noqa: E731
         verge = [m for m in out_meshes if m.get("elevation") == name and m.get("verge_drip")]
+        flashings = [m for m in out_meshes if m.get("elevation") == name and m.get("ifc_type") == "verge_strip"
+                     and " Verge Flashing " in m.get("name", "") + " " and not m.get("drip_end")]
+        clips = [m for m in out_meshes if m.get("elevation") == name and m.get("ifc_type") == "verge_strip"
+                 and " Verge Clip " in m.get("name", "") + " " and not m.get("drip_end")]
         eaves = [m for m in out_meshes if m.get("elevation") == name and m.get("eaves_info") and m.get("tray_sheet")
                  and abs(dot(m["frame"]["n"], U)) > 0.99]
-        if not verge or not eaves:
+        if not (verge or flashings) or not eaves:
             continue
+        N = [float(c) for c in frame["n"]]
+        decks = [m for m in out_meshes if m.get("elevation") == name and m.get("ifc_type") == "deck"]
         for side in (-1.0, 1.0):
             mine = [m for m in verge if dot(m["frame"]["u"], U) * side > 0]
-            if not mine:
-                continue
-            low = min(mine, key=lambda m: uv(m["frame"]["origin"])[1])
+            extras = []
+            if mine:
+                low = min(mine, key=lambda m: uv(m["frame"]["origin"])[1])
+                runs = low.get("drip_runs") or [None, None]
+            else:
+                # a verge with cladding (ZI-05): its flashing, split at the plywood's underside into
+                # the part over the edge (mitred to the eaves bullnose) and the drop (down to the
+                # back of the eaves drip's drop), and the clip behind it cut with the drop
+                mine = [m for m in flashings if dot(m["frame"]["u"], U) * side > 0]
+                if not mine:
+                    continue
+                low = min(mine, key=lambda m: uv(m["frame"]["origin"])[1])
+                sgn = 1.0 if dot(low["frame"]["v"], N) > 0 else -1.0
+                soffit = min((float(m["depth"]) for m in decks), default=0.0)
+                poly = Polygon(low["profile"])
+                xs = [x for x, _y in low["profile"]]
+                big = 1.0e4
+                upper = Polygon([(min(xs) - 1, sgn * soffit), (max(xs) + 1, sgn * soffit), (max(xs) + 1, sgn * big), (min(xs) - 1, sgn * big)])
+                parts = [poly.intersection(upper), poly.difference(upper)]
+                runs = []
+                for g in parts:
+                    g = max(getattr(g, "geoms", [g]), key=lambda q: q.area) if not g.is_empty else None
+                    runs.append([[round(x, 4), round(y, 4)] for x, y in list(orient(g, 1.0).exterior.coords)[:-1]] if g is not None and g.area > 1.0 else None)
+                if not all(runs):
+                    continue
+                low = dict(low, drip_runs=runs)
+                i = out_meshes.index(next(m for m in mine if m["name"] == low["name"]))
+                out_meshes[i] = low
+                extras = [m for m in clips if dot(m["frame"]["u"], U) * side > 0]
             ue, v_lo = uv(low["frame"]["origin"])
             reach = max(x for x, _y in low["profile"])                     # the verge drip's outside, out from the roof's edge
             # the eaves drip nearest this verge, and which of its ends is there
@@ -431,8 +473,11 @@ def join_drips(meshes, p):
             a, b = end_u(near)
             if min(abs(a - ue), abs(b - ue)) > VERGE_TRAY + 60.0:
                 continue                                                   # this eaves does not reach the verge
-            # run the eaves drip on out to the outside of the verge's drip
-            target = ue + side * (reach + 1.0)
+            # run the eaves drip on out to the outside of the verge's drip; with cladding (ZI-05)
+            # only to the flashing's inside face, the flashing's end closing it
+            clad = bool(extras) or " Verge Flashing " in low.get("name", "") + " "
+            inside = min(x for x, _y in low["profile"])
+            target = ue + side * ((inside - 0.5) if clad else (reach + 1.0))
             fwd = dot(near["frame"]["n"], U) > 0
             at_start = (side < 0) == fwd                                   # the verge is at the eaves drip's start
             if at_start:
@@ -454,21 +499,345 @@ def join_drips(meshes, p):
             e_line = uv(frame_to_world(near["frame"], 0.0, 0.0, float(near["depth"])))[1]
             corner = frame_to_world(frame, ue + side * reach, e_line - e_reach, 0.0)
             mitre = [side * U[i] + V[i] for i in range(3)]
-            # the outside of the verge drip's drop: where the eaves drip's drop stops
-            v_drop = max(x for x, _y in low["drip_runs"][1]) if low.get("drip_runs") else VERGE_CLEAR
+            # where the eaves drip's drop stops: the outside of the G3 verge drip's drop; with
+            # cladding (ZI-05) the inside of the flashing's drop, which runs on over its end
+            v_drop = max(x for x, _y in runs[1]) if runs and runs[1] else VERGE_CLEAR
             stop = frame_to_world(frame, ue + side * v_drop, 0.0, 0.0)
+            # with cladding the flashing's drop runs on out to the front of the eaves drip (its
+            # bullnose, under the edge seam's end), and is cut plumb there, closing the side of
+            # the eaves drip and the space under its bullnose
+            front = min((frame_to_world(near["frame"], x, y, d) for d in (float(near["depth"]), float(near["depth"]) + float(near["thickness"]))
+                         for x, y in near["profile"]), key=lambda q: dot(q, up))
             # bring the verge drip down past the eaves, then cut both at the corner
-            v_start = uv(back)[1] - 200.0
-            if v_start < v_lo:
-                low["frame"] = dict(low["frame"], origin=frame_to_world(frame, ue, v_start, 0.0))
-                low["thickness"] = float(low["thickness"]) + (v_lo - v_start)
-            for piece, cuts, first in (
-                    (low, [((low.get("drip_runs") or [None, None])[0], corner, mitre, "Bullnose"),
-                           ((low.get("drip_runs") or [None, None])[1], back, up, "Drop")], True),
-                    (near, [((near.get("drip_runs") or [None, None])[0], corner, mitre, "Bullnose"),
-                            ((near.get("drip_runs") or [None, None])[1], stop, U, "Drop")], at_start)):
+            v_start = min(uv(back)[1], uv(front)[1]) - 200.0
+            for piece in [low] + extras:
+                pu, pv = uv(piece["frame"]["origin"])
+                if v_start < pv:
+                    piece["frame"] = dict(piece["frame"], origin=frame_to_world(frame, pu, v_start, 0.0))
+                    piece["thickness"] = float(piece["thickness"]) + (pv - v_start)
+            if clad:
+                # the flashing ends in one plumb cut, top to bottom, at the front of the eaves drip
+                # (over its end, which stops behind it), and the clip at the back of its drop
+                todo = [(low, [(None, front, up, "Eaves")], True)] + [(x, [(None, back, up, "Drop")], True) for x in extras]
+            else:
+                todo = [(low, [(runs[0], corner, mitre, "Bullnose"), (runs[1], back, up, "Drop")], True),
+                        (near, [((near.get("drip_runs") or [None, None])[0], corner, mitre, "Bullnose"),
+                                ((near.get("drip_runs") or [None, None])[1], stop, U, "Drop")], at_start)]
+            for piece, cuts, first in todo:
                 pieces = _cut_end(piece, cuts, at_start=first)
                 if pieces:
                     i = out_meshes.index(piece)
                     out_meshes[i:i + 1] = pieces
     return out_meshes
+
+
+def _up_to_plane(m, point, normal, frame, r):
+    """Carry the top end of one verge piece up to a cap's bisecting plane and cut it there.
+    A section run up the slope (frame n along the face's v: drip, support, flashing, clip)
+    is lengthened past the plane and cut on it (_cut_end); a sheet set in the face's own
+    frame (an edge seam's) has its top moved to the plane at its mid-depth and sheared with
+    depth, as ridge_ends cuts the trays. Returns the pieces that replace it."""
+    V = [float(c) for c in frame_v(frame)]
+    n = [float(c) for c in m["frame"]["n"]]
+    if abs(sum(a * b for a, b in zip(n, V))) > 0.99:
+        m["thickness"] = float(m["thickness"]) + 600.0
+        return _cut_end(m, [(None, point, normal, "Ridge")], at_start=False) or [m]
+    top = max(q[1] for q in m["profile"])
+    mid = float(m["depth"]) + float(m["thickness"]) / 2.0
+    old = m.get("vshift") or []
+    row = []
+    was = old[0] if old and old[0] else [[0.0] * 4] * len(m["profile"])
+    for q, sh in zip(m["profile"], was):
+        if q[1] >= top - 0.5:
+            q[1] = round(r["v"] + r["k"] * mid, 3)
+            row.append([sh[0], sh[1], sh[2] - r["k"] * mid, sh[3] + r["k"]])
+        else:
+            row.append(list(sh))
+    m["vshift"] = [row] + list(old[1:])
+    return [m]
+
+
+def close_cap_ends(meshes, p):
+    """Where a ridge cap or a head verge cap ends at a verge, close it (VMZINC's stop end):
+
+      * **each verge runs on up to the cap's bisecting plane** and is cut on it: the G3
+        drip and its support, or the verge with cladding's flashing, clip and edge seam, so
+        the two slopes' verges meet at the apex (at a head verge, the verge meets the plane
+        under the cap's corner) and no V is left open between them;
+      * **the cap runs on out over the verge**, to the outside of whatever the verge puts
+        beyond the roof's edge;
+      * **a stop end closes the cap's end**: the cap's own section, filled, one sheet thick,
+        in the plane of its end, part of the cap (one element in the IFC).
+
+    The bisecting plane in a face's own terms is v = r.v + k·s (s the depth): the ridge's
+    (cladding_ridge.ridge_of), or a head verge's, cut as half a ridge."""
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    by = {e.get("name"): e for e in p.get("elevations", [])}
+    out = list(meshes)
+    caps = [m for m in out if m.get("ifc_type") == "ridge_cap" and (m.get("ridge_info") or m.get("head_info"))
+            and not m.get("stop_end")]
+    for cap in caps:
+        info = cap.get("ridge_info") or {}
+        faces = info.get("between") or [cap.get("elevation")]
+        f = cap["frame"]
+        n = [float(c) for c in f["n"]]
+        o = [float(c) for c in f["origin"]]
+        length = float(cap["thickness"])
+        t = float(info.get("thickness") or (cap.get("head_info") or {}).get("thickness") or p.get("seam_t") or 0.7)
+        along = lambda q: dot([a - b for a, b in zip(q, o)], n)            # noqa: E731
+        reach = {0: 0.0, 1: 0.0}
+        met = {0: False, 1: False}
+        letters = {}
+        low = {}                                                            # end: the verge's lowest point on the plane (u, v in the cap's section)
+        cu, cv = [float(c) for c in f["u"]], [float(c) for c in frame_v(f)]
+        style = ridge_end(by.get(faces[0]) if faces else None)
+        angle = v_angle(by.get(faces[0]) if faces else None)
+        for name in faces:
+            elev = by.get(name)
+            r = ridge_of(elev) if elev else None
+            if not r:
+                continue
+            frame = elev["frame"]
+            V, N = [float(c) for c in frame_v(frame)], [float(c) for c in frame["n"]]
+            normal = [V[i] - r["k"] * N[i] for i in range(3)]               # the plane v = r.v + k·s
+            point = frame_to_world(frame, r["u0"], r["v"], 0.0)
+            pieces = [m for m in out if m.get("elevation") == name
+                      and (m.get("verge_drip") or m.get("verge_support") or m.get("verge_seam")
+                           or (m.get("ifc_type") == "verge_strip" and re_flash(m.get("name", ""))))]
+            for end in (0, 1):
+                here = []
+                for m in pieces:
+                    pts = [frame_to_world(m["frame"], x, y, d) for x, y in m["profile"]
+                           for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"]))]
+                    if max(dot([a - b for a, b in zip(q, frame["origin"])], V) for q in pts) < r["v"] - 800.0:
+                        continue                                            # a length lower down the verge (at the eaves, say)
+                    s = [along(q) for q in pts]
+                    if (end == 0 and max(s) < length / 2.0) or (end == 1 and min(s) > length / 2.0):
+                        here.append((m, s, pts))
+                if not here:
+                    continue
+                met[end] = True
+                if name == faces[0] and end not in letters:
+                    for m, _s, _p in here:
+                        tail = m.get("name", "").split()
+                        if m.get("verge_support") or re_flash(m.get("name", "")):
+                            letters[end] = tail[-1] if tail[-1] in ("L", "R") else tail[-2] if len(tail) > 1 and tail[-2] in ("L", "R") else letters.get(end)
+                reach[end] = max(reach[end], max(max(-min(s), 0.0) if end == 0 else max(max(s) - length, 0.0) for _m, s, _p in here))
+                # the top-most of each kind of piece is carried up to the plane
+                tops = {}
+                for m, s, pts in here:
+                    key = ("drip" if m.get("verge_drip") else "support" if m.get("verge_support")
+                           else "seam:" + m.get("name", "") if m.get("verge_seam") else "strip:" + m.get("name", ""))
+                    hi = max(dot([a - b for a, b in zip(q, frame["origin"])], V) for q in pts)
+                    if key not in tops or hi > tops[key][1]:
+                        tops[key] = (m, hi)
+                for m, hi in tops.values():
+                    if hi < r["v"] - 600.0 or m.get("drip_end"):
+                        continue                                            # not the length that reaches the ridge
+                    i = out.index(m)
+                    new = _up_to_plane(m, point, normal, frame, r)
+                    out[i:i + 1] = new
+                    # the verge's lowest point where it meets the plane, in the cap's section
+                    size = math.sqrt(dot(normal, normal))
+                    for piece in new:
+                        d0, d1 = float(piece["depth"]), float(piece["depth"]) + float(piece["thickness"])
+                        for d in (d0, d1):
+                            for x, y in ring_at(piece, 0, d):
+                                q = frame_to_world(piece["frame"], x, y, d)
+                                if abs(dot([a - b for a, b in zip(q, point)], normal)) / size > 1.0:
+                                    continue                                # not on the plane
+                                w = [a - b for a, b in zip(q, o)]
+                                at = (dot(w, cu), dot(w, cv))
+                                if end not in low or at[1] < low[end][1]:
+                                    low[end] = at
+        if not (met[0] or met[1]):
+            continue
+        # the cap over the verge, and its ends closed
+        grow0 = reach[0] + t if met[0] else 0.0
+        grow1 = reach[1] + t if met[1] else 0.0
+        cap["frame"] = dict(f, origin=[c - grow0 * k for c, k in zip(o, n)])
+        cap["thickness"] = length + grow0 + grow1
+        for end in (0, 1):
+            if not met[end]:
+                continue
+            ring = _stop_ring(cap["profile"], style, low.get(end), angle)
+            letter = letters.get(end) or ("L" if end == 0 else "R")
+            at = 0.0 if end == 0 else float(cap["thickness"]) - t
+            stop = _prism(ring, at, t, dict(cap["frame"]), "ridge_cap", "%s Stop End %s" % (cap["name"].replace(" Cap", ""), letter), cap.get("elevation"))
+            stop.update(tray_sheet=True, of=cap["name"], stop_end=True, color=cap.get("color", stop["color"]))
+            out.append(stop)
+        cap.setdefault("ridge_info" if cap.get("ridge_info") else "head_info", {})["stop_ends"] = [k for k in (0, 1) if met[k]]
+    return out
+
+
+RIDGE_ENDS = ("square", "v", "flat")
+V_ANGLE = 90.0           # degrees the stop end's edge turns off the cap's flange: square to it
+STOP_LAP = 10.0          # mm the stop end's skirt runs on down past the verges' lowest point at the apex
+
+
+def ridge_end(elev):
+    """The chain's ridge cap end ("ridge_end"): "square", the cap's own section, filled; "v",
+    a skirt from the cap's lower corners down to a point on the apex's centre line below
+    the verges, its edges square to the cap's flanges; "flat", diagonals down to a short
+    level edge across the apex there."""
+    v = (elev or {}).get("ridge_end")
+    return v if v in RIDGE_ENDS else "square"
+
+
+def v_angle(elev):
+    """The chain's stop end edge angle ("ridge_v_angle", degrees off the cap's flange,
+    inside the stop end): V_ANGLE, square to it, by default; 30 to 150."""
+    try:
+        a = float((elev or {}).get("ridge_v_angle"))
+    except (TypeError, ValueError):
+        return V_ANGLE
+    return max(30.0, min(150.0, a)) if math.isfinite(a) else V_ANGLE
+
+
+def _stop_ring(profile, style, low, angle=V_ANGLE):
+    """The stop end's outline in the cap's section: the cap's section, filled, and for a
+    "v" or "flat" end a skirt hung down over the top of the verges. *low* is the verges'
+    lowest point where they meet the cap's plane ((u, v), or None).
+
+    A ridge cap (a flange each side of its apex): "v" runs an edge from each flange's lower
+    corner at *angle* to the flange (90: square to it, _flange_edge) to where the two meet,
+    no higher than STOP_LAP below *low*; "flat" runs diagonals down to a short level edge
+    across the apex, STOP_LAP below *low*.
+
+    A monopitch's head verge cap (one flange, and an upstand down the wall's face): either
+    closes the cap's end as a box, its edge leaving the flange's lower corner at *angle* and
+    running down to a level bottom at the upstand's foot (or STOP_LAP below *low* if that is
+    lower), then level back to the upstand (_mono_ring)."""
+    pts = [(float(x), float(y)) for x, y in profile]
+    if style != "square":
+        sides = [_flange_edge(pts, sign, angle) for sign in (1.0, -1.0)]
+        if not all(sides):
+            pts = _mono_ring(pts, [e for e in sides if e], low, angle)
+        elif low is not None:
+            x, y = low[0], low[1] - STOP_LAP
+            if style == "v":
+                tip = _meet(*sides)
+                pts.append((tip[0], min(tip[1], y)) if tip else (x, y))
+            else:
+                half = (max(q[0] for q in pts) - min(q[0] for q in pts)) / 2.0
+                w = max(20.0, half / 4.0)                                   # the level edge: an eighth of the cap's width each side of the centre
+                pts += [(x - w, y), (x + w, y)]
+    hull = Polygon(pts).convex_hull
+    return [[round(a, 3), round(b, 3)] for a, b in list(orient(hull, 1.0).exterior.coords)[:-1]]
+
+
+def _flange_edge(pts, sign, angle=V_ANGLE):
+    """The stop end's edge off one flange of a cap's section *pts* (the apex its highest
+    point; *sign* +1 the flange out along +u, -1 along -u): its start, the flange's lower
+    corner (furthest down it, past any hem), and its direction, turned *angle* degrees
+    from the flange (measured inside the stop end: 90 is square to it, more points it
+    further down), kept between plumb and nearly level. None where there is no flange
+    that side."""
+    ax, ay = max(pts, key=lambda q: q[1])
+    side = [q for q in pts if (q[0] - ax) * sign > 1.0]
+    if not side:
+        return None
+    out = max(side, key=lambda q: (q[0] - ax) * sign)                       # the flange's outer end
+    fx, fy = out[0] - ax, out[1] - ay                                       # along the flange, down and out
+    size = math.hypot(fx, fy)
+    if size < 1.0:
+        return None
+    foot = max(side, key=lambda q: (q[0] - ax) * fx + (q[1] - ay) * fy)
+    ux, uy = -fx / size, -fy / size                                         # back up the flange
+    a = math.radians(angle) * sign                                          # turned away from it, inward and down
+    dx, dy = ux * math.cos(a) - uy * math.sin(a), ux * math.sin(a) + uy * math.cos(a)
+    if dx * sign > 0.0:
+        dx, dy = 0.0, -1.0                                                  # never back out past plumb
+    if dy > -0.05:
+        dx, dy = -sign * math.sqrt(1.0 - 0.05 ** 2), -0.05                  # nor up into the cap
+    return foot, (dx, dy)
+
+
+def _meet(left, right):
+    """Where the edges off a ridge cap's two flanges meet, below both corners, or None."""
+    (p, d), (q, e) = left, right
+    det = d[0] * -e[1] + e[0] * d[1]
+    if abs(det) < 1e-6:
+        return None
+    t = ((q[0] - p[0]) * -e[1] + e[0] * (q[1] - p[1])) / det
+    tip = (p[0] + t * d[0], p[1] + t * d[1])
+    return tip if t > 0 and tip[1] < min(p[1], q[1]) else None
+
+
+def _mono_ring(pts, edges, low, angle=V_ANGLE):
+    """A head verge cap's stop end, closed as a box: its section, then from the flange's
+    lower corner an edge at *angle* to the flange down to a level bottom, and level back
+    to the upstand down the wall's face. The bottom is at the upstand's foot, or STOP_LAP
+    below the verge's lowest point at the plane (*low*) if that is lower."""
+    if not edges:
+        return pts
+    (foot, (dx, dy)), = edges
+    ax = max(pts, key=lambda q: q[1])[0]
+    back = [q for q in pts if abs(q[0] - ax) <= 5.0]                        # the upstand, down from the apex
+    if not back:
+        return pts
+    x_up = (min if foot[0] > ax else max)(q[0] for q in back)              # the upstand's outer face
+    y = min(q[1] for q in back)
+    if low is not None:
+        y = min(y, low[1] - STOP_LAP)
+    if y >= foot[1]:
+        return pts
+    t = (y - foot[1]) / dy
+    x = foot[0] + t * dx
+    if (x - x_up) * (foot[0] - x_up) < 0.0:
+        x = x_up                                                            # it would cross the upstand: the bottom is a point
+    return pts + [(x, y), (x_up, y)]
+
+
+def re_flash(name):
+    return " Verge Flashing " in name + " " or " Verge Clip " in name + " "
+
+
+def join_hip_drips(meshes, p):
+    """Where an eaves runs into a hip, the two slopes' eaves drips each ended square at the
+    corner of their own outline and left a notch at the hip's foot. Each drip (and the
+    support under it) now runs on past the corner and is cut on the plumb plane through
+    the hip's line on plan, so the two slopes' drips meet in that plane, mitred."""
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    out = list(meshes)
+    for elev in p.get("elevations", []):
+        name, frame = elev.get("name"), elev["frame"]
+        hips = [v for v in (elev.get("valleys") or []) if v.get("kind") == "hip" and v.get("p1") and v.get("p2")]
+        if not hips:
+            continue
+        U, V = [float(c) for c in frame["u"]], [float(c) for c in frame_v(frame)]
+        o = frame["origin"]
+        uv = lambda q: (dot([a - b for a, b in zip(q, o)], U), dot([a - b for a, b in zip(q, o)], V))   # noqa: E731
+        lengths = [m for m in out if m.get("elevation") == name and (m.get("eaves_info") or m.get("eaves_support")
+                   or (m.get("tray_sheet") and " Eaves Drip" in m.get("name", ""))) and not m.get("drip_end")
+                   and abs(dot(m["frame"]["n"], U)) > 0.99]
+        for h in hips:
+            p1, p2 = [[float(c) for c in h["p1"]], [float(c) for c in h["p2"]]]
+            foot, head = (p1, p2) if p1[1] < p2[1] else (p2, p1)
+            fw, hw = frame_to_world(frame, foot[0], foot[1], 0.0), frame_to_world(frame, head[0], head[1], 0.0)
+            d = [hw[0] - fw[0], hw[1] - fw[1]]
+            size = math.hypot(*d)
+            if size < 1.0:
+                continue
+            normal = [-d[1] / size, d[0] / size, 0.0]                        # plumb, through the hip's line on plan
+            for m in list(lengths):
+                if m not in out:
+                    continue
+                a = uv(m["frame"]["origin"])[0]
+                fwd = dot(m["frame"]["n"], U) > 0
+                b = a + float(m["thickness"]) * (1.0 if fwd else -1.0)
+                lo, hi = min(a, b), max(a, b)
+                if min(abs(lo - foot[0]), abs(hi - foot[0])) > 250.0:
+                    continue                                                 # this length does not reach the hip's foot
+                left = abs(lo - foot[0]) < abs(hi - foot[0])                 # the hip is at its low-u end
+                at_start = left == fwd
+                grow = 400.0
+                if at_start:
+                    m["frame"] = dict(m["frame"], origin=[c - grow * k for c, k in zip(m["frame"]["origin"], m["frame"]["n"])])
+                m["thickness"] = float(m["thickness"]) + grow
+                pieces = _cut_end(m, [(None, fw, normal, "Hip")], at_start=at_start)
+                if pieces:
+                    i = out.index(m)
+                    out[i:i + 1] = pieces
+                    lengths.remove(m)
+    return out

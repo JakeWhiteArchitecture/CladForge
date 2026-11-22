@@ -146,3 +146,38 @@ def test_the_check_says_what_it_is_and_when_the_cap_is_wider_than_the_g3():
     ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
     assert [e.Name for e in ifc.by_type("IfcCovering") if "Head Verge Cap" in e.Name] == ["Roof Head Verge Cap"]
     assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
+
+
+# ── the stop end at the monopitch's top corner ────────────────────────────
+
+@pytest.mark.parametrize("verge_type", ["g3", "cladding"])
+@pytest.mark.parametrize("style, angle", [("flat", 90.0), ("v", 90.0), ("flat", 70.0)])
+def test_the_head_verge_cap_s_stop_end_closes_the_corner_as_a_box(style, verge_type, angle):
+    """At a monopitch's top corner the head verge cap has one flange and an upstand down
+    the wall's face: a "v" or "flat" stop end closes its end as a box, an edge off the
+    flange's lower corner at the stop end angle down to a level bottom at the upstand's
+    foot, and level back to the upstand."""
+    w, r = _pair(15.0)
+    link = head_link(w, r)
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    roof = dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="both", eaves="none",
+                verge_type=verge_type, ridge_end=style, ridge_v_angle=angle)
+    out = generate_preview({"elevations": [dict(w, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[rec("a", "Roof")]), roof],
+                            "trim": True, "splash": 0})
+    (cap,) = [m for m in out["geometry"] if m["ifc_type"] == "ridge_cap" and not m.get("stop_end")]
+    stops = [m for m in out["geometry"] if m.get("stop_end")]
+    assert sorted(m["name"][-1] for m in stops) == ["L", "R"]
+    apex = max(cap["profile"], key=lambda q: q[1])
+    foot = min(q[1] for q in cap["profile"] if abs(q[0] - apex[0]) <= 5.0)      # the upstand's foot
+    end = max(cap["profile"], key=lambda q: q[0])                                # the flange's outer end
+    for stop in stops:
+        ring = stop["profile"]
+        bottom = sorted(q for q in ring if abs(q[1] - foot) < 0.01)
+        assert len(bottom) == 2 and bottom[0][0] <= apex[0] + 0.01             # level, from the upstand ...
+        corner = bottom[-1]
+        top = [q for q in ring if q[0] > corner[0] - 0.01 and q[1] > corner[1] + 1.0]
+        start = min(top, key=lambda q: q[1])                                     # ... to the edge up to the flange's corner
+        up = (apex[0] - end[0], apex[1] - end[1])
+        edge = (corner[0] - start[0], corner[1] - start[1])
+        cos = (up[0] * edge[0] + up[1] * edge[1]) / math.hypot(*up) / math.hypot(*edge)
+        assert abs(math.degrees(math.acos(cos)) - angle) < 0.5

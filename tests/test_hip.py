@@ -262,7 +262,7 @@ def test_the_caps_are_mitred_where_hips_run_into_the_ridge():
     end; a hip cap and the ridge cap at an end of the ridge) are cut on one line: they
     touch along it and nowhere lie over one another. The ridge cap stops at the hips."""
     _ridge, params, out = _hipped_roof()
-    assert not [m for m in out["geometry"] if m["ifc_type"] == "ridge_cap" and not m.get("cap_leg")]    # no folded cap run through
+    assert not [m for m in out["geometry"] if m["ifc_type"] == "ridge_cap" and not m.get("cap_leg") and not m.get("stop_end")]    # no folded cap run through
     by_face = {}
     for leg in _legs(out):
         by_face.setdefault(leg["elevation"], []).append(leg)
