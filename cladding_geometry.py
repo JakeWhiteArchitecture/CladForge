@@ -177,12 +177,12 @@ def _tray_reach(p, elev, depth):
     verges = verge_sides(elev, p)
     reach, limits, held = [], [], []
     for (k, _ext), detail, side in ((left, d_left, "l"), (right, d_right, "r")):
-        held.append(side in verges and not k and verge_type(elev) == "cladding")
+        held.append(side in verges and not k and verge_type(elev, side) == "cladding")
         if k and k > 0 and detail != "butt":
             k_end, ext = _seam_end(p, elev, depth + p["plank_t"], k, detail, side)
             reach.append(max(0.0, ext + k_end * depth))
             limits.append((max(SEAM_MIN_CLOSE, reach[-1] + 20.0), p["plank_w"]))
-        elif side in verges and not k and verge_type(elev) == "cladding":
+        elif side in verges and not k and verge_type(elev, side) == "cladding":
             reach.append(verge_over(elev, side) + verge_seam_out())     # out over the cladding below, to the seam at the plywood's edge
             limits.append((SEAM_MIN_CLOSE, p["plank_w"]))
         elif side in verges and not k:

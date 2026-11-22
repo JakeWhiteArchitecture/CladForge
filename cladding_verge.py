@@ -74,7 +74,7 @@ VERGE_GAP = 25.0      # mm – ZI-05: the ventilation gap under the roof's plywo
 VERGE_FACE = 5.0      # mm – ZI-05: the flashing, clear of the edge's face (scaled)
 VERGE_LOCK = 10.0     # mm – ZI-05: the flashing turned down inside the seam (scaled)
 VERGE_CLIP_LAP = 40.0  # mm – ZI-05: the folded strip on the plywood's top, in from the roof's edge: over the batten there (scaled)
-VERGE_TYPES = ("g3", "cladding")
+VERGE_TYPES = ("auto", "g3", "cladding")
 ROOF_PITCH = 75.0     # deg – steeper than this a face is a wall, and has no verge
 EDGE_TOL = 12.0       # mm – a tray edge this close to the roof's edge is the edge
 
@@ -92,11 +92,39 @@ def verge_sides(elev, p):
     return {"both": (start, end), "start": (start,), "end": (end,)}.get(want, (start, end))
 
 
-def verge_type(elev):
-    """Which verge this face's chain takes: "g3" (the strip, VMZ-SN-MA-ZI-G3-01) or
-    "cladding" (the flashing down over a clad wall, VMZ-SN-MA-ZI-05)."""
+def verge_type(elev, side=None):
+    """Which verge this face takes on *side* ("l" or "r"): "g3" (the strip, VMZ-SN-MA-ZI-G3-01)
+    or "cladding" (the flashing down over a clad wall, VMZ-SN-MA-ZI-05). The chain's
+    "verge_type" says; "auto", the default, takes the flashing over cladding on a side
+    where join_verges found a picked wall standing under the roof's edge (a gable, the
+    gable of a gablet), and the G3 strip elsewhere. With no side: "cladding" if either is."""
     want = elev.get("verge_type")
-    return want if want in VERGE_TYPES else "g3"
+    if want in ("g3", "cladding"):
+        return want
+    walls = elev.get("verge_walls") or {}
+    if side is None:
+        return "cladding" if any(walls.values()) else "g3"
+    return "cladding" if walls.get(side) else "g3"
+
+
+def _outline_sides(elev):
+    """{"l": (u, v), "r": (u, v)}: on each side of a face's outline, the straight edge that
+    runs directly up the slope there (at least 300 long; at a gablet, the gable's rake
+    above the top of the hip) and the middle of it, in the face's own (u, v). A side with
+    no such edge is left out."""
+    runs = []
+    for pg in elev.get("polygons") or []:
+        ring = pg.get("exterior") or []
+        for q, r in zip(ring, ring[1:] + ring[:1]):
+            if abs(q[0] - r[0]) < 0.5 and abs(q[1] - r[1]) >= 300.0:
+                runs.append(((q[0] + r[0]) / 2.0, min(q[1], r[1]), max(q[1], r[1])))
+    if not runs:
+        return {}
+    out = {}
+    for side, u in (("l", min(x[0] for x in runs)), ("r", max(x[0] for x in runs))):
+        here = [x for x in runs if abs(x[0] - u) < 1.0]
+        out[side] = (u, (min(x[1] for x in here) + max(x[2] for x in here)) / 2.0)
+    return out
 
 
 def verge_most(elev, p):
@@ -144,20 +172,25 @@ def join_verges(params):
     for e in faces:
         e.pop("verge_over", None)
         e.pop("verge_over_from", None)
+        e.pop("verge_walls", None)
         pitch = e.get("pitch")
-        if verge_type(e) != "cladding" or pitch is None or float(pitch) > ROOF_PITCH or not e.get("frame"):
+        want = e.get("verge_type")
+        if want == "g3" or pitch is None or float(pitch) > ROOF_PITCH or not e.get("frame"):
             continue
+        auto = want != "cladding"                  # "auto": the flashing over cladding only where a wall is found
         f, W, H = e["frame"], float(e.get("width") or 0.0), float(e.get("height") or 0.0)
-        over, source = {}, {}
+        over, source, walls = {}, {}, {}
         try:
             fixed = float(e.get("verge_oversail"))
         except (TypeError, ValueError):
             fixed = None
+        sides = _outline_sides(e)                  # where each side's edge really is: a gablet's rake starts at the top of the hip
         for side, u, out in (("l", 0.0, [-c for c in f["u"]]), ("r", W, list(f["u"]))):
-            if fixed is not None:
+            if fixed is not None and not auto:
                 over[side], source[side] = max(0.0, fixed), "set"
                 continue
-            at = frame_to_world(f, u, H / 2.0, 0.0)
+            u, v = sides.get(side, (u, H / 2.0))
+            at = frame_to_world(f, u, v, 0.0)
             best = None
             for w in faces:
                 fw = w.get("frame")
@@ -169,11 +202,17 @@ def join_verges(params):
                         and (best is None or abs(d) < abs(best[0])):
                     best = (d, w)
             if best:
+                walls[side] = best[1].get("name")
+                if fixed is not None:
+                    over[side], source[side] = max(0.0, fixed), "set"
+                    continue
                 pw = _parse(dict(chain_params(params, best[1]), elevations=[]))
                 thick = buildup_depth(pw) + (float(pw["seam_h"]) if pw.get("seam") else 0.0)       # to the tips of its seams
                 over[side], source[side] = round(max(0.0, thick - best[0]), 1), best[1].get("name")
         if over:
             e["verge_over"], e["verge_over_from"] = over, source
+        if walls:
+            e["verge_walls"] = walls
 
 
 def verge_over(elev, side):
@@ -254,7 +293,7 @@ def verge_parts(meshes, p, infos):
                 continue
             u, v0, v1 = found[side]
             out = -1.0 if side == "l" else 1.0
-            kind = verge_type(elev)
+            kind = verge_type(elev, side)
             decks = [m for m in mine if m.get("ifc_type") == "deck"]
             deck_t = max((float(m["thickness"]) for m in decks), default=18.0)
             soffit = min((float(m["depth"]) for m in decks), default=back - 1.0 - deck_t)
