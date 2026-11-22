@@ -58,3 +58,15 @@ def test_the_dxf_has_the_four_building_elevations():
     dxf = meshes_to_dxf_string(out["geometry"], params, out["info"])
     for view in ("NORTH", "EAST", "SOUTH", "WEST"):
         assert "%s ELEVATION" % view in dxf
+
+
+def test_repeated_points_and_slivers_do_not_break_it():
+    """A ring with a repeated corner (a zero-length edge) or a sliver made GEOS throw, which is
+    fatal in the browser: they are dropped before any overlay."""
+    twice = _prism([[0, 0], [1000, 0], [1000, 0], [1000, 1000], [0, 1000], [0, 1000.001]], -100, 100, FLAT, "plank", "Twice")
+    sliver = _prism([[0, 0], [1000, 0.001], [2000, 0]], -300, 100, FLAT, "batten", "Sliver")
+    near = _box(200, 800, 200, 800, 0, 50)
+    lines = elevation([twice, sliver, near], "south")
+    assert lines
+    for pts, _kind in lines:
+        assert all(abs(a[0] - b[0]) > 0.001 or abs(a[1] - b[1]) > 0.001 for a, b in zip(pts, pts[1:]))

@@ -342,7 +342,11 @@ def meshes_to_dxf_string(meshes, params, infos=None):
     notes = ["%s  -  %s companion export  -  units mm" % (TOOL_NAME, IFC_SCHEMA_LABEL), DISCLAIMER]
     notes += _wrap(SCOPE_NOTE) + _wrap(QUANTITY_NOTE)
     notes.append("Layers: WALL OPENING SPLASH_ZONE SHEATHING INSULATION COUNTER_BATTEN BATTEN CLADDING CLOSER CORNER_PROFILE DIMS NOTES")
-    y_low = _building_elevations(dxf, meshes, sheet_min_y - 2500.0)
+    try:
+        y_low = _building_elevations(dxf, meshes, sheet_min_y - 2500.0)
+    except Exception as exc:                         # never lose the whole export to them
+        y_low = sheet_min_y - 2500.0
+        dxf.add_text("Building elevations left out: %s" % str(exc)[:120], (0.0, y_low), _TEXT, "NOTES")
     _text_block(dxf, notes, max(0.0, sheet_max_x - 4200.0), y_low - 600.0, 60.0)
     return dxf.to_string()
 

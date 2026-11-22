@@ -15,6 +15,12 @@ insulation) are left out: the cladding hides them."""
 from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
 
+try:                                       # shapely 2: work on a fixed grid, so overlay stays robust
+    from shapely import set_precision
+except ImportError:                        # pragma: no cover — an old shapely: as it comes
+    def set_precision(g, _grid):
+        return g
+
 from cladding_constants import frame_to_world
 from cladding_primitives import ring_at
 
@@ -23,6 +29,8 @@ VIEWS = {"north": ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)), "east": ((0.0, 1.0, 0.0),
          "south": ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0)), "west": ((0.0, -1.0, 0.0), (-1.0, 0.0, 0.0))}
 SEE_THROUGH = ("sheathing", "insulation", "mass")
 BATCH = 150          # faces gathered before they are merged into what covers the rest
+GRID = 0.01          # mm – every point snapped to this, repeated points dropped: a zero-length edge
+                     # makes GEOS throw, and in the browser (Pyodide) that is fatal, not an exception
 
 
 def _faces(m):
@@ -46,13 +54,24 @@ def elevation(meshes, view):
         if m.get("type", "prism") != "prism" or m.get("ifc_type") in SEE_THROUGH or not m.get("profile"):
             continue
         for f in _faces(m):
-            pts = [(dot(q, across), q[2]) for q in f]
+            pts = []
+            for q in f:
+                p = (round(dot(q, across) / GRID) * GRID, round(q[2] / GRID) * GRID)
+                if not pts or abs(p[0] - pts[-1][0]) > GRID / 2 or abs(p[1] - pts[-1][1]) > GRID / 2:
+                    pts.append(p)
+            while len(pts) > 1 and abs(pts[0][0] - pts[-1][0]) <= GRID / 2 and abs(pts[0][1] - pts[-1][1]) <= GRID / 2:
+                pts.pop()
+            if len(pts) < 3:
+                continue                                 # seen edge on, or a sliver
             g = Polygon(pts)
             if not g.is_valid:
                 g = g.buffer(0)
             if g.is_empty or g.area < 0.5:
                 continue                                 # seen edge on
-            faces.append((-max(dot(q, toward) for q in f), g, LineString(pts + pts[:1]), m.get("ifc_type")))
+            g = set_precision(g, GRID)
+            if g.is_empty:
+                continue
+            faces.append((-max(dot(q, toward) for q in f), g, set_precision(LineString(pts + pts[:1]), GRID), m.get("ifc_type")))
     faces.sort(key=lambda t: t[0])                       # nearest first
     cover, batch, out = None, [], []
     for _near, g, edge, kind in faces:
@@ -65,8 +84,10 @@ def elevation(meshes, view):
         for ln in getattr(seen, "geoms", [seen]):
             if ln.geom_type == "LineString" and ln.length > 0.5:
                 out.append((list(ln.coords), kind))
-        batch.append(g.buffer(-0.05) if g.area > 1.0 else g)
+        shrunk = set_precision(g.buffer(-0.05), GRID) if g.area > 1.0 else g
+        if not shrunk.is_empty:
+            batch.append(shrunk)
         if len(batch) >= BATCH:
-            cover = unary_union(([cover] if cover is not None else []) + batch)
+            cover = set_precision(unary_union(([cover] if cover is not None else []) + batch), GRID)
             batch = []
     return out
