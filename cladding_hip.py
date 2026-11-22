@@ -508,7 +508,9 @@ def gablet_hip_tops(meshes, p, infos):
     meets the hip a little below the hip's top, and stands in the plane of the gable
     cladding's face, which the verge's drip or flashing hangs in front of. **The hip cap is
     cut on that plane**: on the hip end's side its leg runs on up to meet the verge's drip
-    face; on the slope's side its leg, which would ride over the seam, ends against it. The
+    face, and is cut square across where the drip's foot comes down to it (a level line up
+    the rake, through that point); on the slope's side its leg, which would ride over the
+    seam, ends against it. The
     trays' upstands along the hip are cut on it too, and the verge's edge seam comes down to
     the hip. **The hip end's abutment parts at the gable's foot** (the plywood stood up it,
     the flashings), where they rise through the slope's plane at its corner, are cut back
@@ -529,6 +531,9 @@ def gablet_hip_tops(meshes, p, infos):
             world_s = frame_to_world(frame, S[0], S[1], 0.0)
             U = [float(c) for c in frame["u"]]
             out_dir = [-c for c in U] if T[0] > u_s else U                  # out past the verge
+            V = [float(c) for c in frame_v(frame)]
+            size = math.hypot(V[0], V[1])
+            up_rake = [V[0] / size, V[1] / size, 0.0]                        # level, up the rake: the drip's foot is square to it
             # the cap legs and the upstands, on this face and the hip end, cut on the seam's plane
             for face in (name, h["with"]):
                 ef = by.get(face)
@@ -540,11 +545,16 @@ def gablet_hip_tops(meshes, p, infos):
                     near = min(math.dist(frame_to_world(m["frame"], q[0], q[1], float(m["depth"])), world_s) for q in m["profile"])
                     if near > 1500.0:
                         continue                                             # another hip's
-                    line = _plane_line(m, world_s, [-c for c in out_dir], force=True)   # an upstand cut at its mid-height: under the cap
-                    if line is None:
-                        continue
-                    (n, c) = line                                            # keep its back: the side out past the verge
-                    if not _clip_sheet(m, n, c):
+                    kept = True
+                    for normal in ([-c for c in out_dir], up_rake):
+                        line = _plane_line(m, world_s, normal, force=True)  # an upstand cut at its mid-height: under the cap
+                        if line is None:
+                            continue
+                        (n, c) = line                                        # keep its back: out past the verge, down the rake
+                        if not _clip_sheet(m, n, c):
+                            kept = False
+                            break
+                    if not kept:
                         out.remove(m)
             # the verge's edge seam carried down the rake's line to the hip
             for m in out:
