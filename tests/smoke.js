@@ -1653,6 +1653,9 @@ _dxf(_o["geometry"], _p, _o["info"])`);
                  caps: named(a, /Ridge Cap/).length + named(b, /Ridge Cap/).length,
                  fillers: [named(a, /Ridge Filler/).length, named(b, /Ridge Filler/).length],
                  upstands: named(a, /Ridge Upstand/).length, verges: named(a, /Verge Support [LR]$/).length + named(b, /Verge Support [LR]$/).length,
+                 // Verge type Auto (the default): an end standing over a picked, clad wall (the wing's east wall)
+                 // takes the verge with cladding (ZI-05), its flashing in place of the G3 strip
+                 flashings: named(a, /Verge Flashing [LR]$/).length + named(b, /Verge Flashing [LR]$/).length,
                  seams: [seams(a), seams(b)],
                  check: [...document.querySelectorAll('#checks-container > div')].map(d => d.textContent).filter(t => /meet at a ridge/.test(t)) };
     });
@@ -1661,7 +1664,7 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || !/ridge with/.test(ridge.cards[0]) || !/carries the cap/.test(ridge.cards.join()) || ridge.caps !== 1
         || ridge.fillers[0] < 4 || ridge.fillers[0] !== ridge.fillers[1] || ridge.seams[0].length < 4
         || ridge.seams[0].length !== ridge.seams[1].length || ridge.seams[0].some((x, k) => Math.abs(x - ridge.seams[1][k]) > 20)
-        || ridge.check.length !== 1 || ridge.upstands < 4 || ridge.verges !== 4)
+        || ridge.check.length !== 1 || ridge.upstands < 4 || ridge.verges + ridge.flashings !== 4 || ridge.flashings > 2)
         throw new Error('the two roof slopes did not join at a ridge: ' + JSON.stringify(ridge));
     // The verge with cladding (VMZ-SN-MA-ZI-05), the chain's Verge type: no strip and no tray
     // welted round a nose, but a seam at the roof's edge and a flashing down over the wall's
