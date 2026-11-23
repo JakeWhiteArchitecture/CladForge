@@ -1015,6 +1015,11 @@ _json.dumps(_ex(_pl))`);
             + (e.result.warnings || []).map(w => ' · ' + w).join(''));
         if (e.result.ok) {
             if (dropped) e.result.warnings.push(`${dropped} nearby element(s) left out to keep the engine within memory`);
+            // A corner's clip is never more than a corner's tolerance in from the face's end: one
+            // set when the face was narrower (a coplanar wall picked into it since) is stale
+            const W = e.result.width, CORNER_TOL = 400;
+            if (e.clipHi !== null && e.clipHi !== undefined && W - e.clipHi > CORNER_TOL + 1) e.clipHi = null;
+            if ((e.clipLo || 0) > CORNER_TOL + 1) e.clipLo = 0;
             let linked = await linkIntoChain(e);
             if (!linked) linked = await joinRidgePartner(e);
             const valleys = await linkValleys(e);
@@ -1741,8 +1746,10 @@ function restoreState(st, add, fileName) {
                         manual: m.manual || [], disabled: m.disabled || {}, storey: m.storey || null, highlights: [], chain,
                         start: m.start || 0, rev: !!m.rev, link: m.link || null, offset: m.offset || 0,
                         cornerLo: m.cornerLo || 0, cornerHi: m.cornerHi || 0, masterLo: !!m.masterLo, masterHi: !!m.masterHi,
-                        detailLo: m.detailLo || null, detailHi: m.detailHi || null, clipLo: m.clipLo || 0,
-                        clipHi: m.clipHi === undefined ? null : m.clipHi, cover: m.cover || null,
+                        detailLo: m.detailLo || null, detailHi: m.detailHi || null,
+                        // a corner's clip, never more than its tolerance in from the end (see extractOnce): a stale one is dropped
+                        clipLo: (m.clipLo || 0) > 401 ? 0 : (m.clipLo || 0),
+                        clipHi: m.clipHi === undefined || m.clipHi === null || surface.width - m.clipHi > 401 ? null : m.clipHi, cover: m.cover || null,
                         panelRows: m.panelRows || null, panelJoints: m.panelJoints || null,
                         postStates: m.postStates || null, staggerJoints: m.staggerJoints || null, openingDetails: m.openingDetails || {} };
             chain.members.push(e);
