@@ -491,6 +491,35 @@ def _spatial(ifc, context, elevations):
     return project, body, site, building, storeys
 
 
+REFERENCE_ARM = 300.0     # mm – each arm of the reference cross, out from the origin
+REFERENCE_BAR = 20.0      # mm – its bars' section
+
+
+def _reference_point(ifc, body, site):
+    """A small cross at the IFC's origin (0, 0, 0), named for what it is: the cladding goes out
+    in the host model's own coordinates, so laid back over the model it should sit on the
+    model's origin, and the cross is something to snap to, or to check the two line up by.
+    Three bars, along x, y and up z."""
+    from cladding_constants import _prism
+    a, b = REFERENCE_ARM, REFERENCE_BAR / 2.0
+    flat = {"origin": [0.0, 0.0, 0.0], "u": [1.0, 0.0, 0.0], "v": [0.0, 1.0, 0.0], "n": [0.0, 0.0, 1.0]}
+    bars = [_prism([[-a, -b], [a, -b], [a, b], [-a, b]], -b, 2 * b, flat, "reference", "x"),
+            _prism([[-b, -a], [b, -a], [b, a], [-b, a]], -b, 2 * b, flat, "reference", "y"),
+            _prism([[-b, -b], [b, -b], [b, b], [-b, b]], 0.0, a, flat, "reference", "z")]
+    solids = []
+    for bar in bars:
+        solid, kind = _body(ifc, bar)
+        solids += solid if isinstance(solid, list) else [solid]
+    elem = _make_element(ifc, body, "IfcBuildingElementProxy", "%s reference point (0, 0, 0)" % TOOL_NAME, (solids, kind),
+                         None, "Reference point")
+    try:
+        elem.Description = "The IFC's origin. The cladding is in the host model's coordinates: this cross should sit on its origin."
+    except Exception:   # noqa: BLE001
+        pass
+    ifcopenshell.api.run("spatial.assign_container", ifc, relating_structure=site, products=[elem])
+    return elem
+
+
 def _unshift(meshes, offset):
     """Put the elements back on the host model. The viewer works near the origin so
     float32 keeps its millimetres, and reports the shift it applied as context.offset."""
@@ -648,6 +677,9 @@ def meshes_to_ifc(meshes, params, infos=None):
                               RelatedObjects=elems, RelatingMaterial=material)
         except Exception:
             pass
+
+    if context.get("reference_point"):            # the app's download asks for it
+        _reference_point(ifc, body, site)
 
     _pset(ifc, [project], "%s_Disclaimer" % TOOL_NAME, {
         "Notice": ("IfcText", DISCLAIMER), "ScopeNote": ("IfcText", SCOPE_NOTE),

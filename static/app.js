@@ -1881,6 +1881,8 @@ function onIfcSchema() {
 
 async function downloadIFC() {
     const params = getParams(); params.trim = true;
+    // a cross at the IFC's origin, to snap the cladding back onto the host model by (ifc_generator._reference_point)
+    params.context = Object.assign({}, params.context || {}, { reference_point: true });
     if (!params.elevations.length) { alert('Pick some faces and build the chain first (press Enter).'); return; }
     const btn = document.getElementById('ifc-btn');
     busy(btn, true, `Generating ${ifcSchema().replace('2X3', '2x3')}…`);

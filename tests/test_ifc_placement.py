@@ -112,3 +112,23 @@ def test_the_linings_of_one_window_in_two_clad_areas():
     # the frames themselves: one side of each opening is the mirror of the other
     hands = {m["name"]: _handed(m["frame"]) for m in out["geometry"] if m["ifc_type"] == "reveal"}
     assert {hands["Upper Reveal 1L"], hands["Upper Reveal 1R"]} == {1, -1}
+
+
+def test_the_download_has_a_reference_cross_at_the_origin():
+    """The cladding goes out in the host model's coordinates; the app's download adds a cross
+    at the IFC's origin (0, 0, 0) to snap it back onto the model by. Not asked for, none."""
+    up = dict(_face("Upper", 0.0, 3000.0), offset=0, chain="Chain 1")
+    params = {"elevations": [up], "trim": True, "splash": 0, "context": {"offset": [1000.0, 2000.0, 0.0], "reference_point": True}}
+    out = generate_preview(params)
+    ifc = ifcopenshell.open(meshes_to_ifc(out["geometry"], params, out["info"]))
+    (ref,) = [e for e in ifc.by_type("IfcBuildingElementProxy") if "reference point" in (e.Name or "")]
+    s = geom.settings()
+    s.set(s.USE_WORLD_COORDS, True)
+    v = geom.create_shape(s, ref).geometry.verts
+    xs, ys, zs = v[0::3], v[1::3], v[2::3]
+    k = 1000.0 if max(map(abs, v)) < 10 else 1.0           # the geometry in metres or mm
+    assert min(xs) * k == pytest.approx(-300.0, abs=1.0) and max(xs) * k == pytest.approx(300.0, abs=1.0)
+    assert min(ys) * k == pytest.approx(-300.0, abs=1.0) and max(zs) * k == pytest.approx(300.0, abs=1.0)
+    plain = dict(params, context={"offset": [1000.0, 2000.0, 0.0]})
+    ifc2 = ifcopenshell.open(meshes_to_ifc(out["geometry"], plain, out["info"]))
+    assert not [e for e in ifc2.by_type("IfcBuildingElementProxy") if "reference point" in (e.Name or "")]
