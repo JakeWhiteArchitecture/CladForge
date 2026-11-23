@@ -24,7 +24,8 @@ NOTE = ("CladForge saved state: chains, elevations, the wall surfaces they are a
 # List items are named for what they hold where the parent says so; otherwise "i".
 ITEM = {"chains": "chain", "elevations": "elevation", "members": "elevation", "polygons": "polygon",
         "abutments": "abutment", "picks": "pick", "holes": "hole", "notches": "notch",
-        "warnings": "warning", "panel_joints": "joint", "manual": "level"}
+        "warnings": "warning", "panel_joints": "joint", "manual": "level",
+        "library": "source"}
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 

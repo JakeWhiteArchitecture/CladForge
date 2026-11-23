@@ -2209,6 +2209,44 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         || mansard.over !== 'Elevation A,true,true' || mansard.checks !== 2)
         throw new Error('the two slopes were not joined at a mansard: ' + JSON.stringify(mansard));
 
+    // Copy settings from: the mansard's two chains, one onto the other; then a chain of a saved
+    // state listed from its file, copied, and the file taken out of the list again.
+    page.on('dialog', d => d.accept());
+    const copied = await page.evaluate(async () => {
+        const a = state.elevations.find(e => e.name === 'Elevation A'), b = state.elevations.find(e => e.name === 'Elevation B');
+        setActive(state.elevations.indexOf(b));
+        a.chain.settings = Object.assign({}, a.chain.settings, { seam_full_length: true, seam_balanced: true });
+        renderSettingsLibrary();
+        const sel = document.getElementById('copy-from');
+        const listed = [...sel.options].map(o => o.value);
+        sel.value = 'chain:' + state.chains.indexOf(a.chain);
+        document.getElementById('copy-to').value = 'this';
+        copyChainSettings();
+        const snap = snapshotState();
+        pyodide.globals.set('_state_json', JSON.stringify(snap));
+        const xml = await enginePy('import json as _json\nfrom cladding_state import to_xml as _to_xml\n_to_xml(_json.loads(_state_json))');
+        return { listed, own: listed.includes('chain:' + state.chains.indexOf(b.chain)), b: [b.chain.settings.seam_full_length, b.chain.settings.seam_balanced],
+                 form: document.getElementById('seam_full_length').checked, xml };
+    });
+    if (copied.own || !copied.listed.includes('file') || copied.b.join() !== 'true,true' || !copied.form)
+        throw new Error('settings were not copied from one chain to another: ' + JSON.stringify(Object.assign({}, copied, { xml: copied.xml.length })));
+    const tmp = path.join(require('os').tmpdir(), 'cladforge-settings-source.xml');
+    fs.writeFileSync(tmp, copied.xml);
+    await page.setInputFiles('#copy-file', tmp);
+    await page.waitForFunction(() => (state.settingsLibrary || []).length === 1, null, { timeout: 60000 });
+    const library = await page.evaluate(() => {
+        const f = state.settingsLibrary[0];
+        const opts = [...document.getElementById('copy-from').options].filter(o => o.value.startsWith('lib:')).length;
+        const saved = (snapshotState().library || []).length;
+        removeSettingsFile(0);
+        return { file: f.file, chains: f.chains.length, opts, saved, after: state.settingsLibrary.length,
+                 optsAfter: [...document.getElementById('copy-from').options].filter(o => o.value.startsWith('lib:')).length,
+                 chips: document.getElementById('copy-files').children.length };
+    });
+    console.log('copy settings:', JSON.stringify(library));
+    if (library.chains !== 2 || library.opts !== 2 || library.saved !== 1 || library.after !== 0 || library.optsAfter !== 0 || library.chips !== 0)
+        throw new Error('a state file\'s chains were not listed, saved and taken out again: ' + JSON.stringify(library));
+
     console.log('SMOKE OK');
     await browser.close();
 }

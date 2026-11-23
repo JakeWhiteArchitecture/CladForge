@@ -60,6 +60,24 @@
         <div class="panel-bot">
             <div class="section">
                 <h2>3 · Buildup</h2>
+                <div class="field" id="copy-settings"><label>Copy settings from <span class="unit">another chain, in this job or a saved state</span></label>
+                    <div class="row pair">
+                        <select id="copy-from" onchange="onCopyFrom(this)" style="flex:1"></select>
+                        <button class="btn btn-secondary btn-sm" onclick="copyChainSettings()" title="Copy the chosen chain's settings onto this chain (or every wall or roof chain)">Copy</button>
+                    </div>
+                    <div class="row pair">
+                        <label class="chk"><input type="checkbox" id="copy-cladding" checked> Cladding</label>
+                        <label class="chk"><input type="checkbox" id="copy-edges" checked> Edges</label>
+                        <select id="copy-to" title="Which chains take the settings">
+                            <option value="this" selected>to this chain</option>
+                            <option value="walls">to every wall chain</option>
+                            <option value="roofs">to every roof chain</option>
+                        </select>
+                    </div>
+                    <div id="copy-files"></div>
+                    <input type="file" id="copy-file" accept=".xml" multiple style="display:none" onchange="importSettingsFiles(this.files); this.value=''">
+                    <p class="hint" style="margin:4px 0 0">Copies the cladding (type, profile, sizes, build-up, metal, trays) and the edges (verges, heads, eaves, seam ends, offsets) as they are set on the other chain, once: change either afterwards and the other stays as it is. Not copied: the chain's picked top and bottom, its setting-out offset, its corners and where its seams are taken from. Choose <b>From a state file…</b> to list the chains of a saved state here; each file's chains stay in the list, saved with the job, until you remove the file with its ×.</p>
+                </div>
                 <div class="row pair">
                     <label class="chk" style="flex:1"><input type="checkbox" id="sheathing" onchange="updatePreview()"> Sheathing board</label>
                     <div class="field"><label>Thickness <span class="unit">6–18 mm</span></label><input type="number" id="sheathing_t" value="9" min="6" max="18" oninput="onNumeric()"></div>
