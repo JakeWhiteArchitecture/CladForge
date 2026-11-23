@@ -93,3 +93,17 @@ def test_anything_else_is_refused_with_a_reason(text, why):
 def test_load_for_the_browser(surfaces):
     res = cs.load(cs.to_xml(_snapshot(*surfaces)))
     assert res["ok"] and res["state"]["chains"][0]["members"][1]["name"] == "Elevation B"
+
+
+def test_the_chains_listed_to_copy_settings_from_are_saved_with_the_job():
+    """The chains of other state files, listed under "Copy settings from" (app.js
+    importSettingsFiles), are saved with the job as "library" and come back exactly."""
+    from cladding_state import from_xml, to_xml
+    st = {"app": "CladForge", "chains": [], "library": [
+        {"file": "skirt.xml", "chains": [
+            {"name": "South cladding", "kind": "wall", "settings": {"seam_metal": "zinc", "seam_balanced": True, "base_drip": True},
+             "edges": {"top": 10, "verge": "both", "vergeType": "cladding"}},
+            {"name": "Roof", "kind": "roof", "settings": None, "edges": {"head": "g3"}}]}]}
+    back = from_xml(to_xml(st))
+    assert back["library"] == st["library"]
+    assert "<source " in to_xml(st)

@@ -193,6 +193,7 @@ function setActive(i) {
     // course edit (lockDatum), so choosing a face with a different base moves nothing.
     const picked = state.elevations[i];
     showActiveChainSettings();         // the sidebar follows the face's chain
+    renderSettingsLibrary();           // and the chains it can copy from are the others
     syncEdgeFields();
     // Flat on an elevation, choosing another swings the view across to it.
     if (in2D() && picked && picked.result && picked.result.ok) enter2D(picked.result.name, picked.result.frame, cladBox(picked));
@@ -298,6 +299,7 @@ function renderElevationList() {
     }
     box.innerHTML = html;
     updateMakeChain();
+    renderSettingsLibrary();
 }
 
 // ─── CORNERS ───
@@ -1164,6 +1166,159 @@ _json.dumps({"section": _sec, "message": _msg})`));
     document.getElementById('custom-profile-info').textContent = res.message;
 }
 
+// ─── COPYING SETTINGS BETWEEN CHAINS ───
+// A chain's settings (cladding: chain.settings, the Buildup form; edges: chain.edges) can be
+// copied from another chain of this job, or from a chain of a saved state read in as a
+// library entry (state.settingsLibrary: [{file, chains: [{name, kind, settings, edges}]}],
+// saved with the job). The copy is made once; nothing stays linked. What is not a setting
+// (the chain's picked top and bottom, its setting-out, corners, seam links) is never copied.
+function chainKind(pitches) {
+    const p = pitches.filter(x => typeof x === 'number' && isFinite(x));
+    if (!p.length) return 'chain';
+    if (p.every(x => x >= 80)) return 'wall';
+    if (p.every(x => x < 80)) return 'roof';
+    return 'mixed';
+}
+const liveKind = c => chainKind(c.members.filter(m => m.result && m.result.ok).map(m => m.result.pitch));
+const kindLabel = k => (k === 'wall' ? 'walls' : k === 'roof' ? 'roof' : k === 'mixed' ? 'walls and roof' : '');
+
+function renderSettingsLibrary() {
+    const sel = document.getElementById('copy-from');
+    if (!sel) return;
+    const was = sel.value;
+    const here = activeChain();
+    let html = '<option value="">Choose a chain…</option>';
+    const live = state.chains.filter(c => c !== here && c.members.some(m => m.result && m.result.ok));
+    if (live.length) {
+        html += '<optgroup label="This job">';
+        state.chains.forEach((c, i) => {
+            if (live.includes(c)) html += `<option value="chain:${i}">${escapeHtml(c.name)} · ${kindLabel(liveKind(c))}</option>`;
+        });
+        html += '</optgroup>';
+    }
+    (state.settingsLibrary || []).forEach((f, i) => {
+        html += `<optgroup label="${escapeHtml(f.file)}">`;
+        f.chains.forEach((c, j) => { html += `<option value="lib:${i}:${j}">${escapeHtml(c.name)} · ${kindLabel(c.kind)}</option>`; });
+        html += '</optgroup>';
+    });
+    html += '<option value="file">From a state file…</option>';
+    sel.innerHTML = html;
+    if ([...sel.options].some(o => o.value === was)) sel.value = was;
+    const files = document.getElementById('copy-files');
+    files.innerHTML = (state.settingsLibrary || []).map((f, i) =>
+        `<span class="chip" title="${escapeHtml(f.file)}: ${f.chains.length} chain(s) in the list">${escapeHtml(f.file)} <button class="chip-x" onclick="removeSettingsFile(${i})" title="Take this file's chains out of the list">×</button></span>`).join(' ');
+}
+
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function onCopyFrom(sel) {
+    if (sel.value === 'file') { sel.value = ''; document.getElementById('copy-file').click(); }
+}
+
+// Each file's chains go in the list as their settings and edges only (no surfaces).
+async function importSettingsFiles(files) {
+    let added = 0;
+    for (const file of files || []) {
+        const xml = await file.text();
+        let res;
+        try {
+            pyodide.globals.set('_state_xml', xml);
+            res = JSON.parse(await enginePy(`
+import json as _json
+from cladding_state import load as _load
+_json.dumps(_load(_state_xml))`));
+        } catch (err) { res = { ok: false, error: err.message }; }
+        if (!res.ok) { setStatus(`Not read: ${file.name}: ${res.error}`, 'busy'); continue; }
+        const chains = (res.state.chains || []).filter(c => c.settings || c.edges).map(c => ({
+            name: c.name || 'Chain', kind: chainKind((c.members || []).map(m => m.surface && m.surface.pitch)),
+            settings: c.settings ? JSON.parse(JSON.stringify(c.settings)) : null,
+            edges: c.edges ? JSON.parse(JSON.stringify(c.edges)) : null }));
+        if (!chains.length) { setStatus(`${file.name} has no chain settings to copy`, 'busy'); continue; }
+        state.settingsLibrary = (state.settingsLibrary || []).filter(f => f.file !== file.name);    // read again: replaced
+        state.settingsLibrary.push({ file: file.name, chains });
+        added += chains.length;
+    }
+    renderSettingsLibrary();
+    const sel = document.getElementById('copy-from');
+    const last = (state.settingsLibrary || []).length - 1;
+    if (added && last >= 0) sel.value = `lib:${last}:0`;
+    if (added) setStatus(`${added} chain(s) listed under Copy settings from`, 'ok');
+}
+
+function removeSettingsFile(i) {
+    const f = (state.settingsLibrary || [])[i];
+    if (!f) return;
+    state.settingsLibrary.splice(i, 1);
+    renderSettingsLibrary();
+    setStatus(`${f.file} taken out of the list: the settings already copied from it stay`, 'ok');
+}
+
+function settingsSource(value) {
+    const [kind, a, b] = (value || '').split(':');
+    if (kind === 'chain') {
+        const c = state.chains[+a];
+        if (!c) return null;
+        if (c === state.formChain) c.settings = formSettings();          // as the form has it now
+        return { name: c.name, kind: liveKind(c), settings: c.settings, edges: c.edges, chain: c };
+    }
+    if (kind === 'lib') {
+        const f = (state.settingsLibrary || [])[+a], c = f && f.chains[+b];
+        return c ? Object.assign({ from: f.file }, c) : null;
+    }
+    return null;
+}
+
+// What copying *src* onto chain *c* changes: [key, from, to] for each setting that differs.
+function settingsChanges(src, c, cladding, edges) {
+    const out = [];
+    const diff = (a, b, label) => {
+        for (const k of Object.keys(a || {})) {
+            const x = (b || {})[k], y = a[k];
+            if (JSON.stringify(x) !== JSON.stringify(y)) out.push([label + k, x, y]);
+        }
+    };
+    if (cladding) diff(src.settings, c.settings, '');
+    if (edges) diff(src.edges, c.edges, 'edges.');
+    return out;
+}
+
+function copyChainSettings() {
+    const src = settingsSource(document.getElementById('copy-from').value);
+    if (!src) { setStatus('Choose a chain to copy the settings from', 'busy'); return; }
+    const cladding = document.getElementById('copy-cladding').checked, edges = document.getElementById('copy-edges').checked;
+    if (!cladding && !edges) { setStatus('Tick Cladding, Edges or both', 'busy'); return; }
+    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = formSettings();
+    const to = document.getElementById('copy-to').value;
+    const here = activeChain();
+    const targets = (to === 'this' ? [here] : state.chains.filter(c => liveKind(c) === (to === 'walls' ? 'wall' : 'roof')))
+        .filter(c => c && c !== src.chain);
+    if (!targets.length) { setStatus(to === 'this' ? 'Select a face of the chain to copy onto first' : 'No such chains to copy onto', 'busy'); return; }
+    const where = src.from ? `${src.name} (${src.from})` : src.name;
+    const odd = targets.filter(c => src.kind !== 'chain' && liveKind(c) !== 'chain' && src.kind !== liveKind(c) && src.kind !== 'mixed' && liveKind(c) !== 'mixed');
+    let lines = [], count = 0;
+    for (const c of targets) {
+        const ch = settingsChanges(src, c, cladding, edges);
+        count += ch.length;
+        if (ch.length) lines.push(`${c.name}: ` + ch.slice(0, 8).map(([k, a, b]) => `${k} ${a === undefined ? '–' : a} → ${b}`).join(', ') + (ch.length > 8 ? `, and ${ch.length - 8} more` : ''));
+    }
+    if (!count) { setStatus(`Nothing to copy: ${targets.map(c => c.name).join(', ')} already set as ${where}`, 'ok'); return; }
+    const warn = odd.length ? `\n\n${src.name} is a ${src.kind} chain and ${odd.map(c => c.name).join(', ')} ${odd.length > 1 ? 'are' : 'is'} not: details meant for one (verges, heads, the drip at a wall's foot, corners) may not suit the other.` : '';
+    if (!confirm(`Copy ${[cladding ? 'cladding' : '', edges ? 'edge' : ''].filter(Boolean).join(' and ')} settings from ${where}?\n\n${lines.join('\n')}${warn}`)) return;
+    for (const c of targets) {
+        if (cladding && src.settings) c.settings = Object.assign({}, c.settings || {}, JSON.parse(JSON.stringify(src.settings)));
+        if (edges && src.edges) c.edges = Object.assign({}, EDGE_DEFAULTS, c.edges || {}, JSON.parse(JSON.stringify(src.edges)));
+    }
+    if (state.formChain && targets.includes(state.formChain)) {         // the form shows a chain that changed: show it as it is now
+        if (state.formChain.settings) { applySettings(state.formChain.settings); syncTypeUI(); }
+    }
+    syncEdgeFields();
+    renderElevationList();
+    setStatus(`Copied from ${where} onto ${targets.map(c => c.name).join(', ')}`, 'ok');
+    updatePreview();
+}
+
 function activeChain() { const e = state.elevations[state.active]; return e ? e.chain : null; }
 // Keep the chain shown in the sidebar, then show the active face's chain if it is another.
 function showActiveChainSettings() {
@@ -1543,7 +1698,8 @@ function snapshotState() {
     return { app: 'CladForge', saved: new Date().toISOString(),
              model: { file: (state.file && state.file.name) || state.savedModelFile || null, offset: modelOffset.slice(),
                       context: Object.assign({}, modelContext) },
-             seq: state.seq, active: act ? act.name : null, settings, chains };
+             seq: state.seq, active: act ? act.name : null, settings, chains,
+             library: (state.settingsLibrary || []).map(f => ({ file: f.file, chains: f.chains })) };
 }
 
 // A state file is named after the chains in it, so it says what it holds: one chain's own
@@ -1694,6 +1850,10 @@ function restoreState(st, add, fileName) {
     if (in2D()) { exit2D(); update2DButton(); }
     const merged = add ? { chains: 0, elevations: 0, renamed: [], skipped: [], near: [], otherModel: null } : null;
     const source = { file: fileName || null, saved: st.saved || null };       // where each chain it brings came from
+    // the chains listed to copy settings from: the job's own, or added to those already listed
+    const lib = (st.library || []).filter(f => f && f.file && Array.isArray(f.chains));
+    if (add) state.settingsLibrary = (state.settingsLibrary || []).filter(f => !lib.some(g => g.file === f.file)).concat(lib);
+    else state.settingsLibrary = lib;
     if (!add) {
         state.elevations.forEach(e => e.highlights.forEach(h => highlightGroup.remove(h)));
         state.heals = []; state.healNo = new Set(); renderHeals([]);      // a new job: nothing offered, nothing declined
