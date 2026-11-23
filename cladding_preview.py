@@ -19,6 +19,7 @@ from cladding_ridge import ridge_ends, ridge_parts
 from cladding_verge import close_cap_ends, join_drips, join_hip_drips, verge_parts, join_verges
 from cladding_valley import valley_cut, valley_parts
 from cladding_hip import gablet_hip_tops, hip_ends, hip_parts
+from cladding_greencoat import cladding_drips
 from cladding_eaves import eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
 from cladding_abut import abut_over, abut_parts, abut_ridges, join_abuts
@@ -204,6 +205,7 @@ def _preview_one(p, ready=None):
     meshes = join_hip_drips(meshes, p)       # where it runs into a hip: the two slopes' drips mitred on the hip's plan line
     meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
     meshes = window_parts(meshes, p, infos)  # a standing seam wall's openings: the sill capping and the head strip
+    meshes = cladding_drips(meshes, p, infos)   # a coated steel standing seam wall's foot: GreenCoat's cladding drip
     meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
     meshes = abut_parts(meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
     meshes = abut_over(meshes, p, infos)     # and that wall's layers stop above the roof

@@ -3,6 +3,8 @@ import math
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -164,3 +166,53 @@ def test_a_seam_running_out_on_a_steel_hip_is_not_folded():
         q, r = max(zip(m["profile"], m["vshift"][0]), key=lambda qr: qr[0][1])
         return r[3]
     assert abs(top_shift(steel) - top_shift(zinc) - 1.0) < 0.05    # zinc: the hip's lean less the fold; steel: the lean alone
+
+
+def _steel_wall(**kw):
+    from synthetic import payload
+    from fabric_extract import extract_elevation
+    from cladding_preview import generate_preview
+    e = extract_elevation(payload())
+    el = dict(e, offset=0, **kw)
+    params = {"elevations": [el], "trim": True, "sheathing": True, "insulation": True,
+              "cladding_type": "plank", "plank_profile": "seam", "plank_orient": "vertical", "seam_metal": "steel", "splash": 150}
+    return e, generate_preview(params)
+
+
+def test_a_steel_wall_has_greencoats_cladding_drip_at_its_foot():
+    from cladding_greencoat import DRIP_DOWN
+    e, out = _steel_wall()
+    g = out["geometry"]
+    drips = [m for m in g if m.get("cladding_drip")]
+    meshes = [m for m in g if m.get("insect_mesh")]
+    assert len(drips) == 1 and len(meshes) == 1
+    assert out["info"][0]["cladding_drip"]["length"] == 8000.0
+    deck = next(m for m in g if m["ifc_type"] == "deck")
+    v0 = min(q[1] for q in deck["profile"])
+    xb, xf = deck["depth"], deck["depth"] + deck["thickness"]
+    xs, ys = [q[0] for q in drips[0]["profile"]], [q[1] for q in drips[0]["profile"]]
+    assert min(ys) == pytest.approx(v0 - DRIP_DOWN, abs=0.5)               # the drip below the plywood's foot
+    assert min(xs) == pytest.approx(xb - 0.6, abs=0.1) and max(xs) == pytest.approx(xf + 0.6, abs=0.1)   # round its foot
+    # the trays carried down over it, to its hem
+    trays = [m for m in g if m["ifc_type"] == "plank"]
+    assert min(min(q[1] for q in m["profile"]) for m in trays) == pytest.approx(v0 - DRIP_DOWN - 0.6, abs=0.1)
+
+
+@pytest.mark.parametrize("bottom, folded", [("folded", True), ("flat", False)])
+def test_the_seams_end_on_the_drip_folded_or_square_as_the_chain_sets(bottom, folded):
+    _e, out = _steel_wall(seam_bottom=bottom)
+    seam = next(m for m in out["geometry"] if m["name"].endswith("Seam overcloak") and min(q[1] for q in m["profile"]) < 150)
+    low = min(q[1] for q in seam["profile"])
+    rows = (seam.get("vshift") or [[[0.0] * 4 for _q in seam["profile"]]])[0]
+    fold = any(abs(r[3]) > 0.5 for q, r in zip(seam["profile"], rows) if q[1] < low + 30.0)      # its bottom end only
+    assert fold == folded
+
+
+def test_zinc_walls_have_no_greencoat_drip():
+    from synthetic import payload
+    from fabric_extract import extract_elevation
+    from cladding_preview import generate_preview
+    e = extract_elevation(payload())
+    out = generate_preview({"elevations": [dict(e, offset=0)], "trim": True, "cladding_type": "plank", "plank_profile": "seam",
+                            "plank_orient": "vertical", "splash": 150})
+    assert not [m for m in out["geometry"] if m.get("cladding_drip") or m.get("insect_mesh")]
