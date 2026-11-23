@@ -62,6 +62,7 @@ EAVES_DROP = 50.0     # mm – the drop's foot, below the edge of the roof's sur
 EAVES_OVER = 20.0     # mm – over a clad wall: the deck's underside out beyond the wall cladding's outside, on plan (assumed)
 EAVES_WALL_LAP = 60.0 # mm – over a clad wall: the drop's foot below the top of the wall's cladding (assumed)
 EAVES_MIN = 300.0     # mm – a level bottom edge shorter than this is not an eaves
+EAVES_RAKE = 0.2      # dv/du – a bottom edge raking up to this (about 11 degrees across the face; a valley's rakes far more) is still an eaves
 EDGE_TOL = 12.0       # mm – an end this close to where the bottom offset left it is an end at the eaves
 OWN = ("ridge_cap", "ridge_filler", "verge_strip", "valley_gutter", "eaves_strip")
 
@@ -76,13 +77,18 @@ def has_eaves(elev, p):
 
 
 def _edges(info):
-    """[(u0, u1, v)]: the level bottom edges of the clad area, those at least EAVES_MIN long."""
+    """[(u0, u1, v0, v1)]: the bottom edges of the clad area at least EAVES_MIN long, with their
+    height on the face at each end: level (v0 == v1), or raking gently (EAVES_RAKE, a roof
+    whose eaves follows a wall's raked head, as over a canopy's leaning wall)."""
     out = []
     for e in info.get("edges") or []:
-        if e["kind"] == "bottom" and abs(e["p1"][1] - e["p2"][1]) < 0.5:
-            u0, u1 = sorted((e["p1"][0], e["p2"][0]))
-            if u1 - u0 >= EAVES_MIN:
-                out.append((u0, u1, (e["p1"][1] + e["p2"][1]) / 2.0))
+        if e["kind"] != "bottom":
+            continue
+        (a, va), (b, vb) = sorted((tuple(e["p1"][:2]), tuple(e["p2"][:2])))
+        if b - a >= EAVES_MIN and abs(vb - va) <= max(0.5, EAVES_RAKE * (b - a)):
+            if abs(vb - va) < 0.5:
+                va = vb = (va + vb) / 2.0
+            out.append((a, b, va, vb))
     return sorted(out)
 
 
@@ -124,6 +130,78 @@ def join_eaves(params):
                      other_seam=float(po["seam_h"]) if po.get("seam") else 0.0)
 
 
+EAVES_WALL_REACH = 400.0   # mm – an open eaves this far or less out from a picked wall's face, near its head, stands over it
+
+
+def _bottom_edges(elev):
+    """[(a, b)]: the face's lowest edges, level or raking gently (EAVES_RAKE), as (u, v) ends."""
+    out = []
+    pts = [q for pg in elev.get("polygons") or [] for q in pg["exterior"]]
+    if not pts:
+        return out
+    low = min(q[1] for q in pts)
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        for a, b in zip(ring, ring[1:] + ring[:1]):
+            du, dv = abs(a[0] - b[0]), abs(a[1] - b[1])
+            if du >= EAVES_MIN and dv <= max(0.5, EAVES_RAKE * du) and min(a[1], b[1]) <= low + 5.0 + EAVES_RAKE * du:
+                out.append(tuple(sorted((tuple(a[:2]), tuple(b[:2])))))
+    return out
+
+
+def eaves_walls(params):
+    """Before anything is built: each roof slope is told which picked walls stand under its open
+    eaves (not on the line their planes meet on, as eaves_link's are, but under an edge that
+    sails out over them, by less than their cladding may stand proud of it): "eaves_walls",
+    [{"with", "u0", "u1" (the stretch of the eaves over it, in the roof's u), "proud": how far
+    the roof's edge stands out from the wall's face, at its nearest, "depth": how far out the
+    wall's cladding is (its seams' tips)}]. The eaves runs on over such a wall (eaves_parts),
+    its drip clear of the cladding's outside, whatever the model's roof oversails it by."""
+    _fv = frame_v
+    elevs = [e for e in params.get("elevations") or [] if e.get("ok", True) and e.get("polygons")]
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    walls = []
+    for w in elevs:
+        n = [float(c) for c in w["frame"]["n"]]
+        if abs(n[2]) <= 0.035 or (n[2] < 0 and abs(n[2]) <= 0.5):          # upright, or leaning out (a canopy's)
+            po = _parse(dict(chain_params(params, w), elevations=[]))
+            top = max(q[1] for pg in w["polygons"] for q in pg["exterior"])
+            walls.append((w, n, buildup_depth(po) + (float(po["seam_h"]) if po.get("seam") else 0.0), top))
+    for r in elevs:
+        r.pop("eaves_walls", None)
+        nr = [float(c) for c in r["frame"]["n"]]
+        if nr[2] <= 0.5 or r.get("faces_down"):
+            continue
+        found = []
+        linked = {v.get("with") for v in r.get("valleys") or [] if v.get("kind") in ("eaves", "head", "abut")}
+        for a, b in _bottom_edges(r):
+            P = [frame_to_world(r["frame"], q[0], q[1], 0.0) for q in (a, b)]
+            for w, n, depth, top in walls:
+                if w.get("name") in linked:
+                    continue                                  # on its head: an eaves on a wall proper (eaves_link)
+                f = w["frame"]
+                d = [dot([p[i] - f["origin"][i] for i in range(3)], n) for p in P]       # out from the wall's face
+                hv = [(dot([p[i] - f["origin"][i] for i in range(3)], f["u"]),
+                       dot([p[i] - f["origin"][i] for i in range(3)], _fv(f))) for p in P]  # on the wall: (u, height up it)
+                if not all(-60.0 <= x <= EAVES_WALL_REACH for x in d) or min(d) >= depth:
+                    continue                                  # not over it, or clear of its cladding already
+                if not all(top - 600.0 <= y <= top + 1500.0 for _x, y in hv):
+                    continue                                  # not at its head
+                # the stretch of the eaves over the wall, back in the roof's u
+                wa, wb = hv[0][0], hv[1][0]
+                if abs(wb - wa) < 1.0:
+                    continue
+                ts = sorted(((x - wa) / (wb - wa) for x in (-50.0, float(w["width"]) + 50.0)))
+                t0, t1 = max(0.0, ts[0]), min(1.0, ts[1])
+                u0, u1 = a[0] + (b[0] - a[0]) * t0, a[0] + (b[0] - a[0]) * t1
+                if u1 - u0 < EAVES_MIN:
+                    continue
+                found.append({"with": w.get("name"), "u0": round(u0, 1), "u1": round(u1, 1), "proud": round(min(d), 1),
+                              "depth": round(depth, 1)})
+        if found:
+            r["eaves_walls"] = found
+
+
 def _joins(elev, roof, kind="eaves"):
     """The face's eaves on a wall, as cladding_valley.valleys_of gives its junctions, each
     with what join_eaves noted: those where it is the roof (*roof* True) or the wall. The
@@ -132,7 +210,8 @@ def _joins(elev, roof, kind="eaves"):
     out = []
     for j in valleys_of(elev, kind):
         v = raw.get(j["with"]) or {}
-        if bool(v.get("roof")) != roof or "other_depth" not in v or abs(j["p1"][1] - j["p2"][1]) > 2.0:
+        # level to 1 in 200 (a modelled line a hair off the face's own level: 35 mm in 9.5 m in a real model)
+        if bool(v.get("roof")) != roof or "other_depth" not in v or abs(j["p1"][1] - j["p2"][1]) > max(2.0, 0.005 * abs(j["p1"][0] - j["p2"][0])):
             continue
         u0, u1 = sorted((j["p1"][0], j["p2"][0]))
         out.append(dict(j, u0=u0, u1=u1, v=(j["p1"][1] + j["p2"][1]) / 2.0, depth=float(v["other_depth"]),
@@ -283,7 +362,12 @@ def eaves_parts(meshes, p, infos):
         soffit = min(decks) if decks else back
         joins = _joins(elev, True)
         n = 0
-        for u0, u1, v in _edges(info):
+        for u0, u1, v0, v1 in _edges(info):
+            # the edge's height at u, on the face: one level for a level eaves, rising along a raking one
+            rake = (v1 - v0) / (u1 - u0)
+            vat = lambda u, v0=v0, u0=u0, rake=rake: v0 + rake * (u - u0)        # noqa: E731
+            v = (v0 + v1) / 2.0
+            stretch = math.sqrt(1.0 + rake * rake)
             # Where the edge is the head of a clad wall the roof comes down to (no overhang),
             # the roof runs on over the wall's cladding; the rest of it is an edge in the open.
             cuts = sorted({u0, u1} | {u for q in joins if abs(q["v"] - v) < 2.0 for u in (q["u0"], q["u1"]) if u0 + 1.0 < u < u1 - 1.0})
@@ -291,23 +375,32 @@ def eaves_parts(meshes, p, infos):
                 over = next((q for q in joins if abs(q["v"] - v) < 2.0 and q["u0"] <= (a + b) / 2.0 <= q["u1"]), None)
                 run, below = 0.0, EAVES_DROP
                 s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+                under = None if over else next((w for w in elev.get("eaves_walls") or []
+                                                if w["u0"] - 1.0 <= (a + b) / 2.0 <= w["u1"] + 1.0), None)
                 if over:
                     # the drip's line EAVES_OVER beyond the outside of the wall's cladding (its seams' tips), on plan
                     run, below = over_wall(over["depth"] + over["seam"], soffit, over["top"], pitch, over["other_pitch"], over["depth"])
-                ve = v - run
                 nose, drop_out, below = apron_drop(soffit, pitch, below)
-                end = ve - (drop_out - soffit * s) / c - nose           # the plywood's end, and the trays'
+                if under:
+                    # an open eaves over a wall whose cladding stands proud of the roof's edge: run on until the drop
+                    # stands EAVES_OVER clear of the cladding's outside, on plan, and laps down over its head
+                    need = under["depth"] - under["proud"] + EAVES_OVER
+                    if need > drop_out:
+                        run = (need - drop_out) / c
+                        below = max(below, EAVES_WALL_LAP + run * s)
+                ahead = run + (drop_out - soffit * s) / c + nose        # the plywood's end, and the trays', below the edge
+                ve, end = vat(a) - run, vat(a) - ahead                  # at the length's start
                 turned = []
                 for m in mine:
                     kind = m.get("ifc_type")
-                    out = end if kind in ("plank", "seam", "deck") else v
                     pts = m["profile"]
-                    at = [u0 - reach <= q[0] <= u1 + reach and v - 1.0 <= q[1] <= v + tol for q in pts]
+                    at = [u0 - reach <= q[0] <= u1 + reach and vat(q[0]) - 1.0 <= q[1] <= vat(q[0]) + tol for q in pts]
                     mid = [q[0] for q, on in zip(pts, at) if on]
                     if not mid or not (a - (reach if a == u0 else 0.0) <= sum(mid) / len(mid) <= b + (reach if b == u1 else 0.0)):
                         continue
                     for k, q in enumerate(pts):
                         if at[k]:
+                            out = vat(q[0]) - ahead if kind in ("plank", "seam", "deck") else vat(q[0])
                             _lower(q, [pts[x] for x in ((k - 1) % len(pts), (k + 1) % len(pts)) if not at[x]], out)
                     if kind == "seam":
                         _fold_back(m, at)                  # at this eaves the seams are always folded back
@@ -315,12 +408,14 @@ def eaves_parts(meshes, p, infos):
                         turned.append((min(mid), max(mid), m))   # its sheet goes on round the plywood's end and into the drip
                 ring = lambda pts: [[round(x, 3), round(y, 3)] for x, y in                   # noqa: E731
                                     list(orient(Polygon([(x, sign * y) for x, y in pts]), 1.0).exterior.coords)[:-1]]
-                place = {"origin": frame_to_world(frame, a, ve, 0.0), "u": toward, "v": across, "n": along}
+                # along the edge: level, the face's own u; raking, up it as the edge rises (its length so much longer)
+                run_dir = [(along[i] + rake * float(V[i])) / stretch for i in range(3)]
+                place = {"origin": frame_to_world(frame, a, ve, 0.0), "u": toward, "v": across, "n": run_dir}
                 zinc, support, sheet = _eaves_rings(back, soffit, t, pitch, below)
                 runs = [ring(list(LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0).exterior.coords)[:-1])
                         for path in eaves_paths(back, soffit, t, pitch, below)[:2]]
                 n += 1
-                prop = _prism(ring(support), 0.0, b - a, dict(place), "eaves_strip", "%s Eaves Support %d" % (name, n), name)
+                prop = _prism(ring(support), 0.0, (b - a) * stretch, dict(place), "eaves_strip", "%s Eaves Support %d" % (name, n), name)
                 prop.update(eaves_support=True, color="#eab308")
                 extra.append(prop)
                 # The drip is each tray's own sheet: one length of it per tray, from seam to seam, and part of that tray
@@ -332,7 +427,7 @@ def eaves_parts(meshes, p, infos):
                     m["cut_extra"] = round(sheet, 1)       # the cutting list: the tray is cut this much longer
                     if m1 - m0 < 0.5:
                         continue
-                    drip = _prism(ring(zinc), 0.0, m1 - m0, dict(place, origin=frame_to_world(frame, m0, ve, 0.0)),
+                    drip = _prism(ring(zinc), 0.0, (m1 - m0) * stretch, dict(place, origin=frame_to_world(frame, m0, vat(m0) - run, 0.0)),
                                   "eaves_strip", "%s Eaves Drip" % m["name"], name)
                     drip.update(tray_sheet=True, of=m["name"], color=m.get("color", drip["color"]), drip_runs=runs,
                                 drip_under=[round(eaves_paths(back, soffit, t, pitch, below)[1][0][0], 3),
@@ -344,15 +439,16 @@ def eaves_parts(meshes, p, infos):
                     continue
                 apron = drips[0]
                 extra.extend(drips[1:])
-                apron["eaves_info"] = {"length": round(b - a, 1), "lap": EAVES_LAP, "nose": nose, "drop": round(below, 1),
+                apron["eaves_info"] = {"length": round((b - a) * stretch, 1), "lap": EAVES_LAP, "nose": nose, "drop": round(below, 1),
                                        "clear": round(drop_out, 1), "tray": EAVES_TRAY, "thickness": t, "sheet": round(sheet, 1),
                                        "over": over["with"] if over else None, "run": round(run, 1),
-                                       "mansard": bool(over and over["mansard"])}
+                                       "mansard": bool(over and over["mansard"]), "over_wall": under["with"] if under else None}
                 extra.append(apron)
                 for d in drips[1:]:
                     d["eaves_info"] = apron["eaves_info"]
                 info.setdefault("eaves", []).append(dict(apron["eaves_info"], u0=round(a, 1), u1=round(b, 1), v=round(v, 1)))
-                info.setdefault("eaves_strips", []).append([[a, end - t], [b, end - t], [b, end + 2.0], [a, end + 2.0]])
+                eb = vat(b) - ahead
+                info.setdefault("eaves_strips", []).append([[a, end - t], [b, eb - t], [b, eb + 2.0], [a, end + 2.0]])
     return meshes + extra
 
 

@@ -135,22 +135,35 @@ def verge_most(elev, p):
     return tray if elev.get("verge_last") == "full" else min(VERGE_SEAM[1], tray)
 
 
+VERGE_RAKE = 0.005        # du/dv – a side edge off plumb by no more than this (1 in 200) is a verge, raking with it
+
+
 def _edges(info):
-    """{"l": (u, v0, v1), "r": ...}: the straight side edges at the two ends of the clad
-    area, those at least 300 long. A raking side (a hip) is not a verge."""
-    sides = [e for e in info.get("edges") or [] if e["kind"] == "side" and abs(e["p1"][0] - e["p2"][0]) < 0.5]
+    """{"l": (u, v0, v1, r), "r": ...}: the side edges at the two ends of the clad area, those at
+    least 300 long, as their foot (u at v0), their extent up the face and their rake r (du/dv:
+    0 for a plumb edge; a modelled edge a hair off plumb, up to VERGE_RAKE, is taken as drawn
+    and the verge rakes with it). A side that rakes more (a hip) is not a verge."""
+    def plumbish(e):
+        du, dv = abs(e["p1"][0] - e["p2"][0]), abs(e["p1"][1] - e["p2"][1])
+        return du < 0.5 or du <= VERGE_RAKE * dv
+    sides = [e for e in info.get("edges") or [] if e["kind"] == "side" and plumbish(e)]
     if not sides:
         return {}
-    us = [e["p1"][0] for e in sides]
     out = {}
-    for side, u in (("l", min(us)), ("r", max(us))):
-        vs = [v for e in sides if abs(e["p1"][0] - u) < 1.0 for v in (e["p1"][1], e["p2"][1])]
-        if vs and max(vs) - min(vs) >= 300.0:
-            out[side] = (u, min(vs), max(vs))
+    for side, pick in (("l", min), ("r", max)):
+        u_ext = pick(min(e["p1"][0], e["p2"][0]) if side == "l" else max(e["p1"][0], e["p2"][0]) for e in sides)
+        mine = [e for e in sides if abs(pick(e["p1"][0], e["p2"][0]) - u_ext) < 1.0 + VERGE_RAKE * abs(e["p1"][1] - e["p2"][1])]
+        pts = sorted({(round(q[1], 3), round(q[0], 3)) for e in mine for q in (e["p1"], e["p2"])})
+        if not pts or pts[-1][0] - pts[0][0] < 300.0:
+            continue
+        (v0, u0), (v1, u1) = pts[0], pts[-1]
+        r = (u1 - u0) / (v1 - v0)
+        out[side] = (u0, v0, v1, 0.0 if abs(u1 - u0) < 0.5 else r)
     return out
 
 
 VERGE_WALL_REACH = 400.0   # mm – the roof's edge this far or less out from a wall's face stands over that wall
+VERGE_TO_RIDGE = 400.0     # mm – a side edge reaching this near the ridge (or head) runs on up to it
 VERGE_WALL_SHORT = 60.0    # mm – or this far or less short of it
 
 
@@ -291,7 +304,9 @@ def verge_parts(meshes, p, infos):
         for side in sides:
             if side not in found:
                 continue
-            u, v0, v1 = found[side]
+            u, v0, v1, rake = found[side]
+            at = lambda v, v0=v0, rake=rake: rake * (v - v0)                 # noqa: E731 — the edge's lean, out from its foot, at v
+            first = len(extra)
             out = -1.0 if side == "l" else 1.0
             kind = verge_type(elev, side)
             decks = [m for m in mine if m.get("ifc_type") == "deck"]
@@ -303,8 +318,8 @@ def verge_parts(meshes, p, infos):
                 for m in trays + [m for m in mine if m.get("ridge_part")] + decks:     # the plywood runs on, and the trays to its end
                     hit = False
                     for q in m["profile"]:
-                        if abs(q[0] - u) <= EDGE_TOL and v0 - 1.0 <= q[1]:
-                            q[0] = round(u + out * VERGE_TRAY, 3)
+                        if abs(q[0] - u - at(q[1])) <= EDGE_TOL and v0 - 1.0 <= q[1]:
+                            q[0] = round(u + at(q[1]) + out * VERGE_TRAY, 3)
                             hit = True
                     if hit and m.get("ifc_type") == "plank":
                         edge_trays.append(m)
@@ -314,8 +329,12 @@ def verge_parts(meshes, p, infos):
                 roll_path, drop_path = eaves_paths(back, soffit, t, 0.0, VERGE_BELOW)[:2]
             else:
                 foot = back - 1.0 - drop
-            if r:       # at a ridge: square-ended, its foot no nearer the bisecting plane than the trays come
+            # at a ridge: square-ended, its foot no nearer the bisecting plane than the trays come. Only where the side
+            # edge runs up to it: one that turns off into a hip on the way up stops where the edge does
+            if r and v1 >= r["v"] - VERGE_TO_RIDGE:
                 v1 = _slot(r) + r["k"] * foot
+            if v1 - v0 < 300.0:
+                continue                               # what is left of it is no verge (a step in a stepped top, under the ridge)
             V, U, N = frame_v(frame), frame["u"], frame["n"]
             toward = [out * c for c in U]
             across = [V[1] * toward[2] - V[2] * toward[1], V[2] * toward[0] - V[0] * toward[2], V[0] * toward[1] - V[1] * toward[0]]
@@ -332,15 +351,15 @@ def verge_parts(meshes, p, infos):
                 flashing, clip = _flashing_rings(back - 1.0, face, drop, t, over + VERGE_CLIP_LAP)   # over the oversail, onto the roof
                 strip = _prism(tidy(flashing), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Flashing %s" % (name, letter), name)
                 extra.append(_prism(tidy(clip), 0.0, v1 - v0, place(), "verge_strip", "%s Verge Clip %s" % (name, letter), name))
-                edge = [m for m in trays if any(abs(q[0] - u) <= EDGE_TOL for q in m["profile"])]
+                edge = [m for m in trays if any(abs(q[0] - u - at(q[1])) <= EDGE_TOL for q in m["profile"])]
                 for m in decks:                        # the plywood oversails the roof's edge, over the cladding below
                     for q in m["profile"]:
-                        if abs(q[0] - u) <= EDGE_TOL and v0 - 1.0 <= q[1]:
-                            q[0] = round(ue, 3)
+                        if abs(q[0] - u - at(q[1])) <= EDGE_TOL and v0 - 1.0 <= q[1]:
+                            q[0] = round(ue + at(q[1]), 3)
                 for m in edge + [m for m in mine if m.get("ridge_part")]:      # the last tray runs on to its seam, just beyond the plywood's edge
                     for q in m["profile"]:
-                        if abs(q[0] - u) <= EDGE_TOL and v0 - 1.0 <= q[1]:
-                            q[0] = round(ue + out * verge_seam_out(), 3)
+                        if abs(q[0] - u - at(q[1])) <= EDGE_TOL and v0 - 1.0 <= q[1]:
+                            q[0] = round(ue + at(q[1]) + out * verge_seam_out(), 3)
                 extra.extend(_edge_seam(p, frame, name, letter, ue, out, v0, v1, face, edge[0]["name"] if edge else strip["name"], strip["name"]))
                 strip["verge_info"] = {"side": side, "type": kind, "length": round(v1 - v0, 1), "lap": 0.0, "nose": VERGE_FACE,
                                        "drop": round(drop, 1), "clear": VERGE_FACE, "cover": VERGE_COVER, "thickness": t,
@@ -369,10 +388,48 @@ def verge_parts(meshes, p, infos):
                                        "drips": len(drips), "wide": elev.get("verge_last") == "full",
                                        "last_seam": None if seam is None else round(seam + VERGE_TRAY, 1)}
             extra.append(strip)
-            info.setdefault("verges", []).append(dict(strip["verge_info"], u=round(u, 1)))
+            if rake:
+                _rake_pieces(extra[first:], frame, v0, rake, out)        # every part of this verge leans with its edge
+            info.setdefault("verges", []).append(dict(strip["verge_info"], u=round(u, 1), rake=round(rake, 5)))
             a, b = sorted((ue - out * strip["verge_info"]["lap"], ue + out * (strip["verge_info"]["nose"] + t)))
-            info.setdefault("verge_strips", []).append([[a, v0], [b, v0], [b, v1], [a, v1]])
+            info.setdefault("verge_strips", []).append([[a, v0], [b, v0], [b + at(v1), v1], [a + at(v1), v1]])
     return meshes + extra
+
+
+def _rake_pieces(pieces, frame, v0, rake, out):
+    """Lean a verge's parts with an edge a hair off plumb: u moves by rake·(v − v0) up the face.
+    A section run up the slope (frame n along the face's v: flashing, clip, drip, support) is
+    sheared along its length ("vshift": its section's u is out along the face's u); a part set
+    in the face's own frame (an edge seam's sheets) has its outline sheared."""
+    V = [float(c) for c in frame_v(frame)]
+    U = [float(c) for c in frame["u"]]
+    o = frame["origin"]
+    for m in pieces:
+        f = m["frame"]
+        n = [float(c) for c in f["n"]]
+        if _same_frame(f, frame):
+            for ring in [m["profile"]] + list(m.get("holes") or []):
+                for q in ring:
+                    q[0] = round(q[0] + rake * (q[1] - v0), 3)
+            continue
+        nv = sum(a * b for a, b in zip(n, V))
+        if abs(nv) < 0.99:
+            continue
+        su = sum(a * b for a, b in zip([float(c) for c in f["u"]], U))          # the section's u along the face's u (±1)
+        sv = sum(a * b for a, b in zip([float(c) for c in f["v"]], U))
+        vo = sum((a - b) * c for a, b, c in zip(f["origin"], o, V))              # where its depth 0 is, up the face
+        d0 = float(m["depth"])
+        rows = []
+        old = m.get("vshift") or [None]
+        for k, ring in enumerate([m["profile"]] + list(m.get("holes") or [])):
+            was = old[k] if k < len(old) and old[k] else [[0.0] * 4] * len(ring)
+            row = []
+            for sh in was:
+                # at depth s along n, the face's v is vo + nv·s: u moves rake·(vo + nv·s − v0), in the section's u and v
+                a0, b0 = rake * (vo - v0), rake * nv
+                row.append([sh[0] + su * a0, sh[1] + su * b0, sh[2] + sv * a0, sh[3] + sv * b0])
+            rows.append(row)
+        m["vshift"] = rows
 
 
 def _cut_end(m, cuts, at_start=True):
@@ -392,9 +449,11 @@ def _cut_end(m, cuts, at_start=True):
     e = n if at_start else [-c for c in n]
     base = d0 if at_start else d0 + length
     done, last = [], 0.0
+    sh = (m.get("vshift") or [[]])[0]
+    shear = sh[0] if sh and all(row == sh[0] for row in sh) else [0.0, 0.0, 0.0, 0.0]    # a part sheared as a whole (_rake_pieces)
     for ring, point, normal, label in cuts:
         ring = ring or m["profile"]
-        pts = [frame_to_world(f, x, y, base) for x, y in ring]
+        pts = [frame_to_world(f, x + shear[0] + shear[1] * base, y + shear[2] + shear[3] * base, base) for x, y in ring]
         mv = [float(c) for c in normal]
         size = dot(mv, mv) ** 0.5
         mv = [c / size for c in mv]
@@ -870,6 +929,8 @@ def join_hip_drips(meshes, p):
                 lo, hi = min(a, b), max(a, b)
                 if min(abs(lo - foot[0]), abs(hi - foot[0])) > 250.0:
                     continue                                                 # this length does not reach the hip's foot
+                if abs(foot[1] - uv(m["frame"]["origin"])[1]) > 300.0:
+                    continue                                                 # nor the hip's foot the eaves: it starts up the slope, over a verge
                 left = abs(lo - foot[0]) < abs(hi - foot[0])                 # the hip is at its low-u end
                 at_start = left == fwd
                 grow = 400.0

@@ -181,3 +181,40 @@ def test_the_head_verge_cap_s_stop_end_closes_the_corner_as_a_box(style, verge_t
         edge = (corner[0] - start[0], corner[1] - start[1])
         cos = (up[0] * edge[0] + up[1] * edge[1]) / math.hypot(*up) / math.hypot(*edge)
         assert abs(math.degrees(math.acos(cos)) - angle) < 0.5
+
+
+@pytest.mark.parametrize("proud, found", [(0.0, True), (75.0, True), (140.0, True), (200.0, False)])
+def test_the_roof_s_top_edge_may_stand_proud_of_the_wall_s_face(proud, found):
+    """The deck is often carried over the wall's head: a clerestory's head with the roof
+    behind it falling away, its top edge 75 mm proud of the wall's face (a real model). Up
+    to HEAD_OVERSAIL it is still the head; further out the roof sails on, and is not."""
+    t, s, c = math.tan(math.radians(21.0)), math.sin(math.radians(21.0)), math.cos(math.radians(21.0))
+    wall = _face("Wall", [[0, 0, 0], [6000, 0, 0], [6000, 0, H], [0, 0, H]], (0, -1, 0))
+    y0, z0 = -proud, H + proud * t                     # on the roof's own plane through the wall's head
+    roof = _face("Roof", [[6000, y0, z0], [0, y0, z0], [0, 3000, H - 3000 * t], [6000, 3000, H - 3000 * t]], (0, s, c))
+    link = head_link(wall, roof)
+    assert bool(link) is found
+    if found:
+        assert link["length"] == pytest.approx(6000.0, abs=1.0)
+
+
+def test_a_top_edge_a_hair_off_level_is_still_a_head():
+    """A modelled top edge 35 mm off the face's own level over 9.5 m (a real model's roof
+    behind a clerestory) is level for a head verge (HEAD_LEVEL, 1 in 200)."""
+    from cladding_head import _top_edges
+    elev = {"polygons": [{"exterior": [[0.0, 0.0], [9500.0, 0.0], [9500.0, 9562.0], [0.0, 9527.0]], "holes": []}]}
+    (edge,) = _top_edges(elev)
+    assert edge[0] == 0.0 and edge[1] == 9500.0
+
+
+def test_a_face_with_a_ridge_elsewhere_still_takes_its_head_verge():
+    """A roof's top stepped: a ridge with another slope on one part, a clerestory's head on
+    the higher part (a real model). The ridge no longer takes the head verge away."""
+    w, r = _pair(15.0)
+    link = head_link(w, r)
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    ridge = {"with": "Other", "v": float(r["height"]) - 2000.0, "u0": 0.0, "u1": 1500.0, "k": 0.27, "angle": 30.0, "master": True}
+    roof = dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none", eaves="none", ridge=ridge)
+    wall = dict(w, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[rec("a", "Roof")])
+    out = generate_preview({"elevations": [wall, roof], "trim": True, "splash": 0})
+    assert [m for m in out["geometry"] if "Head Verge Cap" in (m.get("name") or "")], "the head verge on the higher part"

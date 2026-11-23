@@ -74,6 +74,15 @@ def ridge_of(elev):
     return r
 
 
+def head_ridge_of(elev):
+    """A face with both a ridge and a monopitch's head verge on another stretch of its top (a
+    stepped top: a ridge on one part, a clerestory's head on the higher one): the head's
+    record, cut as half a ridge as ridge_of gives it on a face with no ridge. None otherwise."""
+    if not (elev or {}).get("ridge") or not (elev or {}).get("head_ridge"):
+        return None
+    return ridge_of(dict(elev, ridge=None))
+
+
 JOIN_TOL = 40.0       # mm – a hip's end this close to an end of the ridge runs into it
 
 
@@ -115,55 +124,67 @@ def ridge_ends(meshes, p, infos):
     part's own outline, to where it is at the part's mid-depth; a plumb cut's slope is added
     as a shift per ring vertex ("vshift": v += c + d·s, s the depth) to any the part has.
     Returns the meshes with the trays' turned-up ends added."""
-    faces = {e.get("name"): (ridge_of(e), e["frame"]) for e in p.get("elevations", [])}
+    # a face's ridge, and a head verge on another stretch of its top where it has both (head_ridge_of)
+    faces = {e.get("name"): ([r for r in (ridge_of(e), head_ridge_of(e)) if r], e["frame"]) for e in p.get("elevations", [])}
     face_by = {i["elevation"]: float(i.get("total_depth") or 0.0) for i in infos}
     board, extra = _board(p), []
     for m in meshes:
-        r, frame = faces.get(m.get("elevation")) or (None, None)
-        kind = m.get("ifc_type")
-        if not r or kind in OWN or m.get("ridge_part") or not _same_frame(m["frame"], frame):
-            continue
-        rings = [m["profile"]] + list(m.get("holes") or [])
-        at = [[q[1] >= r["top"] - RIDGE_TOL and r["u0"] - 1.0 <= q[0] <= r["u1"] + 1.0 for q in ring] for ring in rings]
-        if not any(at[0]):
-            continue
-        face = face_by.get(m.get("elevation"), 0.0)
-        if kind in MEET:
-            end, shear = r["v"], r["k"]
-        elif kind in CLAD:
-            end, shear = _slot(r), r["k"]
-        else:
-            # The deck, battens, closers: cut square, behind the cladding's end, and with the
-            # corner nearest the ridge (the back one) no nearer than the cladding comes.
-            end, shear = _slot(r) + min(r["k"] * (face - board) - RIDGE_OVERSAIL, r["k"] * float(m["depth"])), 0.0
-        mid = float(m["depth"]) + float(m["thickness"]) / 2.0
-        vs = [q[1] for q in rings[0]]
-        whole = kind in WHOLE and max(vs) - min(vs) <= SHORT
-        move = end + shear * mid - max(vs)      # a short batten goes with its top
-        old = m.get("vshift") or []
-        shifts = []
-        for k, ring in enumerate(rings):
-            was = old[k] if k < len(old) and old[k] else [[0.0] * 4] * len(ring)
-            row = []
-            for q, sh, on in zip(ring, was, at[k]):
-                if on or whole:
-                    q[1] = round(q[1] + move if whole else end + shear * mid, 3)
-                    row.append([sh[0], sh[1], sh[2] - shear * mid, sh[3] + shear])
-                else:
-                    row.append(list(sh))
-            shifts.append(row)
-        if shear or old:
-            m["vshift"] = shifts
-        if kind == "plank" and _up_slope(p):    # a tray: its end turned up, between its seams
-            us = [q[0] for q, on in zip(rings[0], at[0]) if on]
-            top = _slot(r) + r["k"] * (float(m["depth"]) + float(m["thickness"]))
-            t = float(m["thickness"])
-            if max(us) - min(us) > 20.0:
-                up = _prism(_rect(min(us) + 3.0, top - t, max(us) - 3.0, top), float(m["depth"]) + t, RIDGE_UPSTAND,
-                            m["frame"], "seam", "%s Ridge Upstand" % m.get("name", "Tray"), m.get("elevation"))
-                up.update(opacity=1.0, ridge_part=True)
-                extra.append(up)
+        records, frame = faces.get(m.get("elevation")) or ([], None)
+        for r in records:
+            extra += _to_ridge_end(m, r, frame, p, face_by, board)
     return meshes + extra
+
+
+def _to_ridge_end(m, r, frame, p, face_by, board):
+    """One part's top end brought to the ridge (or head) *r*, along that record's stretch only;
+    the tray's turned-up end, if it is one, returned."""
+    extra = []
+    kind = m.get("ifc_type")
+    if kind in OWN or m.get("ridge_part") or not _same_frame(m["frame"], frame):
+        return extra
+    rings = [m["profile"]] + list(m.get("holes") or [])
+    # the part's top at the ridge: the face's top, or the ridge's line where that is lower (a stepped top)
+    top = min(r["top"], r["v"]) if r.get("with") else r["top"]
+    at = [[q[1] >= top - RIDGE_TOL and r["u0"] - 1.0 <= q[0] <= r["u1"] + 1.0 for q in ring] for ring in rings]
+    if not any(at[0]):
+        return extra
+    face = face_by.get(m.get("elevation"), 0.0)
+    if kind in MEET:
+        end, shear = r["v"], r["k"]
+    elif kind in CLAD:
+        end, shear = _slot(r), r["k"]
+    else:
+        # The deck, battens, closers: cut square, behind the cladding's end, and with the
+        # corner nearest the ridge (the back one) no nearer than the cladding comes.
+        end, shear = _slot(r) + min(r["k"] * (face - board) - RIDGE_OVERSAIL, r["k"] * float(m["depth"])), 0.0
+    mid = float(m["depth"]) + float(m["thickness"]) / 2.0
+    vs = [q[1] for q in rings[0]]
+    whole = kind in WHOLE and max(vs) - min(vs) <= SHORT
+    move = end + shear * mid - max(vs)      # a short batten goes with its top
+    old = m.get("vshift") or []
+    shifts = []
+    for k, ring in enumerate(rings):
+        was = old[k] if k < len(old) and old[k] else [[0.0] * 4] * len(ring)
+        row = []
+        for q, sh, on in zip(ring, was, at[k]):
+            if on or whole:
+                q[1] = round(q[1] + move if whole else end + shear * mid, 3)
+                row.append([sh[0], sh[1], sh[2] - shear * mid, sh[3] + shear])
+            else:
+                row.append(list(sh))
+        shifts.append(row)
+    if shear or old:
+        m["vshift"] = shifts
+    if kind == "plank" and _up_slope(p):    # a tray: its end turned up, between its seams
+        us = [q[0] for q, on in zip(rings[0], at[0]) if on]
+        top = _slot(r) + r["k"] * (float(m["depth"]) + float(m["thickness"]))
+        t = float(m["thickness"])
+        if max(us) - min(us) > 20.0:
+            up = _prism(_rect(min(us) + 3.0, top - t, max(us) - 3.0, top), float(m["depth"]) + t, RIDGE_UPSTAND,
+                        m["frame"], "seam", "%s Ridge Upstand" % m.get("name", "Tray"), m.get("elevation"))
+            up.update(opacity=1.0, ridge_part=True)
+            extra.append(up)
+    return extra
 
 
 def _section(frame, r):

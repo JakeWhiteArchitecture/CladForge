@@ -618,11 +618,24 @@ _json.dumps(_hl(_json.loads(_heal_a), _json.loads(_heal_b)))`));
     return state.heals.filter(h => h.a === e || h.b === e);
 }
 
+// The junctions a face takes part in, as "face|kind|other": a heal must not undo one (a wall
+// healed up under a roof loses the monopitch head it stood under; the corner it turned).
+function junctionsOf(faces) {
+    const out = new Set();
+    for (const e of faces) {
+        const key = (kind, other) => { const [x, y] = [e.name, other.name].sort(); return [x, kind, y].join('|'); };   // the same whichever face holds it
+        for (const v of e.valleys || []) if (v.partner) out.add(key(v.kind || 'valley', v.partner));
+        if (e.ridge && e.ridge.partner) out.add(key('ridge', e.ridge.partner));
+    }
+    return out;
+}
+
 async function applyHeal(i) {
     const h = state.heals[i];
     if (!h) return;
     state.heals = state.heals.filter(x => !(x.a === h.a && x.b === h.b) && !(x.a === h.b && x.b === h.a));   // the pair's other offer goes with it
     showHeals();
+    const before = junctionsOf(state.elevations), was = [h.a, h.b].map(e => ({ e, heals: e.heals, trims: e.trims, chain: e.chain }));
     if (h.trim) {                                 // what ran on past the line comes off each face's surface
         h.a.trims = (h.a.trims || []).concat(h.cut.a);
         h.b.trims = (h.b.trims || []).concat(h.cut.b);
@@ -647,6 +660,20 @@ async function applyHeal(i) {
     }
     await runExtraction(h.b);
     await runExtraction(h.a);
+    // Healed, the two must still meet everything they met: where the heal undid a junction
+    // (a monopitch head, an eaves, a corner) it is taken back and not offered again.
+    const after = junctionsOf(state.elevations);
+    const lost = [...before].filter(k => { const [x, , y] = k.split('|'); return !after.has(k) && [x, y].some(n => n === h.a.name || n === h.b.name); });
+    if (lost.length) {
+        for (const w of was) { w.e.heals = w.heals; w.e.trims = w.trims; }
+        (state.healNo = state.healNo || new Set()).add(healKey(h.a, h.b, h.trim));
+        for (const e of [h.b, h.a]) { e.highlights.forEach(x => { highlightGroup.remove(x); x.geometry.dispose(); }); e.highlights = pickHighlights(e); }
+        await runExtraction(h.b);
+        await runExtraction(h.a);
+        const say = lost.map(k => { const [x, kind, y] = k.split('|'); return `the ${kind} between ${x} and ${y}`; });
+        log(`heal of ${h.a.name} and ${h.b.name} taken back: it undid ${say.join(', ')}`);
+        setStatus(`Not healed: joining ${h.a.name} and ${h.b.name} would undo ${say.join(' and ')}, so they are left as they were`, 'busy');
+    }
 }
 
 function dismissHeal(i) {
@@ -678,6 +705,25 @@ async function linkIntoChain(e) {
     e.start = 0; e.rev = false; e.link = null; e.cornerLo = 0; e.cornerHi = 0; e.detailLo = e.detailHi = null;
     e.clipLo = 0; e.clipHi = null; e.ridge = null;
     relayoutChain(e.chain);
+    return false;
+}
+
+// A slope on its own that meets another slope at a ridge goes into that slope's chain, whatever
+// was picked in between: one setting-out over both, and the cap. Only chains not yet built,
+// so a chain kept apart on purpose stays apart.
+async function joinRidgePartner(e) {
+    if (e.chain.built || e.chain.members.length !== 1 || !isRoofSlope(e)) return false;
+    for (const other of state.elevations) {
+        if (other === e || !isRoofSlope(other) || other.chain === e.chain || other.chain.built) continue;
+        if (other.ridge && other.ridge.partner && other.ridge.partner !== e) continue;     // a slope has one ridge
+        let link = null;
+        try { link = await pyLink(other.result, e.result); } catch (err) { console.warn('ridge link failed', err); }
+        if (!link || link.kind !== 'ridge') continue;
+        state.chains = state.chains.filter(c => c !== e.chain);
+        e.chain = other.chain; other.chain.members.push(e);
+        placeInChain(e, other, link); relayoutChain(other.chain);
+        return true;
+    }
     return false;
 }
 
@@ -969,7 +1015,13 @@ _json.dumps(_ex(_pl))`);
             + (e.result.warnings || []).map(w => ' · ' + w).join(''));
         if (e.result.ok) {
             if (dropped) e.result.warnings.push(`${dropped} nearby element(s) left out to keep the engine within memory`);
-            const linked = await linkIntoChain(e);
+            // A corner's clip is never more than a corner's tolerance in from the face's end: one
+            // set when the face was narrower (a coplanar wall picked into it since) is stale
+            const W = e.result.width, CORNER_TOL = 400;
+            if (e.clipHi !== null && e.clipHi !== undefined && W - e.clipHi > CORNER_TOL + 1) e.clipHi = null;
+            if ((e.clipLo || 0) > CORNER_TOL + 1) e.clipLo = 0;
+            let linked = await linkIntoChain(e);
+            if (!linked) linked = await joinRidgePartner(e);
             const valleys = await linkValleys(e);
             const corner = !linked ? e.name + ' extracted'
                 : e.link.kind === 'ridge' ? `${e.name} joined ${e.chain.name} at a ridge with ${e.ridge.partner.name}: one setting-out over both slopes, and a ridge cap`
@@ -1694,8 +1746,10 @@ function restoreState(st, add, fileName) {
                         manual: m.manual || [], disabled: m.disabled || {}, storey: m.storey || null, highlights: [], chain,
                         start: m.start || 0, rev: !!m.rev, link: m.link || null, offset: m.offset || 0,
                         cornerLo: m.cornerLo || 0, cornerHi: m.cornerHi || 0, masterLo: !!m.masterLo, masterHi: !!m.masterHi,
-                        detailLo: m.detailLo || null, detailHi: m.detailHi || null, clipLo: m.clipLo || 0,
-                        clipHi: m.clipHi === undefined ? null : m.clipHi, cover: m.cover || null,
+                        detailLo: m.detailLo || null, detailHi: m.detailHi || null,
+                        // a corner's clip, never more than its tolerance in from the end (see extractOnce): a stale one is dropped
+                        clipLo: (m.clipLo || 0) > 401 ? 0 : (m.clipLo || 0),
+                        clipHi: m.clipHi === undefined || m.clipHi === null || surface.width - m.clipHi > 401 ? null : m.clipHi, cover: m.cover || null,
                         panelRows: m.panelRows || null, panelJoints: m.panelJoints || null,
                         postStates: m.postStates || null, staggerJoints: m.staggerJoints || null, openingDetails: m.openingDetails || {} };
             chain.members.push(e);
@@ -1854,6 +1908,8 @@ function onIfcSchema() {
 
 async function downloadIFC() {
     const params = getParams(); params.trim = true;
+    // a cross at the IFC's origin, to snap the cladding back onto the host model by (ifc_generator._reference_point)
+    params.context = Object.assign({}, params.context || {}, { reference_point: true });
     if (!params.elevations.length) { alert('Pick some faces and build the chain first (press Enter).'); return; }
     const btn = document.getElementById('ifc-btn');
     busy(btn, true, `Generating ${ifcSchema().replace('2X3', '2x3')}…`);

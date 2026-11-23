@@ -427,3 +427,74 @@ def test_at_a_hip_the_two_slopes_drips_are_mitred_on_the_hips_line_and_the_cap_f
         assert m["of"]                                                   # one element with its tray (or support)
     stops = sorted(m["name"] for m in out["geometry"] if m.get("stop_end"))
     assert stops == ["Roof A Hip Stop End Roof C", "Roof C Hip Stop End Roof A"]
+
+
+@pytest.mark.parametrize("lean", [1.0, 2.7, 10.0])
+def test_a_wall_leaning_out_under_an_eaves_still_has_the_eaves(lean):
+    """A canopy's wall leans out (its head further out than its foot): the roof that comes
+    down to its head is still an eaves, with its drip; not a mansard's knuckle."""
+    t, s, c = math.tan(math.radians(30.0)), 0.5, math.cos(math.radians(30.0))
+    out = math.tan(math.radians(lean)) * 2700.0         # how far out its head stands
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]                                # noqa: E731
+    face = lambda name, pts, n: extract_elevation({"name": name, "faces": quad(pts), "outward": list(n), "context": [],   # noqa: E731
+                                                   "options": {"debug": False, "clad_depth": 150.0}})
+    a = math.radians(lean)
+    w = face("Wall", [[0, 0, 0], [6000, 0, 0], [6000, -out, 2700], [0, -out, 2700]], (0, -math.cos(a), -math.sin(a)))
+    r = face("Roof", [[0, -out, 2700], [6000, -out, 2700], [6000, 3000, 2700 + (3000 + out) * t], [0, 3000, 2700 + (3000 + out) * t]], (0, -s, c))
+    link = eaves_link(w, r)
+    assert link and link["kind"] == "eaves" and not link["mansard"] and link["length"] == pytest.approx(6000.0, abs=1.0)
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    elevs = [dict(w, offset=0, chain="Chain 1", settings=dict(cladding_type="panel"), valleys=[rec("a", "Roof")]),
+             dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none")]
+    built = generate_preview({"elevations": elevs, "trim": True, "splash": 0})
+    assert _aprons(built), "the drip at the eaves"
+
+
+def test_a_gently_raking_eaves_still_gets_its_drip():
+    """A roof's eaves that follows a wall's raked head (a canopy's leaning wall in a real
+    model, about 3.5 degrees across the face): an eaves all the same, each tray turned
+    into its drip where it ends, the drip running up the line with the edge."""
+    t, s, c = math.tan(math.radians(25.0)), math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    rise = 360.0                                       # the eaves line on plan, 360 mm up the slope over 6 m
+    pts = [[0, 0, 0], [6000, rise, rise * t], [6000, 4000, 4000 * t], [0, 4000, 4000 * t]]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[1], pts[2]], [pts[0], pts[2], pts[3]]],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", settings=dict(SEAM), verge="none")],
+                            "trim": True, "splash": 0, **SEAM})
+    feet = [m for m in out["geometry"] if m["ifc_type"] == "plank" and min(q[1] for q in m["profile"]) < 600.0]   # the trays at the eaves
+    drips = _aprons(out)
+    assert feet and len(drips) >= len(feet) - 1, "a drip at every bottom tray's foot"
+    lows = sorted((min(frame_to_world(m["frame"], u, v, float(m["depth"]))[2] for u, v in ring_at(m, 0, float(m["depth"]))), m["name"])
+                  for m in drips)
+    assert lows[-1][0] - lows[0][0] > 100.0, "the drip rises with the edge"
+
+
+def test_an_open_eaves_over_a_wall_runs_on_until_its_drip_clears_the_wall_s_cladding():
+    """A roof that oversails a clad wall by less than the wall's cladding stands out (a real
+    model's canopy: 31 mm over seams 84 mm out) had its drip behind the seams. Its eaves runs
+    on until the drop is EAVES_OVER clear of the cladding's outside; one that oversails far
+    enough is left as it is."""
+    from cladding_eaves import EAVES_OVER
+    t, s, c = math.tan(math.radians(30.0)), 0.5, math.cos(math.radians(30.0))
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]                                # noqa: E731
+    face = lambda name, pts, n: extract_elevation({"name": name, "faces": quad(pts), "outward": list(n), "context": [],   # noqa: E731
+                                                   "options": {"debug": False, "clad_depth": 150.0}})
+    def build(over):
+        w = face("Wall", [[0, 0, 0], [6000, 0, 0], [6000, 0, 2700], [0, 0, 2700]], (0, -1, 0))
+        r = face("Roof", [[0, -over, 2700 - over * t], [6000, -over, 2700 - over * t], [6000, 3000, 2700 + 3000 * t],
+                          [0, 3000, 2700 + 3000 * t]], (0, -s, c))
+        elevs = [dict(w, offset=0, chain="Chain 1", settings=dict(SEAM)),
+                 dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), verge="none")]
+        return generate_preview({"elevations": elevs, "trim": True, "splash": 0})
+    near = build(30.0)
+    (e,) = [x for i in near["info"] for x in i.get("eaves", [])]
+    assert e["over_wall"] == "Wall" and e["run"] > 0.0
+    wall_out = max(-frame_to_world(m["frame"], u, v, d)[1] for m in near["geometry"] if m["elevation"] == "Wall"
+                   for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for u, v in ring_at(m, 0, d))
+    drop_in = min(-frame_to_world(m["frame"], u, v, d)[1] for m in _aprons(near)
+                  for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for u, v in ring_at(m, 0, d)
+                  if frame_to_world(m["frame"], u, v, d)[2] < 2700.0 - 40.0)
+    assert drop_in >= wall_out + EAVES_OVER - 15.0, (drop_in, wall_out)
+    far = build(400.0)
+    (e,) = [x for i in far["info"] for x in i.get("eaves", [])]
+    assert not e.get("over_wall")

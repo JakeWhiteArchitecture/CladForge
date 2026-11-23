@@ -953,7 +953,8 @@ def ridge_link(a, b):
     v_a = _dot(nb, _sub(fb["origin"], fa["origin"])) / rise_a
     v_b = _dot(na, _sub(fa["origin"], fb["origin"])) / rise_b
     if abs(v_a - float(a["height"])) > CORNER_TOL or abs(v_b - float(b["height"])) > CORNER_TOL:
-        return None                                   # the line is not along the top of both
+        return None                                   # the line is not along the top of both: one runs on well past it,
+                                                      # a stepped roof (each its own monopitch head), not a ridge
     at = [fa["origin"][i] + va[i] * v_a for i in range(3)]          # on the ridge, at a's u = 0
     u_b0 = _dot(fb["u"], _sub(at, fb["origin"]))
     (a0, a1), (b0, b1) = _top_run(a), _top_run(b)
@@ -967,12 +968,32 @@ def ridge_link(a, b):
 
 
 VALLEY_ON = 25.0          # mm – an outline edge this close to the other slope's plane lies along the valley
+HEAD_OVERSAIL = 150.0     # mm – a monopitch's top edge on a wall's head may stand this far proud of the wall's face
 VALLEY_MIN = 300.0        # mm – two slopes share at least this much valley, or it is not one
 
 
-def _centre(elev):
-    """A point well inside the face, in its own (u, v): the centroid of its largest patch."""
-    best = max((Polygon(pg["exterior"]) for pg in elev.get("polygons") or []), key=lambda g: g.area, default=None)
+def _centre(elev, other=None):
+    """A point well inside the face, in its own (u, v): the centroid of its largest patch;
+    or, given *other*, of the patch that runs along *other*'s plane (the most of its edges
+    within VALLEY_ON of it). A face of two patches (two roofs in one plane) is judged by the
+    one at the junction: by the far one, a valley read as lying behind the other slope."""
+    pgs = [pg for pg in elev.get("polygons") or []]
+    best = None
+    if other is not None and len(pgs) > 1:
+        fo, f = other["frame"], elev["frame"]
+        def along(pg):
+            ring, run = pg["exterior"], 0.0
+            for q, r in zip(ring, ring[1:] + ring[:1]):
+                P, Q = _at(f, q[0], q[1]), _at(f, r[0], r[1])
+                if max(abs(_dot(fo["n"], _sub(P, fo["origin"]))), abs(_dot(fo["n"], _sub(Q, fo["origin"])))) <= VALLEY_ON:
+                    run += math.dist(P, Q)
+            return run
+        runs = [(along(pg), pg) for pg in pgs]
+        top = max(runs, key=lambda t: t[0])
+        if top[0] > 0.0:
+            best = Polygon(top[1]["exterior"])
+    if best is None:
+        best = max((Polygon(pg["exterior"]) for pg in pgs), key=lambda g: g.area, default=None)
     return (best.centroid.x, best.centroid.y) if best is not None else (float(elev["width"]) / 2, float(elev["height"]) / 2)
 
 
@@ -981,16 +1002,16 @@ def _at(frame, u, v):
     return tuple(o[i] + U[i] * u + V[i] * v for i in range(3))
 
 
-def _along_plane(elev, other, line, base):
-    """The stretch of *elev*'s outline that lies in *other*'s plane, as (t0, t1) along
-    *line* from *base*; None where no edge of it does."""
+def _along_plane(elev, other, line, base, tol=VALLEY_ON):
+    """The stretch of *elev*'s outline that lies in *other*'s plane (within *tol*), as
+    (t0, t1) along *line* from *base*; None where no edge of it does."""
     fo = other["frame"]
     ts = []
     for pg in elev.get("polygons") or []:
         ring = pg["exterior"]
         for q, r in zip(ring, ring[1:] + ring[:1]):
             P, Q = _at(elev["frame"], q[0], q[1]), _at(elev["frame"], r[0], r[1])
-            if abs(_dot(fo["n"], _sub(P, fo["origin"]))) <= VALLEY_ON and abs(_dot(fo["n"], _sub(Q, fo["origin"]))) <= VALLEY_ON:
+            if abs(_dot(fo["n"], _sub(P, fo["origin"]))) <= tol and abs(_dot(fo["n"], _sub(Q, fo["origin"]))) <= tol:
                 ts += [_dot(_sub(P, base), line), _dot(_sub(Q, base), line)]
     return (min(ts), max(ts)) if ts else None
 
@@ -1051,8 +1072,9 @@ def _roof_link(a, b, kind):
         wall, roof = sorted((na, nb), key=lambda v: abs(v[2]))
         if roof[2] <= RAKE_LEAN:
             return None                               # the upper face is no roof slope
-        if abs(wall[2]) > EAVES_PLUMB and not (kind == "eaves" and wall[2] > 0 and _pitch_of(wall) - _pitch_of(roof) >= MANSARD_STEP):
-            return None                               # neither an upright wall nor (at an eaves) a steeper slope, a mansard's, under the roof
+        leans_out = kind == "eaves" and wall[2] < 0 and abs(wall[2]) <= RAKE_LEAN     # a wall leaning out under the eaves (a canopy's)
+        if abs(wall[2]) > EAVES_PLUMB and not leans_out and not (kind == "eaves" and wall[2] > 0 and _pitch_of(wall) - _pitch_of(roof) >= MANSARD_STEP):
+            return None                               # neither an upright wall nor (at an eaves) one leaning out or a steeper slope, a mansard's, under the roof
     elif na[2] < 1e-6 or nb[2] < 1e-6:
         return None                                   # a wall, or a face that looks down
     line = _cross(na, nb)
@@ -1060,7 +1082,7 @@ def _roof_link(a, b, kind):
     if size < 0.05:
         return None                                   # parallel
     line = tuple(c / size for c in line)
-    ca, cb = _at(fa, *_centre(a)), _at(fb, *_centre(b))
+    ca, cb = _at(fa, *_centre(a, b)), _at(fb, *_centre(b, a))
     front_a, front_b = _dot(nb, _sub(ca, fb["origin"])), _dot(na, _sub(cb, fa["origin"]))
     if kind == "valley" and (front_a <= 0 or front_b <= 0):
         return None                                   # one lies behind the other: a ridge or a hip
@@ -1081,7 +1103,14 @@ def _roof_link(a, b, kind):
     if abs(step) < 1e-9:
         return None
     base = tuple(ca[i] - down[i] * _dot(nb, _sub(ca, fb["origin"])) / step for i in range(3))
-    ra, rb = _along_plane(a, b, line, base), _along_plane(b, a, line, base)
+    if kind == "head":
+        # the roof's top edge on the wall's head may stand proud of the wall's face (HEAD_OVERSAIL):
+        # the deck carried over the head, under the head verge that closes it
+        roof_a = abs(na[2]) > abs(nb[2])
+        ra = _along_plane(a, b, line, base, HEAD_OVERSAIL if roof_a else VALLEY_ON)
+        rb = _along_plane(b, a, line, base, VALLEY_ON if roof_a else HEAD_OVERSAIL)
+    else:
+        ra, rb = _along_plane(a, b, line, base), _along_plane(b, a, line, base)
     if kind == "abut":
         # the roof's top edge lies on the line; the wall stands above it there, whether its
         # own outline stops on the line or runs on down behind the roof
@@ -1104,7 +1133,7 @@ def _roof_link(a, b, kind):
         up = _cross(tuple(other["frame"]["n"]), line)                 # in the other face, square to the line
         if _dot(up, _sub(centre, base)) < 0:
             up = tuple(-c for c in up)
-        return {"kind": kind, "p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e)],
+        return {"kind": kind, "p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e, other)],
                 "other_up": [round(c, 9) for c in up], "other_n": [round(c, 9) for c in n_other]}
     k = math.tan(beta / 2.0)
     out = {"kind": kind, "a": side(a, cb, b, nb), "b": side(b, ca, a, na),
@@ -1116,7 +1145,7 @@ def _roof_link(a, b, kind):
     if kind in ("eaves", "head"):
         out["a"]["roof"], out["b"]["roof"] = abs(na[2]) > abs(nb[2]), abs(nb[2]) > abs(na[2])
         lower = min((na, nb), key=lambda v: abs(v[2]))
-        out["mansard"] = kind == "eaves" and abs(lower[2]) > EAVES_PLUMB      # the face below leans back: a mansard's knuckle
+        out["mansard"] = kind == "eaves" and lower[2] > EAVES_PLUMB      # the face below leans back: a mansard's knuckle (one leaning out is a wall)
         roof = cb if out["b"]["roof"] else ca
         # the roof rises from the head of the wall: its eaves. It falls away behind it: a monopitch's head.
         if (roof[2] > base[2] + 1.0) != (kind == "eaves") or abs(roof[2] - base[2]) <= 1.0:

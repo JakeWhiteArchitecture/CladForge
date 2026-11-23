@@ -50,6 +50,7 @@ HEAD_DROP = 60.0      # mm – the drop's foot, below the top of the wall's clad
 HEAD_COVER = 150.0    # mm – the cap on the roof, down the slope from the plumb plane (the detail's 80 + 10 + 50 + 10)
 HEAD_FILLER = 40.0    # mm – the decompression strip behind the drop, its height (scaled)
 HEAD_MIN = 300.0      # mm – a level top edge shorter than this is not a head verge
+HEAD_LEVEL = 0.005    # dv/du – a top edge off level by no more than this (1 in 200) is level
 
 
 def head_setting(elev):
@@ -63,8 +64,9 @@ def _top_edges(elev):
     for pg in elev.get("polygons") or []:
         ring = pg["exterior"]
         for a, b in zip(ring, ring[1:] + ring[:1]):
-            if abs(a[1] - b[1]) < 0.5 and abs(a[0] - b[0]) >= HEAD_MIN and a[0] > b[0]:      # outlines run anticlockwise: a top edge runs back
-                out.append((min(a[0], b[0]), max(a[0], b[0]), (a[1] + b[1]) / 2.0))
+            # level to HEAD_LEVEL (a modelled top edge a hair off the face's own level: 35 mm in 9.5 m in a real model)
+            if abs(a[1] - b[1]) <= max(0.5, HEAD_LEVEL * abs(a[0] - b[0])) and abs(a[0] - b[0]) >= HEAD_MIN and a[0] > b[0]:   # outlines run anticlockwise: a top edge runs back
+                out.append((min(a[0], b[0]), max(a[0], b[0]), max(a[1], b[1])))
     top = max((v for _a, _b, v in out), default=None)
     return sorted(e for e in out if top is not None and abs(e[2] - top) < 1.0)
 
@@ -76,13 +78,24 @@ def heads_of(elev, p):
     fall, has a ridge, or whose chain says none."""
     pitch = elev.get("pitch")
     said = head_setting(elev)
-    if (said == "none" or not _up_slope(p) or pitch is None or not 0.5 < float(pitch) <= ROOF_PITCH or elev.get("faces_down")
-            or elev.get("ridge")):
+    if said == "none" or not _up_slope(p) or pitch is None or not 0.5 < float(pitch) <= ROOF_PITCH or elev.get("faces_down"):
         return []
+    ridge = elev.get("ridge") or {}
     joins = [j for j in _joins(elev, True, "head")]
     out = []
     for u0, u1, v in _top_edges(elev):
-        over = next((j for j in joins if abs(j["v"] - v) < 2.0 and j["u0"] < u1 - 50.0 and j["u1"] > u0 + 50.0), None)
+        if ridge.get("with"):
+            try:
+                on_ridge = abs(float(ridge["v"]) - v) < 2.0 and float(ridge["u0"]) < u1 - 50.0 and float(ridge["u1"]) > u0 + 50.0
+            except (KeyError, TypeError, ValueError):
+                on_ridge = True
+            if on_ridge or said == "g3" and not joins:
+                continue                              # the ridge's own edge; or, with a ridge, a free top only where a wall is under it
+        # the wall's head on the line the two planes meet on: on the top edge, or under it by as much as the
+        # deck may stand proud of the wall (fabric_extract.HEAD_OVERSAIL, up the slope)
+        under = 150.0 / max(0.2, math.cos(math.radians(float(pitch))))
+        over = next((j for j in joins if -max(2.0, HEAD_LEVEL * (u1 - u0)) < v - j["v"] < under + HEAD_LEVEL * (u1 - u0)
+                     and j["u0"] < u1 - 50.0 and j["u1"] > u0 + 50.0), None)
         if over is None and said != "g3":
             continue
         if over is not None:

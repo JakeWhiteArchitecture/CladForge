@@ -567,3 +567,64 @@ def test_with_cladding_the_eaves_corner_is_closed_as_the_g3_one():
             assert min(d) >= max(f) - 0.01                                     # the drip stops at the flashing's inside face
         else:
             assert max(d) <= min(f) + 0.01
+
+
+def test_a_verge_whose_edge_turns_into_a_hip_stops_where_the_edge_does():
+    """A small slope's side edge runs 1.2 m up and then turns off into a hip, under a head
+    verge at its top (a real model's front slope). Its verge stops where the edge does: run
+    on up to the head it lay across the next slope, a bar out past the eaves corner."""
+    t = math.tan(math.radians(25.0))
+    s, c = math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    plan = [(0, 0), (6000, 0), (6000, 3000), (1800, 3000), (0, 1200)]
+    pts = [[x, y, y * t] for x, y in plan]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[i], pts[i + 1]] for i in range(1, len(pts) - 1)],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", head="g3", eaves="none")], "trim": True, "splash": 0, **SEAM})
+    (left,) = [v for i in out["info"] for v in i.get("verges", []) if v["side"] == "l"]
+    assert left["length"] < 1500.0, left["length"]
+
+
+def test_a_hip_that_starts_up_the_slope_does_not_lengthen_the_eaves_drip():
+    """The front slope of a real model: a verge 1.2 m up its side, then a hip. The hip's foot
+    is over the verge, not on the eaves, so the eaves drip and its support stop at the verge
+    (they were run 400 mm on past it, out from the corner, as if the hip met the eaves)."""
+    t = math.tan(math.radians(25.0))
+    s, c = math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    plan = [(0, 0), (6000, 0), (6000, 3000), (1800, 3000), (0, 1200)]
+    pts = [[x, y, y * t] for x, y in plan]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[i], pts[i + 1]] for i in range(1, len(pts) - 1)],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    w = roof["frame"]
+    hip = {"kind": "hip", "with": "Other", "k": 1.0, "master": True, "length": 2000.0,
+           "p1": world_to_frame(w, [0.0, 1200.0, 1200.0 * t])[:2], "p2": world_to_frame(w, [1800.0, 3000.0, 3000.0 * t])[:2],
+           "other_up": [0.0, 1.0, 0.0], "other_n": [0.0, 0.0, 1.0]}
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", head="g3", valleys=[hip])], "trim": True, "splash": 0, **SEAM})
+    left = min(world_to_frame(w, frame_to_world(m["frame"], x, y, d))[0]
+               for m in out["geometry"] if m.get("eaves_support") or " Eaves Drip" in (m.get("name") or "")
+               for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for x, y in m["profile"])
+    assert left > -100.0, left
+
+
+
+def test_a_gable_edge_a_hair_off_plumb_has_its_verge_raking_with_it():
+    """A real model's gable edge ran 27 mm off plumb over 8.9 m, and had no verge at all. The
+    edge is taken as drawn: the verge is built on it, every part of it leaning with it, its
+    flashing as far out from the edge at the top as at the foot."""
+    from cladding_primitives import ring_at
+    t = math.tan(math.radians(25.0))
+    s, c = math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    lean = 15.0                                    # over 4.4 m up the slope: 1 in 290, as the model's 1 in 330
+    pts = [[0, 0, 0], [6000, 0, 0], [6000 - lean, 4000, 4000 * t], [0, 4000, 4000 * t]]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[1], pts[2]], [pts[0], pts[2], pts[3]]],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", eaves="none", verge_type="cladding")],
+                            "trim": True, "splash": 0, **SEAM})
+    right = [v for i in out["info"] for v in i.get("verges", []) if v["side"] == "r"]
+    assert right and abs(right[0]["rake"]) > 0.001
+    (flash,) = [m for m in out["geometry"] if m.get("name") == "Roof Verge Flashing R"]
+    f = roof["frame"]
+    def u_of(d):                                   # the flashing's mean u on the face, at depth d along it
+        q = [world_to_frame(f, frame_to_world(flash["frame"], x, y, d)) for x, y in ring_at(flash, 0, d)]
+        return sum(p[0] for p in q) / len(q), sum(p[1] for p in q) / len(q)
+    (u0, v0), (u1, v1) = u_of(float(flash["depth"]) + 1.0), u_of(float(flash["depth"]) + float(flash["thickness"]) - 1.0)
+    assert (u1 - u0) / (v1 - v0) == pytest.approx(right[0]["rake"], abs=0.0005)

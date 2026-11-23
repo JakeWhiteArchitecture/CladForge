@@ -259,3 +259,4 @@ def test_a_roofs_edge_past_the_wall_it_lands_on_can_be_trimmed_to_it():
     assert sorted({round(p[1]) for p in ring}) == [-300, 0] and heal["trim"]["over"] == pytest.approx(300.0 / C, abs=0.1)
     cut = _extract("Roof", _fan([(0, -300), (6000, -300), (6000, 3000), (0, 3000)], lambda x, y: 2700.0 + y * T), (0, -S, C), trims=heal["trim"]["a"])
     assert cut["height"] == pytest.approx(3000.0 / C, abs=0.1) and heal_link(cut, wall) is None
+

@@ -212,3 +212,57 @@ def test_the_valley_exports_to_ifc_and_dxf():
     assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
     assert all(len(i["valley_strips"]) == 1 for i in out["info"])
     assert "ROOF A" in meshes_to_dxf_string(out["geometry"], params, out["info"])
+
+
+def test_a_face_of_two_patches_is_judged_by_the_one_at_the_valley():
+    """Roof A is two roofs in one plane, the bigger one far off and, taken whole, behind
+    roof C's plane (a real model's canopy valley). Judged by its biggest patch the valley
+    read as a slope lying behind the other and was not found; the patch at the valley is
+    the one that counts."""
+    import math as _m
+    ta = tc = _m.tan(_m.radians(30.0))
+    tris = []
+    for plan in ([(0, 0), (3000, 3000), (3000, 6000), (0, 6000)], [(8000, 0), (14000, 0), (14000, 3000), (8000, 3000)]):
+        pts = [[x, y, y * ta] for x, y in plan]
+        tris += [[pts[0], pts[i], pts[i + 1]] for i in range(1, len(pts) - 1)]
+    a = extract_elevation({"name": "Roof A", "faces": tris, "outward": [0.0, -_m.sin(_m.atan(ta)), _m.cos(_m.atan(ta))], "context": [],
+                           "options": {"debug": False, "clad_depth": 150.0}})
+    c = _face("Roof C", [(0, 0), (6000, 0), (6000, 3000), (3000, 3000)], lambda x, y: x * tc,
+              (-_m.sin(_m.atan(tc)), 0.0, _m.cos(_m.atan(tc))))
+    assert len(a["polygons"]) == 2
+    link = valley_link(a, c)
+    assert link and link["kind"] == "valley" and link["length"] > 3000.0
+
+
+def test_a_lone_face_s_seams_are_slid_clear_of_where_its_valley_meets_the_eaves():
+    """A small slope on its own with a valley: a seam landing a few mm from where the valley
+    meets the eaves leaves a sliver of tray beside the gutter. Its trays are slid over (no
+    more than half a tray) so every seam stands SEAM_CORNER_CLEAR clear of that point; a
+    shift set by hand, or a face in a chain, is left as it is."""
+    import math as _m
+    from cladding_preview import _groups, SEAM_CORNER_CLEAR
+    a, c = _pair()
+    link = valley_link(a, c)
+    ra, rc = _records(a, c, link)
+    params = {"elevations": [ra, rc], "trim": True, "splash": 0, "cladding_type": "plank", "plank_profile": "seam",
+              "plank_orient": "vertical"}
+    for sub, (live, _layout) in _groups(params):
+        for e in live:
+            if e.get("auto_shift") is None:
+                continue
+            cover = float(sub["plank_w"])
+            assert abs(e["auto_shift"]) <= cover / 2.0 + 1.0
+    hand = dict(ra, offset=40.0)
+    for sub, (live, _layout) in _groups(dict(params, elevations=[hand, rc])):
+        assert all(e.get("auto_shift") is None for e in live if e["name"] == ra["name"])
+    from cladding_preview import _clear_corner_seams
+    from cladding_constants import _parse
+    p = _parse(dict(params))
+    e = {"name": "T", "pitch": 30.0, "valleys": [{"kind": "valley"}], "width": 4000.0, "height": 3000.0,
+         "polygons": [{"exterior": [[0.0, 0.0], [3000.0, 0.0], [4000.0, 3000.0], [0.0, 3000.0]], "holes": []}]}
+    cover = float(p["plank_w"])
+    e["polygons"][0]["exterior"][1][0] = 2000.0 + cover / 2.0 + 10.0           # the eaves ends 10 mm past a seam
+    _clear_corner_seams(e, p)
+    shift = e.get("auto_shift") or 0.0
+    seams = [2000.0 + shift + cover / 2.0 + k * cover for k in range(-6, 7)]
+    assert min(abs(s - e["polygons"][0]["exterior"][1][0]) for s in seams) >= SEAM_CORNER_CLEAR - 0.5
