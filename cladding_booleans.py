@@ -170,7 +170,7 @@ RIDGE_REACH = 400.0      # mm – a slope's top edge this far short of its ridge
 
 def to_ridge(elev):
     """A slope's outline brought to its ridge line: what of it was modelled running on past
-    the line is cut off (fabric_extract.RIDGE_PAST), and a top edge modelled short of it,
+    the line is cut off, and a top edge modelled short of it,
     by up to RIDGE_REACH, is carried up to it, so both slopes' cladding meets under the
     cap. It acts along the level top edges the ridge lies on, each over its whole length
     (one straight top edge comes down to the line all along, not only where the other

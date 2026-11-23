@@ -919,8 +919,6 @@ def _merge_abutments(found, umin, vmin, width):
 # ── corners ──────────────────────────────────────────────────────────────
 
 RIDGE_MIN = 300.0         # mm – two slopes share at least this much ridge, or they are not a pair
-RIDGE_PAST = 1000.0       # mm – a slope modelled running on past its ridge line by this much still meets the other there:
-                          # it is cut back to the line (cladding_primitives.clip_bounds_v)
 
 
 def _top_run(elev):
@@ -954,9 +952,9 @@ def ridge_link(a, b):
         return None                                   # parallel, or the two fall towards each other (a valley)
     v_a = _dot(nb, _sub(fb["origin"], fa["origin"])) / rise_a
     v_b = _dot(na, _sub(fa["origin"], fb["origin"])) / rise_b
-    past_a, past_b = float(a["height"]) - v_a, float(b["height"]) - v_b
-    if not (-CORNER_TOL <= past_a <= RIDGE_PAST and -CORNER_TOL <= past_b <= RIDGE_PAST):
-        return None                                   # the line is not along the top of both
+    if abs(v_a - float(a["height"])) > CORNER_TOL or abs(v_b - float(b["height"])) > CORNER_TOL:
+        return None                                   # the line is not along the top of both: one runs on well past it,
+                                                      # a stepped roof (each its own monopitch head), not a ridge
     at = [fa["origin"][i] + va[i] * v_a for i in range(3)]          # on the ridge, at a's u = 0
     u_b0 = _dot(fb["u"], _sub(at, fb["origin"]))
     (a0, a1), (b0, b1) = _top_run(a), _top_run(b)
@@ -1441,10 +1439,7 @@ def heal_link(a, b):
     extend = bool(sa or sb) and not (past_a and past_b)       # each runs through the other: nothing nearly meets
     if not extend and not trim:
         return None
-    # one runs up to the other, which carries on past: an abutment. But two slopes rising to one
-    # line are a ridge whichever of them runs a hair past it: healed, they join one chain and
-    # take the ridge cap (left an "abutment", each kept its own chain and its top a free edge)
-    out = {"kind": met if met == "ridge" else ("abutment" if through else met),
+    out = {"kind": "abutment" if through else met,            # one runs up to the other, which carries on past
            "a": quads(sa) if extend else [], "b": quads(sb) if extend else [], "length": round(t1 - t0, 1),
            "gap": round(max(s["gap"] for s in (sa or []) + (sb or [])), 1) if extend else 0.0}
     if trim:

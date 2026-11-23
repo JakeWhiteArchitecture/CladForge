@@ -603,3 +603,28 @@ def test_a_hip_that_starts_up_the_slope_does_not_lengthen_the_eaves_drip():
                for m in out["geometry"] if m.get("eaves_support") or " Eaves Drip" in (m.get("name") or "")
                for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for x, y in m["profile"])
     assert left > -100.0, left
+
+
+
+def test_a_gable_edge_a_hair_off_plumb_has_its_verge_raking_with_it():
+    """A real model's gable edge ran 27 mm off plumb over 8.9 m, and had no verge at all. The
+    edge is taken as drawn: the verge is built on it, every part of it leaning with it, its
+    flashing as far out from the edge at the top as at the foot."""
+    from cladding_primitives import ring_at
+    t = math.tan(math.radians(25.0))
+    s, c = math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    lean = 15.0                                    # over 4.4 m up the slope: 1 in 290, as the model's 1 in 330
+    pts = [[0, 0, 0], [6000, 0, 0], [6000 - lean, 4000, 4000 * t], [0, 4000, 4000 * t]]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[1], pts[2]], [pts[0], pts[2], pts[3]]],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", eaves="none", verge_type="cladding")],
+                            "trim": True, "splash": 0, **SEAM})
+    right = [v for i in out["info"] for v in i.get("verges", []) if v["side"] == "r"]
+    assert right and abs(right[0]["rake"]) > 0.001
+    (flash,) = [m for m in out["geometry"] if m.get("name") == "Roof Verge Flashing R"]
+    f = roof["frame"]
+    def u_of(d):                                   # the flashing's mean u on the face, at depth d along it
+        q = [world_to_frame(f, frame_to_world(flash["frame"], x, y, d)) for x, y in ring_at(flash, 0, d)]
+        return sum(p[0] for p in q) / len(q), sum(p[1] for p in q) / len(q)
+    (u0, v0), (u1, v1) = u_of(float(flash["depth"]) + 1.0), u_of(float(flash["depth"]) + float(flash["thickness"]) - 1.0)
+    assert (u1 - u0) / (v1 - v0) == pytest.approx(right[0]["rake"], abs=0.0005)
