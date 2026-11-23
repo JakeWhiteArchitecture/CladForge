@@ -2,3 +2,4 @@ flask>=3.0
 shapely>=2.0
 ifcopenshell>=0.8
 pytest>=7
+manifold3d>=3.0

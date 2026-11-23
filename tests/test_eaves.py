@@ -163,8 +163,16 @@ def test_an_eaves_exports():
     trays = [e for e in ifc.by_type("IfcCovering") if e.ObjectType == "Standing seam tray"]
     built = {k: [m for m in out["geometry"] if m["ifc_type"] == k] for k in ("plank", "seam")}
     assert len(trays) == len(built["plank"])
-    assert sum(len(r.Items) for e in trays for r in e.Representation.Representations) \
-        == len(built["plank"]) + len(built["seam"]) + len(_aprons(out))
+    # each tray with its seams and its drip is one closed solid (cladding_union), no more than its pieces hold
+    from solid_checks import one_closed_solid, volume
+    from cladding_union import piece_mesh, _volume
+    for e in trays:
+        solid = volume(one_closed_solid(e))
+        pieces = [m for m in out["geometry"] if m["name"] == e.Name or m.get("of") == e.Name
+                  or (m["ifc_type"] == "seam" and m["name"].startswith(e.Name + " "))]
+        assert len(pieces) > 1
+        whole = sum(_volume(*piece_mesh(m)) for m in pieces)
+        assert 0.97 * whole < solid <= whole * (1.0 + 1e-4) + 1.0, (e.Name, solid, whole)
     (support,) = [e for e in ifc.by_type("IfcCovering") if "Eaves Support" in e.Name]
     assert support.PredefinedType == "ROOFING" and support.ObjectType == "Eaves support profile"
     assert out["info"][0]["eaves_strips"] and "CORNER_PROFILE" in meshes_to_dxf_string(out["geometry"], params, out["info"])
