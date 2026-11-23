@@ -74,6 +74,11 @@ WALL_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE"
 WALL_PROBE = 150.0        # mm – above the roof's face: where a wall standing over it is sectioned
 WALL_MIN = 300.0          # mm – and it runs at least this far along the roof
 HEAL_CUT_TYPES = frozenset({"IFCMEMBER", "IFCPLATE", "IFCBUILDINGELEMENTPROXY", "IFCCOVERING"})
+# Not fabric: annotation modelled in 3D (Revit's Model Text comes out as a proxy named
+# "Model Text:<type>:<id>"). It is never a wall, a batten or a penetration, and its
+# letters, thousands of slivers, are what GEOS fails on, which kills the engine.
+NOT_FABRIC = ("model text",)
+INTRICATE_TRIS = 400      # an element of more triangles than this is sectioned on the grid
 
 
 # ── vector helpers ────────────────────────────────────────────────────────
@@ -306,10 +311,14 @@ def _section(tris, n, d, u, mode="wall"):
     straddles = smin < -PLANE_TOL and smax > PLANE_TOL
     poly = None
     try:
-        parts = [pg for pg in polygonize(_union(segs)) if pg.area > MIN_HOLE_AREA] if segs else []
+        # An intricate element (a family tessellated into slivers, curves) is sectioned on the
+        # grid whatever: GEOS failing to node it is an abort in the browser. A plain one keeps
+        # its exact coordinates unless something in it nearly meets (_union).
+        join = (lambda g: union_all(g, grid_size=ROBUST_GRID)) if len(tris) > INTRICATE_TRIS else _union
+        parts = [pg for pg in polygonize(join(segs)) if pg.area > MIN_HOLE_AREA] if segs else []
         parts += [pg for pg in inplane if pg.is_valid and pg.area > 1.0]
         if parts:
-            poly = _union(parts).buffer(0.5, join_style=2).buffer(-0.5, join_style=2)
+            poly = join(parts).buffer(0.5, join_style=2).buffer(-0.5, join_style=2)
         if poly is None or poly.is_empty or poly.area <= MIN_HOLE_AREA:
             hull = MultiPoint(pts).convex_hull
             poly = hull if hull.geom_type == "Polygon" and hull.area > MIN_HOLE_AREA else None
@@ -508,6 +517,8 @@ def _extract(payload):
     walls = []           # walls that stand above a roof face (a head-wall abutment)
     for elem in payload.get("context", []):
         etype = (elem.get("type") or "").upper()
+        if (elem.get("name") or "").strip().lower().startswith(NOT_FABRIC):
+            continue                                  # 3D text: not part of the building
         if roofish and etype in WALL_TYPES and elem.get("tris") and time.perf_counter() <= deadline:
             try:
                 tris_w = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]

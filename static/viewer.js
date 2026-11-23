@@ -653,6 +653,9 @@ function meshTriangles(mesh) {
 function triCount(mesh) { const g = mesh.geometry; return (g.index ? g.index.count : g.attributes.position.count) / 3; }
 
 const CONTEXT_TRI_BUDGET = 60000;   // the engine runs in a fixed WASM heap: past this it dies
+// 3D annotation, not fabric (fabric_extract.NOT_FABRIC): Revit's Model Text is thousands of
+// sliver triangles that GEOS fails on, which kills the engine; it is never sent.
+const NOT_FABRIC = /^\s*model text/i;
 const POSTISH = /^IFC(COLUMN|MEMBER|BUILDINGELEMENTPROXY|BUILDINGELEMENTPART|BEAM|PLATE|ELEMENTASSEMBLY)/i;   // fabric_extract.POST_TYPES and POST_LIKE_TYPES
 
 function contextFor(pickedMeshes, tris, margin, outward) {
@@ -666,7 +669,7 @@ function contextFor(pickedMeshes, tris, margin, outward) {
     const d = n.dot(new THREE.Vector3(tris[0][0][0], tris[0][0][2], -tris[0][0][1]));
     const near = [];
     for (const meta of meshMeta) {
-        if (pickedMeshes.has(meta.mesh)) continue;
+        if (pickedMeshes.has(meta.mesh) || NOT_FABRIC.test(meta.name || '')) continue;
         const mb = meta.mesh.geometry.boundingBox.clone().applyMatrix4(meta.mesh.matrixWorld);
         if (!mb.intersectsBox(bb)) continue;
         let lo = Infinity, hi = -Infinity;

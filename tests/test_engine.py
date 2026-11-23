@@ -219,3 +219,43 @@ def test_extraction_leaves_where_it_is_on_the_page_too(monkeypatch):
     assert any(s.startswith("extracting Elevation A: fitting the plane") for s in seen)
     assert any(s.startswith("extracting Elevation A: reading ") for s in seen)
     assert seen[-1] == ""
+
+
+def test_model_text_is_not_read(monkeypatch):
+    """Revit's 3D Model Text comes out as a proxy, thousands of sliver triangles that GEOS
+    fails on (an abort in the browser). It is not part of the building: never read."""
+    import cladding_constants
+    seen = []
+    page = type("Page", (), {"__setattr__": lambda self, k, v: seen.append(v) if k == "_engineStep" else None})()
+    monkeypatch.setattr(cladding_constants, "_js", type("JS", (), {"globalThis": page}))
+    pl = dict(payload(), name="Elevation A")
+    text = {"type": "IfcBuildingElementProxy", "name": "Model Text:150mm Model Text:4499637",
+            "tris": [[[x, -1.0, 1000.0], [x + 0.001, 1.0, 1000.0], [x, 1.0, 1150.0]] for x in range(0, 900, 3)]}
+    pl["context"] = list(pl.get("context") or []) + [text]
+    out = extract_elevation(pl)
+    assert out["ok"]
+    assert not any("Model Text" in s for s in seen)
+
+
+def test_an_intricate_element_is_sectioned_on_the_grid():
+    """Past INTRICATE_TRIS an element's section is joined on the 0.01 mm grid, where GEOS
+    cannot fail: a slab cut into slivers still sections as the slab."""
+    from fabric_extract import INTRICATE_TRIS, _section
+    tris = []
+    k = INTRICATE_TRIS                      # thin strips across a 1000 x 200 slab, through the face
+    for i in range(k):
+        x0, x1 = 1000.0 * i / k, 1000.0 * (i + 1) / k
+        for y0, y1 in ((-100.0, 100.0),):
+            tris.append([(x0, y0, 0.0), (x1, y0, 0.0), (x1, y1, 0.0)])
+            tris.append([(x0, y0, 0.0), (x1, y1, 0.0), (x0, y1, 0.0)])
+            tris.append([(x0, y0, 200.0), (x1, y1, 200.0), (x1, y0, 200.0)])
+            tris.append([(x0, y0, 200.0), (x0, y1, 200.0), (x1, y1, 200.0)])
+    for x in (0.0, 1000.0):
+        tris.append([(x, -100.0, 0.0), (x, 100.0, 0.0), (x, 100.0, 200.0)])
+        tris.append([(x, -100.0, 0.0), (x, 100.0, 200.0), (x, -100.0, 200.0)])
+    for y in (-100.0, 100.0):
+        tris.append([(0.0, y, 0.0), (1000.0, y, 0.0), (1000.0, y, 200.0)])
+        tris.append([(0.0, y, 0.0), (1000.0, y, 200.0), (0.0, y, 200.0)])
+    straddles, touches, poly, _pts = _section(tris, (0.0, -1.0, 0.0), 0.0, (1.0, 0.0, 0.0))
+    assert straddles and touches and poly is not None and poly.is_valid
+    assert poly.area == pytest.approx(1000.0 * 200.0, rel=0.01)
