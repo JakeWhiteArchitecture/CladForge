@@ -99,7 +99,12 @@ def heads_of(elev, p):
         if over is None and said != "g3":
             continue
         if over is not None:
-            u0, u1 = max(u0, over["u0"]), min(u1, over["u1"])
+            a, b = max(u0, over["u0"]), min(u1, over["u1"])
+            if said == "g3":        # the rest of the top, past the wall, is a free head of its own (a step over a lower roof)
+                for c, d in ((u0, a), (b, u1)):
+                    if d - c >= HEAD_MIN:
+                        out.append({"u0": c, "u1": d, "v": v, "over": None, "pitch": float(pitch), "depth": 0.0, "top": 0.0})
+            u0, u1 = a, b
         out.append({"u0": u0, "u1": u1, "v": v, "over": over["with"] if over else None, "pitch": float(pitch),
                     "depth": (over["depth"] + over["seam"]) if over else 0.0, "top": over["top"] if over else 0.0})
     return out
@@ -115,15 +120,20 @@ def _plane(h):
 def head_ridges(p):
     """Before the ridges are cut: give each face with a head verge a ridge record with no
     partner ("head_ridge", read by cladding_ridge.ridge_of), so its layers are brought to
-    the plumb plane as at a ridge. One a face: its longest."""
+    the plumb plane as at a ridge. The longest is "head_ridge"; a top with more than one
+    (over a wall for part of it, stepped over a lower roof for the rest) has the others
+    in "head_more"."""
     for elev in p.get("elevations", []):
         elev.pop("head_ridge", None)
-        heads = heads_of(elev, p)
+        elev.pop("head_more", None)
+        heads = sorted(heads_of(elev, p), key=lambda q: q["u0"] - q["u1"])
         if not heads:
             continue
-        h = max(heads, key=lambda q: q["u1"] - q["u0"])
-        elev["head_ridge"] = {"with": None, "v": h["v"] + _plane(h), "u0": h["u0"], "u1": h["u1"],
-                              "k": math.tan(math.radians(h["pitch"])), "master": True, "head": h}
+        recs = [{"with": None, "v": h["v"] + _plane(h), "u0": h["u0"], "u1": h["u1"],
+                 "k": math.tan(math.radians(h["pitch"])), "master": True, "head": h} for h in heads]
+        elev["head_ridge"] = recs[0]
+        if len(recs) > 1:
+            elev["head_more"] = recs[1:]
 
 
 def _cap_ring(pitch, rest, out, foot, t):
@@ -149,39 +159,51 @@ def head_parts(meshes, p, infos):
     info_by = {i["elevation"]: i for i in infos}
     out = []
     for elev in p.get("elevations", []):
-        r = elev.get("head_ridge")
         info = info_by.get(elev.get("name"))
-        if not r or "head" not in r or info is None:      # (a head-wall abutment's is cladding_abut's)
-            continue
-        h, name, frame = r["head"], elev.get("name"), elev["frame"]
-        face = float(info.get("total_depth") or 0.0)
-        rest = face + float(p["seam_h"]) + RIDGE_REST
-        t = float(p["seam_t"])
-        s, c = math.sin(math.radians(h["pitch"])), math.cos(math.radians(h["pitch"]))
-        back = _plane(h)                                   # the plane, up the slope from the roof's edge
-        drop = h["depth"] + HEAD_CLEAR - back * c          # the drop's line, beyond the plane on plan
-        head = -back * s - h["top"]                        # the top of the wall's cladding (or the roof's edge), up from the section's origin
-        foot = head - HEAD_DROP
-        ring, width = _cap_ring(h["pitch"], rest, drop, foot, t)
-        up, U = frame_v(frame), frame["u"]
-        level = [-up[0] / math.hypot(up[0], up[1]), -up[1] / math.hypot(up[0], up[1]), 0.0]
-        along = [level[1], -level[0], 0.0]
-        length = h["u1"] - h["u0"]
-        start = h["u0"] if sum(a * b for a, b in zip(along, U)) > 0 else h["u1"]
-        place = {"origin": frame_to_world(frame, start, r["v"], 0.0), "u": level, "v": [0.0, 0.0, 1.0], "n": along}
-        cap = _prism(ring, 0.0, length, place, "ridge_cap", "%s Head Verge Cap" % name, name)
-        cap["head_info"] = {"length": round(length, 1), "width": round(width, 1), "drop": HEAD_DROP, "clear": HEAD_CLEAR,
-                            "thickness": t, "over": h["over"], "run": round(back, 1), "standard": width <= RIDGE_LEG + 0.5}
-        out.append(cap)
-        # the strip behind the drop, against the head of the wall's cladding (or the roof's edge)
-        a, b = -drop + t, -drop + HEAD_CLEAR - t
-        strip = [[a, head - 5.0 - HEAD_FILLER], [b, head - 5.0 - HEAD_FILLER], [b, head - 5.0], [a, head - 5.0]]
-        out.append(_prism(strip, 0.0, length, dict(place), "ridge_filler", "%s Head Verge Filler" % name, name))
-        # and those on the roof, between the seams: as under a ridge cap
-        edge = r["v"] - HEAD_COVER
-        upstand = _slot(r) + r["k"] * face
-        low = min(edge + FILLER_EDGE, upstand - FILLER_GAP - FILLER_W)
-        out += _fillers(p, elev, r, low, meshes, face)
-        info["head"] = dict(cap["head_info"], u0=round(h["u0"], 1), u1=round(h["u1"], 1), v=round(h["v"], 1),
-                            gap=RIDGE_GAP, clip_room=round(low - edge - 10.0, 1))
+        for r in [elev.get("head_ridge")] + list(elev.get("head_more") or []):
+            if not r or "head" not in r or info is None:      # (a head-wall abutment's is cladding_abut's)
+                continue
+            out += _head_cap(meshes, p, elev, r, info)
     return meshes + out
+
+
+def _head_cap(meshes, p, elev, r, info):
+    """One head verge's cap and strips; recorded on the face's info ("head", and the
+    others on a top with more than one in "head_more")."""
+    out = []
+    h, name, frame = r["head"], elev.get("name"), elev["frame"]
+    face = float(info.get("total_depth") or 0.0)
+    rest = face + float(p["seam_h"]) + RIDGE_REST
+    t = float(p["seam_t"])
+    s, c = math.sin(math.radians(h["pitch"])), math.cos(math.radians(h["pitch"]))
+    back = _plane(h)                                   # the plane, up the slope from the roof's edge
+    drop = h["depth"] + HEAD_CLEAR - back * c          # the drop's line, beyond the plane on plan
+    head = -back * s - h["top"]                        # the top of the wall's cladding (or the roof's edge), up from the section's origin
+    foot = head - HEAD_DROP
+    ring, width = _cap_ring(h["pitch"], rest, drop, foot, t)
+    up, U = frame_v(frame), frame["u"]
+    level = [-up[0] / math.hypot(up[0], up[1]), -up[1] / math.hypot(up[0], up[1]), 0.0]
+    along = [level[1], -level[0], 0.0]
+    length = h["u1"] - h["u0"]
+    start = h["u0"] if sum(a * b for a, b in zip(along, U)) > 0 else h["u1"]
+    place = {"origin": frame_to_world(frame, start, r["v"], 0.0), "u": level, "v": [0.0, 0.0, 1.0], "n": along}
+    cap = _prism(ring, 0.0, length, place, "ridge_cap", "%s Head Verge Cap" % name, name)
+    cap["head_info"] = {"length": round(length, 1), "width": round(width, 1), "drop": HEAD_DROP, "clear": HEAD_CLEAR,
+                        "thickness": t, "over": h["over"], "run": round(back, 1), "standard": width <= RIDGE_LEG + 0.5}
+    out.append(cap)
+    # the strip behind the drop, against the head of the wall's cladding (or the roof's edge)
+    a, b = -drop + t, -drop + HEAD_CLEAR - t
+    strip = [[a, head - 5.0 - HEAD_FILLER], [b, head - 5.0 - HEAD_FILLER], [b, head - 5.0], [a, head - 5.0]]
+    out.append(_prism(strip, 0.0, length, dict(place), "ridge_filler", "%s Head Verge Filler" % name, name))
+    # and those on the roof, between the seams: as under a ridge cap
+    edge = r["v"] - HEAD_COVER
+    upstand = _slot(r) + r["k"] * face
+    low = min(edge + FILLER_EDGE, upstand - FILLER_GAP - FILLER_W)
+    out += _fillers(p, elev, r, low, meshes, face)
+    rec = dict(cap["head_info"], u0=round(h["u0"], 1), u1=round(h["u1"], 1), v=round(h["v"], 1),
+               gap=RIDGE_GAP, clip_room=round(low - edge - 10.0, 1))
+    if "head" in info:
+        info.setdefault("head_more", []).append(rec)
+    else:
+        info["head"] = rec
+    return out

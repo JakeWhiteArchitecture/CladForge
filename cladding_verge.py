@@ -500,6 +500,9 @@ def _cut_end(m, cuts, at_start=True):
     return out
 
 
+JOIN_ALONG = 0.97     # an eaves drip at least this square to the verge (cos): a raking eaves' (EAVES_RAKE) too
+
+
 def join_drips(meshes, p):
     """Where an eaves meets a G3 verge, close the corner: the eaves drip runs on out to the
     outside of the verge's drip, and **the verge drip comes down the slope to the back of
@@ -523,8 +526,9 @@ def join_drips(meshes, p):
                      and " Verge Flashing " in m.get("name", "") + " " and not m.get("drip_end")]
         clips = [m for m in out_meshes if m.get("elevation") == name and m.get("ifc_type") == "verge_strip"
                  and " Verge Clip " in m.get("name", "") + " " and not m.get("drip_end")]
+        # (a raking eaves' drip runs along its edge, a little off the face's u: EAVES_RAKE)
         eaves = [m for m in out_meshes if m.get("elevation") == name and m.get("eaves_info") and m.get("tray_sheet")
-                 and abs(dot(m["frame"]["n"], U)) > 0.99]
+                 and abs(dot(m["frame"]["n"], U)) > JOIN_ALONG]
         if not (verge or flashings) or not eaves:
             continue
         N = [float(c) for c in frame["n"]]
@@ -565,7 +569,7 @@ def join_drips(meshes, p):
             # the eaves drip nearest this verge, and which of its ends is there
             def end_u(m):
                 a = uv(m["frame"]["origin"])[0]
-                b = a + float(m["thickness"]) * (1.0 if dot(m["frame"]["n"], U) > 0 else -1.0)
+                b = a + float(m["thickness"]) * dot(m["frame"]["n"], U)
                 return a, b
             near = min(eaves, key=lambda m: min(abs(x - ue) for x in end_u(m)))
             a, b = end_u(near)
@@ -578,25 +582,28 @@ def join_drips(meshes, p):
             clad = bool(extras) or " Verge Flashing " in low.get("name", "") + " "
             inside = min(x for x, _y in low["profile"])
             target = ue + side * ((inside - 0.5) if clad else (reach + 1.0))
+            along = abs(dot(near["frame"]["n"], U))                       # its length per mm of u
             fwd = dot(near["frame"]["n"], U) > 0
             at_start = (side < 0) == fwd                                   # the verge is at the eaves drip's start
             if at_start:
-                grow = abs(min(a, b) - target) if side < 0 else abs(target - max(a, b))
+                grow = (abs(min(a, b) - target) if side < 0 else abs(target - max(a, b))) / along
                 near["frame"] = dict(near["frame"], origin=[c - grow * k for c, k in zip(near["frame"]["origin"], near["frame"]["n"])])
                 near["thickness"] = float(near["thickness"]) + grow
             else:
-                near["thickness"] = float(near["thickness"]) + (abs(target - max(a, b)) if side > 0 else abs(min(a, b) - target))
+                near["thickness"] = float(near["thickness"]) + (abs(target - max(a, b)) if side > 0 else abs(min(a, b) - target)) / along
+            # the drip's end at this verge, as a depth along it
+            d_end = float(near["depth"]) if at_start else float(near["depth"]) + float(near["thickness"])
             t = float(p["seam_t"])
             # the back of the eaves drip's drop: a plane along the eaves, plumb, through the drop's inside face
             ux, uy = near["drip_under"]
-            under = frame_to_world(near["frame"], ux, uy, float(near["depth"]))
+            under = frame_to_world(near["frame"], ux, uy, d_end)
             up = [V[0], V[1], 0.0]
             hs = dot(up, up) ** 0.5
             up = [c / hs for c in up]                                      # level, up the slope
             back = [c + t / 2.0 * k for c, k in zip(under, up)]
             # the mitre of the two bullnoses: square to the roof, through the corner of their outsides
             e_reach = max(x for x, _y in near["profile"])                   # the eaves drip's outside, down the slope from its line
-            e_line = uv(frame_to_world(near["frame"], 0.0, 0.0, float(near["depth"])))[1]
+            e_line = uv(frame_to_world(near["frame"], 0.0, 0.0, d_end))[1]
             corner = frame_to_world(frame, ue + side * reach, e_line - e_reach, 0.0)
             mitre = [side * U[i] + V[i] for i in range(3)]
             # where the eaves drip's drop stops: the outside of the G3 verge drip's drop; with
@@ -606,8 +613,7 @@ def join_drips(meshes, p):
             # with cladding the flashing's drop runs on out to the front of the eaves drip (its
             # bullnose, under the edge seam's end), and is cut plumb there, closing the side of
             # the eaves drip and the space under its bullnose
-            front = min((frame_to_world(near["frame"], x, y, d) for d in (float(near["depth"]), float(near["depth"]) + float(near["thickness"]))
-                         for x, y in near["profile"]), key=lambda q: dot(q, up))
+            front = min((frame_to_world(near["frame"], x, y, d_end) for x, y in near["profile"]), key=lambda q: dot(q, up))
             # bring the verge drip down past the eaves, then cut both at the corner
             v_start = min(uv(back)[1], uv(front)[1]) - 200.0
             for piece in [low] + extras:

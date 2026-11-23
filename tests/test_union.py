@@ -64,6 +64,37 @@ def test_overlapping_pieces_union_to_one_solid_with_merged_faces():
     assert _volume(v, t) == pytest.approx(200 * 100 * 100, rel=1e-5)
 
 
+
+def test_a_tray_far_from_the_origin_goes_out_as_flat_faces_not_triangles():
+    """On the job the roof is metres from the origin, and the trays came out of the IFC as
+    a hundred-odd triangles each, drawn as lines across them: two triangles a hair out of
+    line, read as a plane's offset from the origin, were millimetres apart. Each tray of a
+    pitched roof, moved 18 m off, is a closed shell of polygon faces with only the odd
+    triangle the shape really has."""
+    _params, out = _one()
+    groups = _elements_of_pieces(out)
+    trays = [g for n, g in groups.items() if " Tray " in n]
+    assert trays
+    for pieces in trays[:6]:
+        moved = []
+        for m in pieces:
+            fr = dict(m["frame"], origin=[m["frame"]["origin"][0] + 18000.0, m["frame"]["origin"][1] - 14000.0,
+                                          m["frame"]["origin"][2] + 3000.0])
+            moved.append(dict(m, frame=fr))
+        got = union_pieces([piece_mesh(m) for m in moved])
+        assert got is not None
+        fs = faces(*got)
+        edges = {}
+        for outer, inner in fs:
+            for ring in [outer] + inner:
+                for k in range(len(ring)):
+                    e = (ring[k], ring[(k + 1) % len(ring)])
+                    edges[e] = edges.get(e, 0) + 1
+        assert all(n == 1 and edges.get((e[1], e[0])) == 1 for e, n in edges.items())     # still closed
+        assert sum(1 for o, h in fs if len(o) == 3 and not h) <= 4, len(fs)
+        assert len(fs) < len(got[1]) / 2
+
+
 def test_without_a_union_the_pieces_go_out_as_they_were(monkeypatch):
     params, out = _one()
     monkeypatch.setattr(cladding_union, "_native", lambda pieces: None)

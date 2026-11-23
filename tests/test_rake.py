@@ -243,3 +243,25 @@ def test_a_level_cut_profile_stands_in_the_ifc_where_it_was_built(clad, part):
     scale = 1000.0 if max(abs(c) for c in verts) < 100.0 else 1.0
     xyz = [[verts[i + k] * scale for i in range(0, len(verts), 3)] for k in range(3)]
     assert [min(a) for a in xyz] + [max(a) for a in xyz] == pytest.approx(box, abs=0.5)
+
+
+@pytest.mark.parametrize("lean", [10.0, -10.0])
+def test_standing_seams_stay_plumb_beside_a_steep_raking_corner(lean):
+    """A wall leaning 10° turns a corner on a line only 10° off plumb, so the trays' seams
+    beside it are nearly along it. The job's last seam on the upright wall was skewed: its
+    foot was moved square to the line, as for a tray side well off it, instead of sliding
+    down its own (plumb) line to where the mitre is. Every edge of every tray is plumb,
+    level, or on the corner."""
+    (a, b), params, out = _build(lean, **dict(cladding_type="plank", plank_profile="seam", plank_orient="vertical"))
+    for face in ("Leaning", "Upright"):
+        rec = next(e for e in params["elevations"] if e["name"] == face)["valleys"][0]
+        (x1, y1), (x2, y2) = rec["p1"], rec["p2"]
+        L = math.hypot(x2 - x1, y2 - y1)
+        off = lambda q: abs((q[0] - x1) * (y2 - y1) - (q[1] - y1) * (x2 - x1)) / L      # noqa: E731
+        trays = [m for m in out["geometry"] if m["elevation"] == face and m["ifc_type"] == "plank"]
+        assert trays
+        for m in trays:
+            ring = m["profile"]
+            for q, r in zip(ring, ring[1:] + ring[:1]):
+                plumb_or_level = abs(q[0] - r[0]) < 0.5 or abs(q[1] - r[1]) < 0.5
+                assert plumb_or_level or (off(q) < 120.0 and off(r) < 120.0), (face, m["name"], q, r)

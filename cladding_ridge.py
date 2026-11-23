@@ -83,6 +83,17 @@ def head_ridge_of(elev):
     return ridge_of(dict(elev, ridge=None))
 
 
+def head_more_of(elev):
+    """The face's other head verges, on a top with more than one (cladding_head.head_ridges):
+    each cut as half a ridge, as ridge_of gives the first."""
+    out = []
+    for h in (elev or {}).get("head_more") or []:
+        r = ridge_of(dict(elev, ridge=None, head_ridge=h))
+        if r:
+            out.append(r)
+    return out
+
+
 JOIN_TOL = 40.0       # mm – a hip's end this close to an end of the ridge runs into it
 
 
@@ -125,7 +136,8 @@ def ridge_ends(meshes, p, infos):
     as a shift per ring vertex ("vshift": v += c + d·s, s the depth) to any the part has.
     Returns the meshes with the trays' turned-up ends added."""
     # a face's ridge, and a head verge on another stretch of its top where it has both (head_ridge_of)
-    faces = {e.get("name"): ([r for r in (ridge_of(e), head_ridge_of(e)) if r], e["frame"]) for e in p.get("elevations", [])}
+    faces = {e.get("name"): ([r for r in (ridge_of(e), head_ridge_of(e)) if r] + head_more_of(e), e["frame"])
+             for e in p.get("elevations", [])}
     face_by = {i["elevation"]: float(i.get("total_depth") or 0.0) for i in infos}
     board, extra = _board(p), []
     for m in meshes:

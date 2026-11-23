@@ -80,6 +80,9 @@ def _along(q, h):
     return (q[0] - h["p1"][0]) * dx + (q[1] - h["p1"][1]) * dy
 
 
+SLIDE_MIN = 0.1       # sine – an edge further off the line than this slides along itself to it; one nearer, square to it
+
+
 def _at_hip(ring, h, tol):
     """For each vertex of *ring*: None, or the unit direction to slide it in to bring it to
     the hip. A vertex is an end at the hip when an edge it is on lies along the hip line,
@@ -99,7 +102,9 @@ def _at_hip(ring, h, tol):
             sides = [(ring[j], near[j], lean(q, ring[j])) for j in ((i - 1) % n, (i + 1) % n)]
             on = [s for s in sides if s[1] and s[2] is not None and s[2] <= ALONG]
             if on:
-                off = [s for s in sides if s not in on and s[2] is not None and s[2] > 0.2]
+                # (a seam beside a leaning wall's corner is barely off that line, 10° at 80°,
+                # and still slides along itself: kept plumb, not skewed to the corner)
+                off = [s for s in sides if s not in on and s[2] is not None and s[2] > SLIDE_MIN]
                 if off:
                     r = off[0][0]
                     size = math.hypot(q[0] - r[0], q[1] - r[1])

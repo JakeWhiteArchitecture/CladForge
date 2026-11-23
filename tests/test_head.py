@@ -218,3 +218,33 @@ def test_a_face_with_a_ridge_elsewhere_still_takes_its_head_verge():
     wall = dict(w, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[rec("a", "Roof")])
     out = generate_preview({"elevations": [wall, roof], "trim": True, "splash": 0})
     assert [m for m in out["geometry"] if "Head Verge Cap" in (m.get("name") or "")], "the head verge on the higher part"
+
+
+def test_a_top_over_a_wall_for_part_of_its_length_takes_a_free_head_for_the_rest():
+    """The job's big roofs: the top edge stands over a clerestory wall for a few metres and
+    steps over a lower roof for the rest. With the chain asking for G3 heads, both stretches
+    get a cap: the one over the wall turned down over its cladding, the rest a free head
+    (a monopitch ridge), and the trays are cut to each. Only the wall's stretch had one."""
+    t, s, c = math.tan(math.radians(15.0)), math.sin(math.radians(15.0)), math.cos(math.radians(15.0))
+    w = _face("Wall", [[0, 0, 0], [2000, 0, 0], [2000, 0, H], [0, 0, H]], (0, -1, 0))
+    r = _face("Roof", [[6000, 0, H], [0, 0, H], [0, 3000, H - 3000 * t], [6000, 3000, H - 3000 * t]], (0, s, c))
+    link = head_link(w, r)
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    roof = dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none", eaves="none", head="g3")
+    wall = dict(w, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[rec("a", "Roof")])
+    out = generate_preview({"elevations": [wall, roof], "trim": True, "splash": 0})
+    caps = [m for m in out["geometry"] if m["ifc_type"] == "ridge_cap" and m["elevation"] == "Roof"]
+    assert len(caps) == 2
+    info = next(i for i in out["info"] if i["elevation"] == "Roof")
+    heads = [info["head"]] + info.get("head_more", [])
+    assert sorted(round(h["length"]) for h in heads) == [2000, 4000]
+    assert {h["over"] for h in heads} == {"Wall", None}
+    # the trays are cut plumb to each head (their top ends sheared with depth): past the wall
+    # at the roof's edge, under the free head's cap; over the wall run on over its cladding
+    over = next(h for h in heads if h["over"])
+    trays = [m for m in out["geometry"] if m["elevation"] == "Roof" and m["ifc_type"] == "plank"]
+    free = [m for m in trays if max(q[0] for q in m["profile"]) < over["u0"] - 100.0 or min(q[0] for q in m["profile"]) > over["u1"] + 100.0]
+    walled = [m for m in trays if over["u0"] + 100.0 < min(q[0] for q in m["profile"]) and max(q[0] for q in m["profile"]) < over["u1"] - 100.0]
+    assert free and walled and all(m.get("vshift") for m in free + walled)
+    assert max(q[1] for m in free for q in m["profile"]) <= float(r["height"]) + 1.0
+    assert min(q[1] for m in walled for q in m["profile"] if q[1] > 1000.0) > float(r["height"]) + 30.0
