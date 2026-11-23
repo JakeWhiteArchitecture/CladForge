@@ -71,14 +71,15 @@ works on static hosting: copy `templates/index.html` to the root next to
 `static/` and the `.py` files, and the only thing lost is that import fallback.
 
 **Runtimes and schema.** IFC export runs through the IfcOpenShell WASM wheel
-in the browser, so the runtime pins matter: **Pyodide 0.29.0** (CPython 3.13,
-`pyodide_2025_0`) with **IfcOpenShell 0.8.5**, which carries IFC2X3, IFC4 and
+in the browser, so the runtime pins matter: **Pyodide 0.29.5** (CPython 3.13,
+ABI `2025_0`) with **IfcOpenShell 0.8.5**, which carries IFC2X3, IFC4 and
 IFC4X3_ADD2. The export writes IFC4X3 unless IFC4 or IFC2x3 is chosen, with no server involved.
 
 The pins are a matched set, not three independent choices. The wheel's ABI tag
 has to match the Pyodide build, and Shapely — which the whole engine rests on —
 has to exist for that build. Pyodide 0.29 ships Shapely 2.0.7 and numpy 2.2.5,
-which is what makes this combination work. An earlier pairing (Pyodide 0.27.4
+which is what makes this combination work. 0.29.5 rather than 0.29.0 because its Shapely
+raises a GEOS error as a Python exception, where 0.29.0's aborted the whole engine. An earlier pairing (Pyodide 0.27.4
 with IfcOpenShell 0.8.2) had no IFC4X3 at all, and asking that build for one
 killed the runtime rather than raising something Python could catch — so
 `_create_file` asks `schema_names()` which schemas the build has and takes the
