@@ -974,9 +974,28 @@ HEAD_OVERSAIL = 150.0     # mm – a monopitch's top edge on a wall's head may s
 VALLEY_MIN = 300.0        # mm – two slopes share at least this much valley, or it is not one
 
 
-def _centre(elev):
-    """A point well inside the face, in its own (u, v): the centroid of its largest patch."""
-    best = max((Polygon(pg["exterior"]) for pg in elev.get("polygons") or []), key=lambda g: g.area, default=None)
+def _centre(elev, other=None):
+    """A point well inside the face, in its own (u, v): the centroid of its largest patch;
+    or, given *other*, of the patch that runs along *other*'s plane (the most of its edges
+    within VALLEY_ON of it). A face of two patches (two roofs in one plane) is judged by the
+    one at the junction: by the far one, a valley read as lying behind the other slope."""
+    pgs = [pg for pg in elev.get("polygons") or []]
+    best = None
+    if other is not None and len(pgs) > 1:
+        fo, f = other["frame"], elev["frame"]
+        def along(pg):
+            ring, run = pg["exterior"], 0.0
+            for q, r in zip(ring, ring[1:] + ring[:1]):
+                P, Q = _at(f, q[0], q[1]), _at(f, r[0], r[1])
+                if max(abs(_dot(fo["n"], _sub(P, fo["origin"]))), abs(_dot(fo["n"], _sub(Q, fo["origin"])))) <= VALLEY_ON:
+                    run += math.dist(P, Q)
+            return run
+        runs = [(along(pg), pg) for pg in pgs]
+        top = max(runs, key=lambda t: t[0])
+        if top[0] > 0.0:
+            best = Polygon(top[1]["exterior"])
+    if best is None:
+        best = max((Polygon(pg["exterior"]) for pg in pgs), key=lambda g: g.area, default=None)
     return (best.centroid.x, best.centroid.y) if best is not None else (float(elev["width"]) / 2, float(elev["height"]) / 2)
 
 
@@ -1065,7 +1084,7 @@ def _roof_link(a, b, kind):
     if size < 0.05:
         return None                                   # parallel
     line = tuple(c / size for c in line)
-    ca, cb = _at(fa, *_centre(a)), _at(fb, *_centre(b))
+    ca, cb = _at(fa, *_centre(a, b)), _at(fb, *_centre(b, a))
     front_a, front_b = _dot(nb, _sub(ca, fb["origin"])), _dot(na, _sub(cb, fa["origin"]))
     if kind == "valley" and (front_a <= 0 or front_b <= 0):
         return None                                   # one lies behind the other: a ridge or a hip
@@ -1116,7 +1135,7 @@ def _roof_link(a, b, kind):
         up = _cross(tuple(other["frame"]["n"]), line)                 # in the other face, square to the line
         if _dot(up, _sub(centre, base)) < 0:
             up = tuple(-c for c in up)
-        return {"kind": kind, "p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e)],
+        return {"kind": kind, "p1": local(ends[0]), "p2": local(ends[1]), "inside": [round(c, 1) for c in _centre(e, other)],
                 "other_up": [round(c, 9) for c in up], "other_n": [round(c, 9) for c in n_other]}
     k = math.tan(beta / 2.0)
     out = {"kind": kind, "a": side(a, cb, b, nb), "b": side(b, ca, a, na),

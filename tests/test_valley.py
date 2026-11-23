@@ -212,3 +212,23 @@ def test_the_valley_exports_to_ifc_and_dxf():
     assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(own_elements(out["geometry"]))
     assert all(len(i["valley_strips"]) == 1 for i in out["info"])
     assert "ROOF A" in meshes_to_dxf_string(out["geometry"], params, out["info"])
+
+
+def test_a_face_of_two_patches_is_judged_by_the_one_at_the_valley():
+    """Roof A is two roofs in one plane, the bigger one far off and, taken whole, behind
+    roof C's plane (a real model's canopy valley). Judged by its biggest patch the valley
+    read as a slope lying behind the other and was not found; the patch at the valley is
+    the one that counts."""
+    import math as _m
+    ta = tc = _m.tan(_m.radians(30.0))
+    tris = []
+    for plan in ([(0, 0), (3000, 3000), (3000, 6000), (0, 6000)], [(8000, 0), (14000, 0), (14000, 3000), (8000, 3000)]):
+        pts = [[x, y, y * ta] for x, y in plan]
+        tris += [[pts[0], pts[i], pts[i + 1]] for i in range(1, len(pts) - 1)]
+    a = extract_elevation({"name": "Roof A", "faces": tris, "outward": [0.0, -_m.sin(_m.atan(ta)), _m.cos(_m.atan(ta))], "context": [],
+                           "options": {"debug": False, "clad_depth": 150.0}})
+    c = _face("Roof C", [(0, 0), (6000, 0), (6000, 3000), (3000, 3000)], lambda x, y: x * tc,
+              (-_m.sin(_m.atan(tc)), 0.0, _m.cos(_m.atan(tc))))
+    assert len(a["polygons"]) == 2
+    link = valley_link(a, c)
+    assert link and link["kind"] == "valley" and link["length"] > 3000.0
