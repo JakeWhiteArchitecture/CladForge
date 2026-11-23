@@ -505,14 +505,6 @@ def clip_bounds_v(elev):
     lo = max(0.0, float(elev.get("clip_v_lo") or 0.0))
     hi = elev.get("clip_v_hi")
     hi = min(height, float(hi)) if hi is not None else height
-    # a slope modelled running on past its ridge (fabric_extract.RIDGE_PAST) stops at the ridge line
-    ridge = elev.get("ridge") or {}
-    try:
-        top = float(ridge.get("v")) if ridge.get("with") else None
-    except (TypeError, ValueError):
-        top = None
-    if top is not None and lo + 1.0 < top < hi - 1.0:
-        hi = top
     return (lo, hi) if hi - lo > 1.0 else (0.0, height)
 
 

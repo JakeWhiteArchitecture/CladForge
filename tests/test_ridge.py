@@ -320,3 +320,18 @@ def test_a_slope_modelled_running_on_past_its_ridge_still_meets_the_other_and_is
     worst = min(_off_ridge(m)[0] for m in out["geometry"] if m.get("elevation") == "Roof A" and not m.get("ridge_info")
                 and m.get("ifc_type") in ("plank", "batten", "deck", "counter_batten", "seam"))
     assert worst > -1.0, "nothing of the slope past the ridge line"
+
+
+def test_a_slope_modelled_short_of_its_ridge_is_carried_up_to_it():
+    """The other side of a ridge between two roofs drawn apart: one slope stops 250 mm short
+    of the line. Its cladding is carried up to the ridge as the other's is, not left short
+    with the model's deck showing under the cap."""
+    a, b = _slope("Roof A", top=2750.0), _slope("Roof B", mirrored=True)
+    link = chain_link(a, b)
+    assert link and link["kind"] == "ridge"
+    a, b = _paired(a, b, link)
+    out = generate_preview({"elevations": [a, b], "trim": True, "splash": 0})
+    trays = [m for m in out["geometry"] if m.get("elevation") == "Roof A" and m.get("ifc_type") == "plank"]
+    other = [m for m in out["geometry"] if m.get("elevation") == "Roof B" and m.get("ifc_type") == "plank"]
+    near = lambda ms: min(_off_ridge(m)[0] for m in ms)          # noqa: E731
+    assert near(trays) == pytest.approx(near(other), abs=2.0), "both slopes' trays stop the same distance off the ridge"

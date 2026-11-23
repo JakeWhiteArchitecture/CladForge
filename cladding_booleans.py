@@ -18,7 +18,7 @@ import math
 
 import shapely
 
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, Polygon, box
 from shapely.geometry.polygon import orient
 from shapely.affinity import scale
 from shapely.ops import unary_union
@@ -165,10 +165,68 @@ def region_polygon(elev):
         return polys[0]
 
 
+RIDGE_REACH = 400.0      # mm – a slope's top edge this far short of its ridge line is carried up to it (fabric_extract.CORNER_TOL)
+
+
+def to_ridge(elev):
+    """A slope's outline brought to its ridge line: what of it was modelled running on past
+    the line is cut off (fabric_extract.RIDGE_PAST), and a top edge modelled short of it,
+    by up to RIDGE_REACH, is carried up to it, so both slopes' cladding meets under the
+    cap. It acts along the level top edges the ridge lies on, each over its whole length
+    (one straight top edge comes down to the line all along, not only where the other
+    slope is), and leaves the rest of the face (a stepped top, another edge) as it is."""
+    ridge = elev.get("ridge") or {}
+    try:
+        v, u0, u1 = float(ridge["v"]), float(ridge["u0"]), float(ridge["u1"])
+    except (KeyError, TypeError, ValueError):
+        return elev
+    if not ridge.get("with") or u1 - u0 < 1.0:
+        return elev
+    lo_v, hi_v = v - RIDGE_REACH, v + 1000.0
+    # the level top edges the ridge acts on: near the line and overlapping its stretch
+    spans = []
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        for q, r in zip(ring, ring[1:] + ring[:1]):
+            if abs(q[1] - r[1]) <= 5.0 and abs(q[0] - r[0]) > 50.0 and lo_v <= (q[1] + r[1]) / 2.0 <= hi_v:
+                a0, a1 = sorted((q[0], r[0]))
+                if a1 > u0 + 1.0 and a0 < u1 - 1.0:
+                    spans.append((a0, a1))
+    if not spans:
+        return elev
+    w0, w1 = min(min(x for x, _y in spans), u0), max(max(y for _x, y in spans), u1)
+    try:
+        shape = unary_union([Polygon(pg["exterior"], pg.get("holes") or []).buffer(0) for pg in elev.get("polygons") or []])
+    except Exception:   # noqa: BLE001
+        return elev
+    cut = _difference(shape, box(w0 - 1.0, v, w1 + 1.0, v + 1e6))
+    if cut is None or cut.is_empty:
+        return elev
+    polygons = []
+    for part in iter_polygons(cut):
+        if part.area <= 1.0:
+            continue
+        ext, holes = polygon_to_rings(part)
+        # a top corner short of the line, nothing of the face above it: raised to the line
+        raised = [[x, v] if (w0 - 1.0 <= x <= w1 + 1.0 and lo_v < y < v - 0.5 and not part.contains(Point(x, y + 2.0))) else [x, y]
+                  for x, y in ext]
+        pg = Polygon(raised, holes).buffer(0)
+        for piece in iter_polygons(pg):
+            if piece.area > 1.0:
+                e2, h2 = polygon_to_rings(piece)
+                polygons.append({"exterior": e2, "holes": h2})
+    if not polygons:
+        return elev
+    top = max(q[1] for pg in polygons for q in pg["exterior"])
+    return dict(elev, polygons=polygons, height=max(top, 1.0))
+
+
 def clip_elevation(elev):
     """The elevation with its polygons cut back to the clad part of the face: sideways
     where a wall runs past a corner, because the rest of it belongs to the other face,
-    and vertically to the top and bottom levels picked for the chain."""
+    and vertically to the top and bottom levels picked for the chain. A slope is first
+    brought to its ridge line (to_ridge)."""
+    elev = to_ridge(elev)
     lo, hi = clip_bounds(elev)
     v_lo, v_hi = clip_bounds_v(elev)
     if (lo <= 0.001 and hi >= float(elev["width"]) - 0.001
