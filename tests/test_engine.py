@@ -259,3 +259,19 @@ def test_an_intricate_element_is_sectioned_on_the_grid():
     straddles, touches, poly, _pts = _section(tris, (0.0, -1.0, 0.0), 0.0, (1.0, 0.0, 0.0))
     assert straddles and touches and poly is not None and poly.is_valid
     assert poly.area == pytest.approx(1000.0 * 200.0, rel=0.01)
+
+
+def test_a_penetration_is_cut_on_the_grid_where_anything_nearly_meets():
+    """A face beside a neighbouring slope modelled a hair off the hip: its edge and the
+    slope's cut nearly coincide, which GEOS can fail to node (an abort in the browser). The
+    cut is taken on the 0.01 mm grid there; a clean face keeps its exact coordinates."""
+    from shapely.geometry import Polygon
+    from fabric_extract import _cut_out
+    face = Polygon([(0, 0), (3000, 0), (3000, 3000), (0, 3000)])
+    off = Polygon([(-500, 2999.996), (2000.003, 2999.996), (2000.003, 4000), (-500, 4000)])   # 0.004 mm into the face
+    cut = _cut_out(face, off)
+    assert cut.is_valid and abs(cut.area - 3000 * 3000) < 30.0
+    assert all(abs(c * 100 - round(c * 100)) < 1e-6 for x, y in cut.exterior.coords for c in (x, y))   # on the grid
+    clean = Polygon([(1000.123456, 1000), (1500, 1000), (1500, 1500), (1000.123456, 1500)])
+    exact = _cut_out(face, clean)
+    assert 1000.123456 in [round(x, 6) for x, _y in exact.interiors[0].coords]

@@ -30,6 +30,7 @@ import math
 import time
 from functools import lru_cache
 
+import shapely
 from shapely.geometry import Polygon, MultiPoint, LineString, Point
 from shapely import union_all
 from shapely.ops import unary_union, polygonize
@@ -258,6 +259,17 @@ def _union(geoms):
     if len(geoms) > 1 and near_misses(geoms):
         return union_all(geoms, grid_size=ROBUST_GRID)
     return unary_union(geoms)
+
+
+def _cut_out(region, cut):
+    """*region* minus *cut*, on the 0.01 mm grid (where GEOS's snap-rounding always nodes)
+    wherever anything nearly meets: across the two, as _difference looks, and also within
+    either, a face already cut by its neighbours' penetrations, or a neighbouring slope
+    modelled a hair off a hip. Exactly otherwise, so a clean face keeps its coordinates."""
+    from cladding_booleans import _areal
+    if near_misses([region], [cut]) or near_misses([region]) or near_misses([cut]):
+        return shapely.difference(_areal(region), _areal(cut), grid_size=ROBUST_GRID)
+    return _difference(region, cut)
 
 
 def _union_faces(faces, n, u):
@@ -610,10 +622,13 @@ def _extract(payload):
             cut_poly = _cut_round_heals(cut_poly, elem, strips, shadow)
             if cut_poly is None or cut_poly.is_empty:
                 continue
-            if cut_poly.intersection(region).area > MIN_HOLE_AREA:
-                cut = _difference(region, cut_poly)
-                if cut is not None and not cut.is_empty:
-                    region = cut
+            # one overlay, no plain intersection first, and on the grid where anything nearly
+            # meets: an element modelled a hair off the face's edge (a neighbouring slope not
+            # quite meeting it on a hip), or penetrations side by side, leave edges GEOS can
+            # fail to node, an abort in the browser: picking a face beside an imperfect hip
+            cut = _cut_out(region, cut_poly)
+            if cut is not None and not cut.is_empty and region.area - cut.area > MIN_HOLE_AREA:
+                region = cut
         except Exception:
             continue
 
@@ -740,10 +755,11 @@ def _cut_round_heals(cut, elem, strips, shadow=None):
             if not whole:
                 continue
             whole = _union(whole + ([cut] if cut is not None and not cut.is_empty else []))
-            part = whole.intersection(shape)
-            if part.is_empty or part.area < 1.0:
+            part = _intersection(whole, shape)
+            if part is None or part.is_empty or part.area < 1.0:
                 continue
-            on = _union([part, translate(part, step[0], step[1])]).convex_hull.intersection(shape)
+            on = _intersection(_union([part, translate(part, step[0], step[1])]).convex_hull, shape)
+            on = Polygon() if on is None else on
             cut = whole if on.is_empty else _union([whole, on])
         except Exception:   # noqa: BLE001 — left as the plain cut
             continue
@@ -841,9 +857,9 @@ def _seeded(region, seeds, u, tol=100.0, n=None):
             hit = min(parts, key=lambda pg: pg.distance(q))
             if hit.distance(q) > tol:
                 continue
-        if not any(hit.equals(k) for k in keep):
+        if not any(hit is k for k in keep):
             keep.append(hit)
-    return (unary_union(keep), len(parts) - len(keep)) if keep else (region, 0)
+    return (_union(keep), len(parts) - len(keep)) if keep else (region, 0)
 
 
 def _notches(polygons, limit=300.0):
