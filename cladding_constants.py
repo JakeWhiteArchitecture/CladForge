@@ -2,6 +2,23 @@
 Every generated element is a "prism": a 2D profile in an elevation's local (u, v)
 frame extruded outward along the wall normal."""
 
+try:                                   # in the browser: the page, for crumb()
+    import js as _js                   # noqa: F401
+except ImportError:
+    _js = None
+
+
+def crumb(text):
+    """Where the engine is: in the browser, left on the page as it goes. An abort inside
+    WASM (GEOS, running out of heap) kills Python outright, so the app reads this to say
+    which step, on which faces, the engine died in. Cleared ("") once a call is done."""
+    if _js is not None:
+        try:
+            _js.globalThis._engineStep = text
+        except Exception:      # pragma: no cover
+            pass
+
+
 TOOL_NAME = "CladForge"
 TOOL_URL = "https://jakewhitearchitecture.com/cladforge/"
 IFC_SCHEMA_LABEL = "IFC4X3"

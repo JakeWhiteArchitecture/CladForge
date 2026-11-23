@@ -35,6 +35,7 @@ from shapely import union_all
 from shapely.ops import unary_union, polygonize
 from shapely.affinity import translate
 
+from cladding_constants import crumb
 from cladding_booleans import iter_polygons, polygon_to_rings, _difference, _intersection, near_misses, ROBUST_GRID
 
 PLANE_TOL = 25.0          # mm – off-plane distance still treated as on the face
@@ -406,7 +407,9 @@ def extract_elevation(payload):
     """Main entry point. See module docstring for the payload format.
     Never raises: a failure comes back as ok=False with the reason in warnings."""
     try:
-        return _extract(payload)
+        out = _extract(payload)
+        crumb("")
+        return out
     except Exception as exc:   # noqa: BLE001 — surfaced to the UI, never silent
         return {"ok": False, "name": payload.get("name") or "Elevation", "n_faces": 0,
                 "warnings": ["Extraction failed: %s: %s" % (type(exc).__name__, exc)]}
@@ -416,6 +419,7 @@ def _say(on, msg):
     """Print a stage as it starts. Pyodide blocks the page while it runs, so a slow or
     hung extraction paints nothing — the console trail is the only way to see where it
     stopped. The last line printed names the stage that did not finish."""
+    crumb("extracting %s" % msg.strip())        # left on the page whatever: an abort is not printed
     if on:
         print("[extract] %s" % msg, flush=True)
 
@@ -455,16 +459,19 @@ def _extract(payload):
     if not faces:
         result["warnings"].append("No faces picked")
         return result
+    _say(False, "%s: fitting the plane to %d faces" % (name, len(faces)))
     n, d, warnings = fit_plane(faces, payload.get("outward"))
     result["warnings"] += warnings
     if n is None:
         return result
     u = face_axis(n, faces)
     result["pitch"], result["faces_down"] = round(face_pitch(n), 1), n[2] < 0
+    _say(False, "%s: joining the faces into one outline" % name)
     region = _union_faces(faces, n, u)
     # What was trimmed off the face (heal_link's "trim", the app's tick): outlines in the
     # world, each the part of the face that ran on past the line it meets another on.
     for ring in payload.get("trims") or []:
+        _say(False, "%s: trimming it back" % name)
         try:
             cut = Polygon([_to_local(tuple(float(c) for c in q), n, u) for q in ring])
             cut = cut if cut.is_valid else cut.buffer(0)
@@ -523,6 +530,7 @@ def _extract(payload):
             _say(dbg, "  DEADLINE reached — skipping %d remaining element(s)" % timed_out)
             break
         _say(dbg, "  %s (%s, %d tris)" % (elem.get("name") or "?", etype, len(elem["tris"])))
+        crumb("extracting %s: reading %s (%s)" % (name, elem.get("name") or "?", etype))
         _t0 = time.perf_counter()
         try:   # one awkward element must not sink the whole extraction
             tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
@@ -580,7 +588,7 @@ def _extract(payload):
         except Exception:   # noqa: BLE001
             skipped += 1
         clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
-    _say(dbg, "  context done, cutting %d penetration(s)" % len(cuts))
+    _say(dbg, "  %s: context done, cutting %d penetration(s)" % (name, len(cuts)))
     if skipped:
         result["warnings"].append("%d context element(s) could not be sectioned and were ignored" % skipped)
     result["posts_passed"] = _passed_report(passed)
@@ -622,7 +630,7 @@ def _extract(payload):
     if len(polygons) > 1:
         result["warnings"].append("%d separate patches merged into one elevation" % len(polygons))
 
-    _say(dbg, "  seeding and notches")
+    _say(dbg, "  %s: seeding and notches" % name)
     notches = _notches(polygons)
     # the lines it was healed to: it stands at them though its cladding may stop short (heal_link)
     result["healed"] = [[[round(float(c), 2) for c in h["quad"][3]], [round(float(c), 2) for c in h["quad"][2]]] for h in heals]
@@ -1161,8 +1169,11 @@ def valley_links(a, others):
     """For each of *others*, in order: how it meets a, at a valley (valley_link), a hip
     (hip_link), a raking corner (rake_link), an eaves on a wall (eaves_link), a monopitch's
     head (head_link) or a head-wall abutment (abut_link); None where it does none of them."""
-    return [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) or head_link(a, b) or abut_link(a, b)
-            for b in others]
+    crumb("finding where faces meet (valleys, hips, eaves)")
+    out = [valley_link(a, b) or hip_link(a, b) or rake_link(a, b) or eaves_link(a, b) or head_link(a, b) or abut_link(a, b)
+           for b in others]
+    crumb("")
+    return out
 
 
 HEAL_MAX = 500.0          # mm – an edge this far or less from the line two faces would meet on nearly touches it

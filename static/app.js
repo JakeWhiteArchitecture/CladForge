@@ -1005,7 +1005,9 @@ _json.dumps(_ex(_pl))`);
             restartEngine();         // resumes every elevation still without a result
             return;
         }
-        e.result = null; e.error = 'Extraction error: ' + err.message;
+        // the same stage killed it again: say where (cladding_constants.crumb)
+        const where = /fatally failed|Aborted/i.test(err.message || '') ? (window._engineStep || window._engineDiedIn) : '';
+        e.result = null; e.error = 'Extraction error: ' + (where ? 'the engine crashed while ' + where + ' — ' : '') + err.message;
         log(`${e.name}: threw — ${err.message}`);
         setStatus(e.name + ': ' + e.error, 'busy');
     }

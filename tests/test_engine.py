@@ -187,7 +187,7 @@ def test_sliding_the_offset_keeps_the_batten_centres(elevation):
 def test_the_engine_leaves_where_it_is_on_the_page(elevation, monkeypatch):
     """An abort inside WASM kills Python outright, so as it builds the preview leaves the step
     and the faces it is on where the app can read them after a crash; cleared once done."""
-    import cladding_preview
+    import cladding_constants
 
     class Page:
         def __init__(self):
@@ -199,8 +199,23 @@ def test_the_engine_leaves_where_it_is_on_the_page(elevation, monkeypatch):
             object.__setattr__(self, name, value)
 
     page = Page()
-    monkeypatch.setattr(cladding_preview, "_js", type("JS", (), {"globalThis": page}))
+    monkeypatch.setattr(cladding_constants, "_js", type("JS", (), {"globalThis": page}))
     generate_preview({"elevations": [dict(elevation, offset=0)], "trim": True})
     assert "apply_boolean_ops (%s)" % elevation["name"] in page.seen
     assert any(s.startswith("hip_ends (") for s in page.seen)
     assert page.seen[-1] == ""
+
+
+def test_extraction_leaves_where_it_is_on_the_page_too(monkeypatch):
+    """Picking a face can kill the engine as well: extraction leaves its stage, down to the
+    nearby element it is reading, and clears it once done."""
+    import cladding_constants
+
+    seen = []
+    page = type("Page", (), {"__setattr__": lambda self, k, v: seen.append(v) if k == "_engineStep" else None})()
+    monkeypatch.setattr(cladding_constants, "_js", type("JS", (), {"globalThis": page}))
+    out = extract_elevation(dict(payload(), name="Elevation A"))
+    assert out["ok"]
+    assert any(s.startswith("extracting Elevation A: fitting the plane") for s in seen)
+    assert any(s.startswith("extracting Elevation A: reading ") for s in seen)
+    assert seen[-1] == ""

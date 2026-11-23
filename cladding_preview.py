@@ -27,11 +27,7 @@ from cladding_rake import rake_ends, rake_parts
 from cladding_window import window_parts
 from cladding_lod import at_lod, masses, tag  # noqa: F401 — at_lod is the app's and the exporters'
 from cladding_match import plan_matches
-
-try:                                   # in the browser: the page, for _crumb
-    import js as _js                   # noqa: F401
-except ImportError:
-    _js = None
+from cladding_constants import crumb
 
 
 def _prepare(p):
@@ -189,14 +185,8 @@ def generate_preview(params):
 
 
 def _crumb(text):
-    """Where the engine is: in the browser, left on the page as it goes. An abort inside
-    WASM (GEOS, running out of heap) kills Python outright, so the app reads this to say
-    which step, on which faces, the engine died in."""
-    if _js is not None:
-        try:
-            _js.globalThis._engineStep = text
-        except Exception:      # pragma: no cover
-            pass
+    """Where the preview is, left on the page (cladding_constants.crumb)."""
+    crumb(text)
 
 
 _crumb.faces = ""
