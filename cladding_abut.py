@@ -59,7 +59,7 @@ from cladding_booleans import _difference, iter_polygons, polygon_to_rings
 from cladding_constants import _parse, _prism, _rect, chain_params, frame_to_world, frame_v
 from cladding_edges import settings as edge_settings
 from cladding_eaves import _joins
-from cladding_head import HEAD_COVER, HEAD_MIN, _top_edges, head_setting
+from cladding_head import HEAD_COVER, HEAD_MIN, _top_edges
 from cladding_primitives import buildup_depth, clip_bounds_v
 from cladding_ridge import (RIDGE_GAP, RIDGE_HEM, RIDGE_LEG, RIDGE_REST, RIDGE_TOL, FILLER_EDGE, FILLER_GAP, FILLER_W, _fillers,
                             _same_frame, _slot, _up_slope)
@@ -111,8 +111,6 @@ def abuts_of(elev, p):
                                        and min(u1, float(w["u1"])) - max(u0, float(w["u0"])) >= HEAD_MIN), None)
         if over is None and wall is None and said != "g3":
             continue
-        if over is None and wall is not None and said == "auto" and head_setting(elev) == "g3":
-            continue        # a model wall not picked, where the chain asks for G3 heads: a mono ridge (cladding_head), as asked
         if over is not None:
             u0, u1 = max(u0, over["u0"]), min(u1, over["u1"])
         elif wall is not None:

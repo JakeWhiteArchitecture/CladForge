@@ -61,6 +61,27 @@ def _sides(elev):
     return out
 
 
+def _plumb_mitre(p, d, q, e):
+    """The mitre between two caps meeting at a corner: a plumb plane, bisecting their lines on
+    plan (each line through its point, *d* and *e* pointing away from the corner into its
+    cap), through the corner where the two lines cross on plan. Plumb, so a cap laid up a
+    slope and one laid level are both cut square up their drops, which then meet on one
+    plumb line, and neither is cut on a slant. (point, normal)."""
+    a = _unit([d[0], d[1], 0.0])
+    b = _unit([e[0], e[1], 0.0])
+    normal = _unit([a[0] - b[0], a[1] - b[1], 0.0])
+    det = a[0] * (-b[1]) - a[1] * (-b[0])
+    if abs(det) < 1e-6:                     # in line on plan: halfway, square to them
+        corner = [(x + y) / 2.0 for x, y in zip(p, q)]
+        return corner, (a if _dot(a, a) > 0 else normal)
+    rx, ry = q[0] - p[0], q[1] - p[1]
+    t = (rx * (-b[1]) - ry * (-b[0])) / det
+    corner = [p[0] + t * a[0], p[1] + t * a[1], (p[2] + q[2]) / 2.0]
+    if math.dist(corner[:2], p[:2]) > VERGE_HEAD_REACH or math.dist(corner[:2], q[:2]) > VERGE_HEAD_REACH:
+        corner = [(x + y) / 2.0 for x, y in zip(p, q)]
+    return corner, normal
+
+
 def verge_heads(params):
     """Before anything is built: each roof slope's verges with a head verge at both ends
     ("verge_caps", {side: {"u", "v0", "v1", "ends": {"lo"/"hi": {"point", "normal"}}}}), and
@@ -100,8 +121,7 @@ def verge_heads(params):
                 near = min(ends, key=lambda q: math.dist(q["point"], P), default=None)
                 if near is None or math.dist(near["point"], P) > VERGE_HEAD_REACH:
                     break
-                corner = [(a + b) / 2.0 for a, b in zip(P, near["point"])]
-                normal = _unit([a - b for a, b in zip(_unit(along), _unit(near["axis"]))])
+                corner, normal = _plumb_mitre(P, along, near["point"], near["axis"])
                 found[key] = {"point": corner, "normal": normal, "end": near}
             if len(found) < 2:
                 continue

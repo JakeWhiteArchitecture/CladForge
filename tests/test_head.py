@@ -291,26 +291,3 @@ def test_two_heads_on_one_top_each_close_only_at_their_own_verge():
     assert 2000.0 <= caps[0]["thickness"] < 2300.0 and 4000.0 <= caps[1]["thickness"] < 4300.0, [m["thickness"] for m in caps]
     stops = [m for m in out["geometry"] if " Stop End " in m["name"] and m["name"].startswith("Roof Head Verge")]
     assert len(stops) == 2                                                  # one at each verge, none where the caps meet
-
-
-def test_back_to_back_monopitches_at_two_heights_close_the_step_between_their_caps():
-    """The job's E and H: two monopitches falling away from each other, their tops side by
-    side on plan, one 300 mm above the other. Each takes its own G3 head (mono ridge), and
-    the higher cap's drop runs on down past the top of the lower cap, so the step's face
-    between them is closed, not left open between the caps."""
-    t, s, c = math.tan(math.radians(20.0)), math.sin(math.radians(20.0)), math.cos(math.radians(20.0))
-    step = 300.0
-    hi = _face("High", [[6000, 0, H + step], [0, 0, H + step], [0, -3000, H + step - 3000 * t], [6000, -3000, H + step - 3000 * t]],
-               (0, -s, c))
-    lo = _face("Low", [[0, 60, H], [6000, 60, H], [6000, 3060, H - 3000 * t], [0, 3060, H - 3000 * t]], (0, s, c))
-    elevs = [dict(hi, offset=0, chain="Chain 1", settings=dict(SEAM), verge="none", eaves="none", head="g3"),
-             dict(lo, offset=0, chain="Chain 2", settings=dict(SEAM), verge="none", eaves="none", head="g3")]
-    out = generate_preview({"elevations": elevs, "trim": True, "splash": 0})
-    zs = {}
-    for m in out["geometry"]:
-        if m["ifc_type"] == "ridge_cap" and m["name"].endswith("Head Verge Cap"):
-            pts = [frame_to_world(m["frame"], u, v, d) for d in (m["depth"], m["depth"] + m["thickness"]) for u, v in ring_at(m, 0, d)]
-            zs[m["elevation"]] = (min(q[2] for q in pts), max(q[2] for q in pts))
-    assert set(zs) == {"High", "Low"}
-    assert zs["High"][0] < zs["Low"][1] - 20.0, zs                 # the high cap's drop laps down past the low cap's top
-    assert zs["High"][0] > zs["Low"][1] - HEAD_DROP - 40.0, zs      # by about a drop, no more

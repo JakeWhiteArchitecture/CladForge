@@ -35,6 +35,8 @@ def build_elevation(p, elev, layout=None):
     along = run / 2.0 + float(elev.get("offset", 0.0)) - start
     centre = (hi - along) if elev.get("chain_reversed") else (lo + along)   # in this elevation's u
     offset = centre - W / 2.0
+    if p.get("seam_balanced") and p["plank_orient"] == "vertical":
+        offset = _balanced_offset(elev, lo, hi, v_lo, v_hi, p["seam_centres"]) - W / 2.0
     # A plank course typed on a dimension overrides the parameter, for this elevation or
     # for every member of its chain — whichever scope was chosen. Panel rows are a list
     # carried on the elevation the same way (elev["panel_rows"]), read by _panels.
@@ -993,6 +995,41 @@ def _vertical_planks(p, elev, meshes, dims, info, depth, W, H, v0, offset, regio
 
 LOCK_SEAMS = "Set out from the structural openings: the seams are on the reveal corners"
 SEAM_JAMB_MERGE = 100.0     # mm – jambs closer than this share one seam line
+
+
+BALANCE_SIDE = 0.35      # du/dv – an edge leaning no more than this is a side of the face (a raking corner), not a sloping top
+
+
+def _balanced_offset(elev, lo, hi, v_lo, v_hi, cover):
+    """Where a face set out on its own ("seam_balanced") centres a tray: so that the trays at
+    its two ends are alike, each half a tray or more, never a sliver at a corner. A side that
+    leans (a raking corner with a leaning wall) takes its wedge in the end tray: that tray is
+    at least half a tray where the face is narrowest and no wider than a tray where it is
+    widest, so no seam falls in the wedge to leave a sliver beside it. A sloping top or bottom
+    is not a side: there the end is the face's outline."""
+    sides = []
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        for p0, p1 in zip(ring, ring[1:] + ring[:1]):
+            du, dv = abs(p1[0] - p0[0]), abs(p1[1] - p0[1])
+            if dv >= 100.0 and du <= BALANCE_SIDE * dv:
+                sides.append((min(p0[0], p1[0]), max(p0[0], p1[0])))
+    left = [s for s in sides if s[1] - lo <= cover]
+    right = [s for s in sides if hi - s[0] <= cover]
+    a_out, a = (max(lo, min(s[0] for s in left)), max(lo, max(s[1] for s in left))) if left else (lo, lo)
+    b, b_out = (min(hi, min(s[0] for s in right)), min(hi, max(s[1] for s in right))) if right else (hi, hi)
+    wl, wr = a - a_out, b_out - b                      # each side's wedge, narrowest to widest
+    span = b - a
+    if span <= cover:
+        return (lo + hi) / 2.0
+    n = int((span - cover) // cover)                   # whole trays between two end trays of a tray or more together
+    rest = span - n * cover                            # what the two end trays share: [cover, 2 cover)
+    if rest <= 2.0 * cover - wl - wr:
+        el = min(max(rest / 2.0, rest - (cover - wr)), cover - wl)
+    else:                                              # the wedges will not both fit: one tray more, the ends shared out
+        rest -= cover
+        el = min(max(rest / 2.0, 0.0), cover - wl)
+    return a + el + cover / 2.0
 
 
 SEAM_MIN_CLOSE = 100.0      # mm – a closing tray at a corner or a verge is never narrower than this
