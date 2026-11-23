@@ -1881,7 +1881,48 @@ _data`);
     finally { busy(btn, false); }
 }
 
+// One solid per element in the IFC (cladding_union.py): a tray with its seam folds and
+// drip, a flashing with its end pieces, unioned by Manifold's WebAssembly build before the
+// file is written. Offered to the Python engine as globalThis._cfUnion([[verts, tris], ...]):
+// flat vertex and triangle lists per closed piece in, their union out ({v, t, np}), or null
+// if a piece is not a closed solid or the union fails. If the module will not load, the
+// export carries on and writes the pieces as separate solids, as before.
+const MANIFOLD_URL = 'https://cdn.jsdelivr.net/npm/manifold-3d@3.5.4/manifold.js';
+async function ensureManifold() {
+    if (globalThis._cfUnion !== undefined) return;
+    globalThis._cfUnion = null;
+    try {
+        const wasm = await (await import(MANIFOLD_URL)).default();
+        wasm.setup();
+        const { Manifold, Mesh } = wasm;
+        globalThis._cfUnion = pieces => {
+            const made = [];
+            let whole = null;
+            try {
+                for (const [v, t] of pieces) {
+                    const mesh = new Mesh({ numProp: 3, vertProperties: Float32Array.from(v), triVerts: Uint32Array.from(t) });
+                    mesh.merge();
+                    const solid = new Manifold(mesh);                 // throws if the piece is not a closed solid
+                    made.push(solid);
+                    if (solid.status() !== 'NoError') return null;
+                }
+                whole = Manifold.union(made);
+                const out = whole.getMesh();
+                return { v: Array.from(out.vertProperties), t: Array.from(out.triVerts), np: out.numProp };
+            } catch (err) {
+                return null;
+            } finally {
+                made.forEach(m => m.delete());
+                if (whole) whole.delete();
+            }
+        };
+    } catch (err) {
+        console.warn('Manifold did not load: the IFC writes each piece as its own solid.', err);
+    }
+}
+
 async function ensureIfcOpenShell(btn) {
+    await ensureManifold();
     if (ifcReady) return;
     busy(btn, true, 'Installing IfcOpenShell (one-off, ~40 MB)…');
     await pyodide.loadPackage(['numpy']);
@@ -2295,7 +2336,7 @@ async function initPyodide() {
         window.pyodide = pyodide;
         setStatus('Loading Shapely…', 'busy');
         await pyodide.loadPackage(['shapely', 'micropip']);
-        const modules = ['cladding_constants', 'cladding_window', 'cladding_lod', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_greencoat', 'cladding_hip', 'cladding_eaves', 'cladding_head', 'cladding_abut', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles',
+        const modules = ['cladding_constants', 'cladding_window', 'cladding_lod', 'cladding_primitives', 'cladding_edges', 'cladding_corners', 'cladding_ridge', 'cladding_verge', 'cladding_valley', 'cladding_greencoat', 'cladding_hip', 'cladding_eaves', 'cladding_head', 'cladding_abut', 'cladding_rake', 'cladding_match', 'cladding_nesting', 'cladding_state', 'cladding_geometry', 'cladding_booleans', 'cladding_profiles', 'cladding_union',
                          'cladding_checks', 'cladding_preview', 'fabric_extract', 'dxf_generator', 'cladding_elevations',
                          'ifc_generator'];
         const v = Date.now();
