@@ -628,3 +628,17 @@ def test_a_gable_edge_a_hair_off_plumb_has_its_verge_raking_with_it():
         return sum(p[0] for p in q) / len(q), sum(p[1] for p in q) / len(q)
     (u0, v0), (u1, v1) = u_of(float(flash["depth"]) + 1.0), u_of(float(flash["depth"]) + float(flash["thickness"]) - 1.0)
     assert (u1 - u0) / (v1 - v0) == pytest.approx(right[0]["rake"], abs=0.0005)
+
+
+def test_a_scrap_of_upright_edge_at_a_hip_foot_does_not_hide_the_verge():
+    """The job's roof E: a hip runs up from the eaves to the verge, and where the hip meets
+    the eaves the outline has a few mm of upright edge further out than the verge. That
+    scrap, too short to be a verge, was taken as the side and the real verge, 7 m long over
+    a clad wall, was left with no detail."""
+    from cladding_verge import _edges
+    info = {"edges": [{"kind": "side", "p1": [3053.0, 10411.0], "p2": [3053.0, 3547.0]},
+                      {"kind": "side", "p1": [141.0, 150.0], "p2": [141.0, 0.0]},
+                      {"kind": "side", "p1": [13308.0, 0.0], "p2": [13308.0, 10411.0]}]}
+    found = _edges(info)
+    assert found["l"][:3] == (3053.0, 3547.0, 10411.0)
+    assert found["r"][0] == 13308.0

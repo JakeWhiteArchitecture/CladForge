@@ -151,11 +151,18 @@ def _edges(info):
         return {}
     out = {}
     for side, pick in (("l", min), ("r", max)):
-        u_ext = pick(min(e["p1"][0], e["p2"][0]) if side == "l" else max(e["p1"][0], e["p2"][0]) for e in sides)
-        mine = [e for e in sides if abs(pick(e["p1"][0], e["p2"][0]) - u_ext) < 1.0 + VERGE_RAKE * abs(e["p1"][1] - e["p2"][1])]
-        pts = sorted({(round(q[1], 3), round(q[0], 3)) for e in mine for q in (e["p1"], e["p2"])})
-        if not pts or pts[-1][0] - pts[0][0] < 300.0:
+        # the outermost side at least 300 long: a scrap of side edge further out (a few mm
+        # of upright at a hip's foot) does not hide the verge behind it
+        found = None
+        for u_ext in sorted({pick(e["p1"][0], e["p2"][0]) for e in sides}, reverse=(side == "r")):
+            mine = [e for e in sides if abs(pick(e["p1"][0], e["p2"][0]) - u_ext) < 1.0 + VERGE_RAKE * abs(e["p1"][1] - e["p2"][1])]
+            pts = sorted({(round(q[1], 3), round(q[0], 3)) for e in mine for q in (e["p1"], e["p2"])})
+            if pts and pts[-1][0] - pts[0][0] >= 300.0:
+                found = pts
+                break
+        if found is None:
             continue
+        pts = found
         (v0, u0), (v1, u1) = pts[0], pts[-1]
         r = (u1 - u0) / (v1 - v0)
         out[side] = (u0, v0, v1, 0.0 if abs(u1 - u0) < 0.5 else r)

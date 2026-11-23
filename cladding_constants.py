@@ -108,6 +108,8 @@ def _parse(params):
     p["seam_full"] = p["seam"] and bool(params.get("seam_full_length"))
     # each face set out on its own, its middle tray centred, the trays at its ends alike (cladding_geometry._balanced_offset)
     p["seam_balanced"] = p["seam"] and bool(params.get("seam_balanced"))
+    # the drip at the wall's foot (cladding_greencoat.cladding_drips): GreenCoat's on steel, asked for on any metal
+    p["base_drip"] = p["seam"] and bool(params.get("base_drip"))
     # A custom profile is a fixed plank, its real section (cladding_profiles): a library one
     # by key, or one read from a drawing. It is laid as a lapped board, the section's full
     # width at its cover, so the lap is the difference; it sets the plank's size.
