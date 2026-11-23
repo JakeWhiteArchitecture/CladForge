@@ -875,6 +875,8 @@ def join_hip_drips(meshes, p):
                 lo, hi = min(a, b), max(a, b)
                 if min(abs(lo - foot[0]), abs(hi - foot[0])) > 250.0:
                     continue                                                 # this length does not reach the hip's foot
+                if abs(foot[1] - uv(m["frame"]["origin"])[1]) > 300.0:
+                    continue                                                 # nor the hip's foot the eaves: it starts up the slope, over a verge
                 left = abs(lo - foot[0]) < abs(hi - foot[0])                 # the hip is at its low-u end
                 at_start = left == fwd
                 grow = 400.0

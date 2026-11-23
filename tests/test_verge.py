@@ -582,3 +582,24 @@ def test_a_verge_whose_edge_turns_into_a_hip_stops_where_the_edge_does():
     out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", head="g3", eaves="none")], "trim": True, "splash": 0, **SEAM})
     (left,) = [v for i in out["info"] for v in i.get("verges", []) if v["side"] == "l"]
     assert left["length"] < 1500.0, left["length"]
+
+
+def test_a_hip_that_starts_up_the_slope_does_not_lengthen_the_eaves_drip():
+    """The front slope of a real model: a verge 1.2 m up its side, then a hip. The hip's foot
+    is over the verge, not on the eaves, so the eaves drip and its support stop at the verge
+    (they were run 400 mm on past it, out from the corner, as if the hip met the eaves)."""
+    t = math.tan(math.radians(25.0))
+    s, c = math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    plan = [(0, 0), (6000, 0), (6000, 3000), (1800, 3000), (0, 1200)]
+    pts = [[x, y, y * t] for x, y in plan]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[i], pts[i + 1]] for i in range(1, len(pts) - 1)],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    w = roof["frame"]
+    hip = {"kind": "hip", "with": "Other", "k": 1.0, "master": True, "length": 2000.0,
+           "p1": world_to_frame(w, [0.0, 1200.0, 1200.0 * t])[:2], "p2": world_to_frame(w, [1800.0, 3000.0, 3000.0 * t])[:2],
+           "other_up": [0.0, 1.0, 0.0], "other_n": [0.0, 0.0, 1.0]}
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", head="g3", valleys=[hip])], "trim": True, "splash": 0, **SEAM})
+    left = min(world_to_frame(w, frame_to_world(m["frame"], x, y, d))[0]
+               for m in out["geometry"] if m.get("eaves_support") or " Eaves Drip" in (m.get("name") or "")
+               for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for x, y in m["profile"])
+    assert left > -100.0, left
