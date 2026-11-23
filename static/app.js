@@ -708,6 +708,25 @@ async function linkIntoChain(e) {
     return false;
 }
 
+// A slope on its own that meets another slope at a ridge goes into that slope's chain, whatever
+// was picked in between: one setting-out over both, and the cap. Only chains not yet built,
+// so a chain kept apart on purpose stays apart.
+async function joinRidgePartner(e) {
+    if (e.chain.built || e.chain.members.length !== 1 || !isRoofSlope(e)) return false;
+    for (const other of state.elevations) {
+        if (other === e || !isRoofSlope(other) || other.chain === e.chain || other.chain.built) continue;
+        if (other.ridge && other.ridge.partner && other.ridge.partner !== e) continue;     // a slope has one ridge
+        let link = null;
+        try { link = await pyLink(other.result, e.result); } catch (err) { console.warn('ridge link failed', err); }
+        if (!link || link.kind !== 'ridge') continue;
+        state.chains = state.chains.filter(c => c !== e.chain);
+        e.chain = other.chain; other.chain.members.push(e);
+        placeInChain(e, other, link); relayoutChain(other.chain);
+        return true;
+    }
+    return false;
+}
+
 async function relinkChain(chain) {
     const members = chain.members.slice().sort((a, b) => a.start - b.start);
     chain.members = [];
@@ -996,7 +1015,8 @@ _json.dumps(_ex(_pl))`);
             + (e.result.warnings || []).map(w => ' · ' + w).join(''));
         if (e.result.ok) {
             if (dropped) e.result.warnings.push(`${dropped} nearby element(s) left out to keep the engine within memory`);
-            const linked = await linkIntoChain(e);
+            let linked = await linkIntoChain(e);
+            if (!linked) linked = await joinRidgePartner(e);
             const valleys = await linkValleys(e);
             const corner = !linked ? e.name + ' extracted'
                 : e.link.kind === 'ridge' ? `${e.name} joined ${e.chain.name} at a ridge with ${e.ridge.partner.name}: one setting-out over both slopes, and a ridge cap`

@@ -304,3 +304,19 @@ def test_the_ridge_exports_to_ifc_and_dxf():
     assert len(products) == len(own_elements(out["geometry"]))
     dxf = meshes_to_dxf_string(out["geometry"], params, out["info"])
     assert "ROOF / ROOF A" in dxf and "ROOF / ROOF B" in dxf
+
+
+def test_a_slope_modelled_running_on_past_its_ridge_still_meets_the_other_and_is_cut_back():
+    """A real model's slope ran on half a metre past its ridge line (two roofs drawn
+    overlapping). It still meets the other slope at the ridge, so the two share a chain and
+    the cap; and nothing of it is built past the ridge line, battens and all."""
+    a, b = _slope("Roof A", top=3495.0), _slope("Roof B", mirrored=True)
+    link = chain_link(a, b)
+    assert link and link["kind"] == "ridge"
+    a, b = _paired(a, b, link)
+    out = generate_preview({"elevations": [a, b], "trim": True, "splash": 0})
+    caps = [m for m in out["geometry"] if m.get("ridge_info") or "Ridge Cap" in (m.get("name") or "")]
+    assert caps, "the ridge cap"
+    worst = min(_off_ridge(m)[0] for m in out["geometry"] if m.get("elevation") == "Roof A" and not m.get("ridge_info")
+                and m.get("ifc_type") in ("plank", "batten", "deck", "counter_batten", "seam"))
+    assert worst > -1.0, "nothing of the slope past the ridge line"
