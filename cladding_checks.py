@@ -177,6 +177,14 @@ def check_rules(params, infos=None):
     # A hip is reported once, by the slope that carries its cap; seams too far apart along it, by each slope.
     for i in infos:
         for h in i.get("hips") or []:
+            if h.get("detail") == "Hip 1":            # coated steel: GreenCoat's Hip 1 (cladding_greencoat), its own record
+                if h.get("master"):
+                    add("Hip", "pass", "%s and %s meet at a hip %.2f m long: GreenCoat Hip 1, a %.0f x %.0f mm timber batten on "
+                        "the hip line under a flat T-cap, the trays %.0f mm clear of it each side and turned up to its top%s. "
+                        "Confirm the fixings and the cap's laps against GreenCoat's details" % (
+                            i["elevation"], h["with"], h["length"] / 1000.0, h["batten"][0], h["batten"][1], h["gap"],
+                            ", cut on the gablet's rake seam" if h.get("gablet") else ""), h["length"])
+                continue
             spacing, limit = h.get("seam_spacing"), h["seam_limit"]
             wide = spacing is not None and spacing > limit + 0.5
             apart = "%s: the seams are %.0f mm apart along the hip with %s; the detail allows at most %.0f mm between two " \

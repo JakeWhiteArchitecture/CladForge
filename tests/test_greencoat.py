@@ -168,15 +168,18 @@ def test_a_seam_running_out_on_a_steel_hip_is_not_folded():
     assert abs(top_shift(steel) - top_shift(zinc) - 1.0) < 0.05    # zinc: the hip's lean less the fold; steel: the lean alone
 
 
-def _steel_wall(**kw):
+def _steel_params(**kw):
     from synthetic import payload
     from fabric_extract import extract_elevation
-    from cladding_preview import generate_preview
     e = extract_elevation(payload())
-    el = dict(e, offset=0, **kw)
-    params = {"elevations": [el], "trim": True, "sheathing": True, "insulation": True,
-              "cladding_type": "plank", "plank_profile": "seam", "plank_orient": "vertical", "seam_metal": "steel", "splash": 150}
-    return e, generate_preview(params)
+    return {"elevations": [dict(e, offset=0, **kw)], "trim": True, "sheathing": True, "insulation": True,
+            "cladding_type": "plank", "plank_profile": "seam", "plank_orient": "vertical", "seam_metal": "steel", "splash": 150}
+
+
+def _steel_wall(**kw):
+    from cladding_preview import generate_preview
+    params = _steel_params(**kw)
+    return params["elevations"][0], generate_preview(params)
 
 
 def test_a_steel_wall_has_greencoats_cladding_drip_at_its_foot():
@@ -225,3 +228,17 @@ def test_zinc_walls_have_no_greencoat_drip():
     out = generate_preview({"elevations": [dict(e, offset=0)], "trim": True, "cladding_type": "plank", "plank_profile": "seam",
                             "plank_orient": "vertical", "splash": 150})
     assert not [m for m in out["geometry"] if m.get("cladding_drip") or m.get("insect_mesh")]
+
+
+@pytest.mark.parametrize("builder", ["hipped", "gablet", "wall"])
+def test_the_checks_run_on_a_steel_build(builder):
+    """Hip 1's record is not the G3 cap's (no seam limit or cap leg): the checks read it as
+    its own, rather than fail on a coated steel roof with hips (a KeyError in the app)."""
+    from cladding_checks import check_rules
+    params, out = {"hipped": lambda: _hipped_roof(seam_metal="steel")[1:],
+                   "gablet": lambda: gablet(seam_metal="steel")[1:],
+                   "wall": lambda: (_steel_params(), _steel_wall()[1])}[builder]()
+    rows = check_rules(params, out["info"])
+    hips = [r for r in rows if r["name"].endswith("Hip")]
+    if builder != "wall":
+        assert hips and all("Hip 1" in r["message"] for r in hips)
