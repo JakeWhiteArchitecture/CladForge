@@ -467,3 +467,34 @@ def test_a_gently_raking_eaves_still_gets_its_drip():
     lows = sorted((min(frame_to_world(m["frame"], u, v, float(m["depth"]))[2] for u, v in ring_at(m, 0, float(m["depth"]))), m["name"])
                   for m in drips)
     assert lows[-1][0] - lows[0][0] > 100.0, "the drip rises with the edge"
+
+
+def test_an_open_eaves_over_a_wall_runs_on_until_its_drip_clears_the_wall_s_cladding():
+    """A roof that oversails a clad wall by less than the wall's cladding stands out (a real
+    model's canopy: 31 mm over seams 84 mm out) had its drip behind the seams. Its eaves runs
+    on until the drop is EAVES_OVER clear of the cladding's outside; one that oversails far
+    enough is left as it is."""
+    from cladding_eaves import EAVES_OVER
+    t, s, c = math.tan(math.radians(30.0)), 0.5, math.cos(math.radians(30.0))
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]                                # noqa: E731
+    face = lambda name, pts, n: extract_elevation({"name": name, "faces": quad(pts), "outward": list(n), "context": [],   # noqa: E731
+                                                   "options": {"debug": False, "clad_depth": 150.0}})
+    def build(over):
+        w = face("Wall", [[0, 0, 0], [6000, 0, 0], [6000, 0, 2700], [0, 0, 2700]], (0, -1, 0))
+        r = face("Roof", [[0, -over, 2700 - over * t], [6000, -over, 2700 - over * t], [6000, 3000, 2700 + 3000 * t],
+                          [0, 3000, 2700 + 3000 * t]], (0, -s, c))
+        elevs = [dict(w, offset=0, chain="Chain 1", settings=dict(SEAM)),
+                 dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), verge="none")]
+        return generate_preview({"elevations": elevs, "trim": True, "splash": 0})
+    near = build(30.0)
+    (e,) = [x for i in near["info"] for x in i.get("eaves", [])]
+    assert e["over_wall"] == "Wall" and e["run"] > 0.0
+    wall_out = max(-frame_to_world(m["frame"], u, v, d)[1] for m in near["geometry"] if m["elevation"] == "Wall"
+                   for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for u, v in ring_at(m, 0, d))
+    drop_in = min(-frame_to_world(m["frame"], u, v, d)[1] for m in _aprons(near)
+                  for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for u, v in ring_at(m, 0, d)
+                  if frame_to_world(m["frame"], u, v, d)[2] < 2700.0 - 40.0)
+    assert drop_in >= wall_out + EAVES_OVER - 15.0, (drop_in, wall_out)
+    far = build(400.0)
+    (e,) = [x for i in far["info"] for x in i.get("eaves", [])]
+    assert not e.get("over_wall")

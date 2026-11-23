@@ -130,6 +130,78 @@ def join_eaves(params):
                      other_seam=float(po["seam_h"]) if po.get("seam") else 0.0)
 
 
+EAVES_WALL_REACH = 400.0   # mm – an open eaves this far or less out from a picked wall's face, near its head, stands over it
+
+
+def _bottom_edges(elev):
+    """[(a, b)]: the face's lowest edges, level or raking gently (EAVES_RAKE), as (u, v) ends."""
+    out = []
+    pts = [q for pg in elev.get("polygons") or [] for q in pg["exterior"]]
+    if not pts:
+        return out
+    low = min(q[1] for q in pts)
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        for a, b in zip(ring, ring[1:] + ring[:1]):
+            du, dv = abs(a[0] - b[0]), abs(a[1] - b[1])
+            if du >= EAVES_MIN and dv <= max(0.5, EAVES_RAKE * du) and min(a[1], b[1]) <= low + 5.0 + EAVES_RAKE * du:
+                out.append(tuple(sorted((tuple(a[:2]), tuple(b[:2])))))
+    return out
+
+
+def eaves_walls(params):
+    """Before anything is built: each roof slope is told which picked walls stand under its open
+    eaves (not on the line their planes meet on, as eaves_link's are, but under an edge that
+    sails out over them, by less than their cladding may stand proud of it): "eaves_walls",
+    [{"with", "u0", "u1" (the stretch of the eaves over it, in the roof's u), "proud": how far
+    the roof's edge stands out from the wall's face, at its nearest, "depth": how far out the
+    wall's cladding is (its seams' tips)}]. The eaves runs on over such a wall (eaves_parts),
+    its drip clear of the cladding's outside, whatever the model's roof oversails it by."""
+    _fv = frame_v
+    elevs = [e for e in params.get("elevations") or [] if e.get("ok", True) and e.get("polygons")]
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    walls = []
+    for w in elevs:
+        n = [float(c) for c in w["frame"]["n"]]
+        if abs(n[2]) <= 0.035 or (n[2] < 0 and abs(n[2]) <= 0.5):          # upright, or leaning out (a canopy's)
+            po = _parse(dict(chain_params(params, w), elevations=[]))
+            top = max(q[1] for pg in w["polygons"] for q in pg["exterior"])
+            walls.append((w, n, buildup_depth(po) + (float(po["seam_h"]) if po.get("seam") else 0.0), top))
+    for r in elevs:
+        r.pop("eaves_walls", None)
+        nr = [float(c) for c in r["frame"]["n"]]
+        if nr[2] <= 0.5 or r.get("faces_down"):
+            continue
+        found = []
+        linked = {v.get("with") for v in r.get("valleys") or [] if v.get("kind") in ("eaves", "head", "abut")}
+        for a, b in _bottom_edges(r):
+            P = [frame_to_world(r["frame"], q[0], q[1], 0.0) for q in (a, b)]
+            for w, n, depth, top in walls:
+                if w.get("name") in linked:
+                    continue                                  # on its head: an eaves on a wall proper (eaves_link)
+                f = w["frame"]
+                d = [dot([p[i] - f["origin"][i] for i in range(3)], n) for p in P]       # out from the wall's face
+                hv = [(dot([p[i] - f["origin"][i] for i in range(3)], f["u"]),
+                       dot([p[i] - f["origin"][i] for i in range(3)], _fv(f))) for p in P]  # on the wall: (u, height up it)
+                if not all(-60.0 <= x <= EAVES_WALL_REACH for x in d) or min(d) >= depth:
+                    continue                                  # not over it, or clear of its cladding already
+                if not all(top - 600.0 <= y <= top + 1500.0 for _x, y in hv):
+                    continue                                  # not at its head
+                # the stretch of the eaves over the wall, back in the roof's u
+                wa, wb = hv[0][0], hv[1][0]
+                if abs(wb - wa) < 1.0:
+                    continue
+                ts = sorted(((x - wa) / (wb - wa) for x in (-50.0, float(w["width"]) + 50.0)))
+                t0, t1 = max(0.0, ts[0]), min(1.0, ts[1])
+                u0, u1 = a[0] + (b[0] - a[0]) * t0, a[0] + (b[0] - a[0]) * t1
+                if u1 - u0 < EAVES_MIN:
+                    continue
+                found.append({"with": w.get("name"), "u0": round(u0, 1), "u1": round(u1, 1), "proud": round(min(d), 1),
+                              "depth": round(depth, 1)})
+        if found:
+            r["eaves_walls"] = found
+
+
 def _joins(elev, roof, kind="eaves"):
     """The face's eaves on a wall, as cladding_valley.valleys_of gives its junctions, each
     with what join_eaves noted: those where it is the roof (*roof* True) or the wall. The
@@ -303,10 +375,19 @@ def eaves_parts(meshes, p, infos):
                 over = next((q for q in joins if abs(q["v"] - v) < 2.0 and q["u0"] <= (a + b) / 2.0 <= q["u1"]), None)
                 run, below = 0.0, EAVES_DROP
                 s, c = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+                under = None if over else next((w for w in elev.get("eaves_walls") or []
+                                                if w["u0"] - 1.0 <= (a + b) / 2.0 <= w["u1"] + 1.0), None)
                 if over:
                     # the drip's line EAVES_OVER beyond the outside of the wall's cladding (its seams' tips), on plan
                     run, below = over_wall(over["depth"] + over["seam"], soffit, over["top"], pitch, over["other_pitch"], over["depth"])
                 nose, drop_out, below = apron_drop(soffit, pitch, below)
+                if under:
+                    # an open eaves over a wall whose cladding stands proud of the roof's edge: run on until the drop
+                    # stands EAVES_OVER clear of the cladding's outside, on plan, and laps down over its head
+                    need = under["depth"] - under["proud"] + EAVES_OVER
+                    if need > drop_out:
+                        run = (need - drop_out) / c
+                        below = max(below, EAVES_WALL_LAP + run * s)
                 ahead = run + (drop_out - soffit * s) / c + nose        # the plywood's end, and the trays', below the edge
                 ve, end = vat(a) - run, vat(a) - ahead                  # at the length's start
                 turned = []
@@ -361,7 +442,7 @@ def eaves_parts(meshes, p, infos):
                 apron["eaves_info"] = {"length": round((b - a) * stretch, 1), "lap": EAVES_LAP, "nose": nose, "drop": round(below, 1),
                                        "clear": round(drop_out, 1), "tray": EAVES_TRAY, "thickness": t, "sheet": round(sheet, 1),
                                        "over": over["with"] if over else None, "run": round(run, 1),
-                                       "mansard": bool(over and over["mansard"])}
+                                       "mansard": bool(over and over["mansard"]), "over_wall": under["with"] if under else None}
                 extra.append(apron)
                 for d in drips[1:]:
                     d["eaves_info"] = apron["eaves_info"]
