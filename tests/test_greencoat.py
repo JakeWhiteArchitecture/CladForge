@@ -242,3 +242,33 @@ def test_the_checks_run_on_a_steel_build(builder):
     hips = [r for r in rows if r["name"].endswith("Hip")]
     if builder != "wall":
         assert hips and all("Hip 1" in r["message"] for r in hips)
+
+
+def test_a_zinc_wall_takes_the_drip_at_its_foot_where_its_chain_asks():
+    """The job's zinc skirt: the drip at the wall's foot is asked for on the chain
+    ("base_drip"), and built as on steel, the trays folded round it; not asked, none."""
+    from cladding_preview import generate_preview
+    params = dict(_steel_params(), seam_metal="zinc")
+    assert not [m for m in generate_preview(params)["geometry"] if m.get("cladding_drip")]
+    e = params["elevations"][0]
+    asked = dict(params, elevations=[dict(e, settings={"base_drip": True})])
+    out = generate_preview(asked)
+    assert len([m for m in out["geometry"] if m.get("cladding_drip")]) == 1
+    assert [m for m in out["geometry"] if m.get("drip_fold")]
+    assert out["info"][0]["cladding_drip"]["length"] == 8000.0
+
+
+def test_the_drip_finds_the_foot_past_a_notch_at_the_corner():
+    """Two of the job's skirt walls had a 10 mm notch at a corner of their outline, its
+    vertex the lowest point: the foot was looked for there, found no edge, and the wall had
+    no drip. The foot is the lowest long level edge."""
+    from cladding_greencoat import cladding_drips
+    from cladding_constants import _parse
+    params = dict(_steel_params(), seam_metal="zinc", base_drip=True)
+    frame = params["elevations"][0]["frame"]
+    deck = {"type": "prism", "ifc_type": "deck", "name": "W Deck", "elevation": "W", "frame": frame, "depth": 109.0, "thickness": 18.0,
+            "profile": [[0, 923], [0, 0], [0, 10], [3605, 10], [3605, 951]], "holes": []}
+    p = _parse(dict(params, elevations=[{"name": "W", "frame": frame}]))
+    out = cladding_drips([deck], p, [{"elevation": "W"}])
+    drips = [m for m in out if m.get("cladding_drip")]
+    assert len(drips) == 1 and abs(drips[0]["thickness"] - 3605.0) < 0.5

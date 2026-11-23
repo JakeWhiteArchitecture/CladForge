@@ -266,3 +266,30 @@ def test_a_lone_face_s_seams_are_slid_clear_of_where_its_valley_meets_the_eaves(
     shift = e.get("auto_shift") or 0.0
     seams = [2000.0 + shift + cover / 2.0 + k * cover for k in range(-6, 7)]
     assert min(abs(s - e["polygons"][0]["exterior"][1][0]) for s in seams) >= SEAM_CORNER_CLEAR - 0.5
+
+
+def test_the_slope_across_the_valley_found_as_an_abutment_leaves_no_splash_band():
+    """The other roof's slab is found as an abutment along the valley too (with a short
+    leg down past its foot). Its splash zone, opened up for the slope and widest where the
+    line turns, cut the trays back again and not parallel: the job's valley widened
+    towards the eaves. The valley's own stand-back is all there is, the same all along."""
+    a, c = _pair(30.0)
+    link = valley_link(a, c)
+    a, c = _records(a, c, link)
+    (x1, y1), (x2, y2) = link["a"]["p1"], link["a"]["p2"]
+    a["abutments"] = list(a.get("abutments") or []) + [{
+        "u0": min(x1, x2), "u1": max(x1, x2), "v": max(y1, y2), "v_min": min(y1, y2) - 170.0,
+        "line": [[x1, y1 - 170.0], [x1, y1], [x2, y2]], "source": "IFCSLAB", "enabled": True,
+        "name": "Roof C slab", "pitched": True}]
+    out = generate_preview(dict({"elevations": [a, c], "trim": True, "splash": 150}, **SEAM))
+    v = [r for r in __import__("cladding_valley").valleys_of(a)][0]
+    dx, dy = (x2 - x1) / v["length"], (y2 - y1) / v["length"]
+    near = []
+    for m in out["geometry"]:
+        if m["elevation"] == "Roof A" and m["ifc_type"] == "plank":
+            pts = [((u - x1) * dx + (w - y1) * dy, (u - x1) * v["m"][0] + (w - y1) * v["m"][1]) for u, w in m["profile"]]
+            pts = [t for t in pts if 0 < t[0] < v["length"] and t[1] < 600]
+            if pts:
+                near.append(min(d for _a, d in pts))
+    assert len(near) >= 3
+    assert max(near) - min(near) < 1.0 and abs(min(near) - v["back"]) < 1.0, near

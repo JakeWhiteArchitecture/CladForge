@@ -346,6 +346,41 @@ def _splash_offsets(line, splash):
     return [max(segs[max(0, i - 1)], segs[min(i, len(segs) - 1)]) for i in range(len(line))]
 
 
+JUNCTION_ALONG = 0.8    # share of an abutment line lying on a valley or hip before it is that junction, not an abutment
+JUNCTION_TOL = 60.0     # mm – how near the valley or hip line it must lie
+
+
+def _along_junction(line, elev):
+    """Does the abutment *line* run along one of the face's valleys or hips? The roof
+    slab across a valley is found as an abutment too, but the valley's own detail
+    stands the cladding back there: a splash zone on top, opened up for the slope and
+    widest where the line turns at its foot, would cut the trays back again, and not
+    parallel to the valley."""
+    total = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(line, line[1:]))
+    if total < 1.0:
+        return False
+    for r in elev.get("valleys") or []:
+        if (r.get("kind") or "valley") not in ("valley", "hip"):
+            continue
+        try:
+            (x1, y1), (x2, y2) = [float(c) for c in r["p1"]], [float(c) for c in r["p2"]]
+        except (KeyError, TypeError, ValueError):
+            continue
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length < 1.0:
+            continue
+        dx, dy = (x2 - x1) / length, (y2 - y1) / length
+
+        def near(q):
+            along = (q[0] - x1) * dx + (q[1] - y1) * dy
+            return abs((q[0] - x1) * dy - (q[1] - y1) * dx) <= JUNCTION_TOL and \
+                -JUNCTION_TOL <= along <= length + JUNCTION_TOL
+        on = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(line, line[1:]) if near(a) and near(b))
+        if on >= JUNCTION_ALONG * total:
+            return True
+    return False
+
+
 def splash_rings(elev, splash):
     """Splash-zone polygons (rings of [u, v]) above each enabled abutment line.
 
@@ -359,7 +394,7 @@ def splash_rings(elev, splash):
             continue
         raw = ab.get("line") or [[float(ab["u0"]), float(ab["v"])], [float(ab["u1"]), float(ab["v"])]]
         line = [[float(u), float(v)] for u, v in raw]
-        if len(line) < 2:
+        if len(line) < 2 or _along_junction(line, elev):
             continue
         top = [[u, v + o] for (u, v), o in zip(line, _splash_offsets(line, splash))]
         rings.append(line + top[::-1])

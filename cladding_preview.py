@@ -22,6 +22,7 @@ from cladding_hip import gablet_hip_tops, hip_ends, hip_parts
 from cladding_greencoat import cladding_drips
 from cladding_eaves import eaves_walls, eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
+from cladding_vergehead import verge_heads, verge_head_parts
 from cladding_abut import abut_over, abut_parts, abut_ridges, join_abuts
 from cladding_rake import rake_ends, rake_parts
 from cladding_window import window_parts
@@ -213,6 +214,7 @@ def generate_preview(params):
     _run(join_verges, params)      # a verge over a clad wall: how far its plywood oversails
     _run(join_eaves, params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
     _run(eaves_walls, params)      # and a roof's open eaves over a wall whose cladding stands proud of its edge
+    _run(verge_heads, params)      # a verge with a mono ridge at both ends: the mono ridge run on down it
     _run(join_abuts, params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
     _run(link_seams, params)       # faces whose seams follow another's are given its seam lines
     for p, ready in _run(_groups, params):
@@ -269,6 +271,7 @@ def _preview_one(p, ready=None):
     meshes = _run(window_parts, meshes, p, infos)  # a standing seam wall's openings: the sill capping and the head strip
     meshes = _run(cladding_drips, meshes, p, infos)   # a coated steel standing seam wall's foot: GreenCoat's cladding drip
     meshes = _run(head_parts, meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
+    meshes = _run(verge_head_parts, meshes, p, infos)    # and down a verge between two of them, mitred onto both
     meshes = _run(abut_parts, meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
     meshes = _run(abut_over, meshes, p, infos)     # and that wall's layers stop above the roof
     meshes = _run(close_cap_ends, meshes, p)       # a ridge or head verge cap that ends at a verge: the verge up to its plane, a stop end

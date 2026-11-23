@@ -166,10 +166,12 @@ def test_an_eaves_exports():
     # each tray with its seams and its drip is one closed solid (cladding_union), no more than its pieces hold
     from solid_checks import one_closed_solid, volume
     from cladding_union import piece_mesh, _volume
+    from ifc_generator import seam_sheets, tray_owners
+    sheets = seam_sheets(out["geometry"])                  # one face: each overcloak with the tray it is folded from
+    own = tray_owners(sheets)
     for e in trays:
         solid = volume(one_closed_solid(e))
-        pieces = [m for m in out["geometry"] if m["name"] == e.Name or m.get("of") == e.Name
-                  or (m["ifc_type"] == "seam" and m["name"].startswith(e.Name + " "))]
+        pieces = [m for m in sheets if m["name"] == e.Name or (id(m) in own and own[id(m)]["name"] == e.Name)]
         assert len(pieces) > 1
         whole = sum(_volume(*piece_mesh(m)) for m in pieces)
         assert 0.97 * whole < solid <= whole * (1.0 + 1e-4) + 1.0, (e.Name, solid, whole)
@@ -498,3 +500,23 @@ def test_an_open_eaves_over_a_wall_runs_on_until_its_drip_clears_the_wall_s_clad
     far = build(400.0)
     (e,) = [x for i in far["info"] for x in i.get("eaves", [])]
     assert not e.get("over_wall")
+
+
+def test_a_raking_eaves_meets_its_verges():
+    """The job's canopy: an eaves raking about 1 in 6 across the face, a verge with cladding
+    (ZI-05) at each end. The corners were left open, the eaves drip short of the flashing
+    and the flashing short of the drip, because a drip that far off the face's u was not
+    taken for an eaves. Each end now closes: the drip runs on to the flashing and the
+    flashing comes down over its end."""
+    t, s, c = math.tan(math.radians(25.0)), math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    rise = 900.0
+    pts = [[0, 0, 0], [6000, rise, rise * t], [6000, 4000, 4000 * t], [0, 4000, 4000 * t]]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[1], pts[2]], [pts[0], pts[2], pts[3]]],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", settings=dict(SEAM), verge="both", verge_type="cladding")],
+                            "trim": True, "splash": 0, **SEAM})
+    names = {m["name"] for m in out["geometry"]}
+    assert {"Roof Verge Flashing L Eaves End", "Roof Verge Flashing R Eaves End"} <= names
+    xs = [frame_to_world(m["frame"], u, v, d)[0] for m in out["geometry"] if "Eaves Drip" in m["name"]
+          for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for u, v in ring_at(m, 0, d)]
+    assert min(xs) < -2.0 and max(xs) > 6002.0, "the drip runs on under the flashing at both ends"

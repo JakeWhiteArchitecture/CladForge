@@ -172,18 +172,25 @@ def _browser(pieces):
     return verts, tris
 
 
+SLIVER = 0.05        # mm² – a triangle this small has no direction worth comparing
+
+
 def faces(verts, tris, tol=1e-3):
     """A closed triangle mesh's faces as polygons: [(outer loop, [inner loops])] of vertex
     indices, each the edge-connected triangles that lie in one plane facing one way, their
-    outline found from the edges only one of them has. Where an outline will not close
-    into simple loops (two corners touching), its triangles are kept as they are."""
-    norms, offs = [], []
+    outline found from the edges only one of them has (where that will not trace into one
+    outline and its holes, by _outline). A triangle joins its neighbour's face where every
+    corner of it lies within *tol* of that face's plane, the plane of its largest triangle:
+    judged there, close to, not by comparing normals and offsets from the origin. Where an
+    outline will not come apart into simple loops, its triangles are kept as they are."""
+    norms, offs, areas = [], [], []
     for a, b, c in tris:
         p, q, r = verts[a], verts[b], verts[c]
         u = (q[0] - p[0], q[1] - p[1], q[2] - p[2])
         w = (r[0] - p[0], r[1] - p[1], r[2] - p[2])
         nx, ny, nz = u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]
         size = math.sqrt(nx * nx + ny * ny + nz * nz)
+        areas.append(size / 2.0)
         if size < 1e-12:
             norms.append(None)
             offs.append(0.0)
@@ -192,6 +199,9 @@ def faces(verts, tris, tol=1e-3):
         norms.append((nx, ny, nz))
         offs.append(nx * p[0] + ny * p[1] + nz * p[2])
     parent = list(range(len(tris)))
+    # each group: its largest triangle (whose plane it lies in) and its vertices
+    rep = list(range(len(tris)))
+    pts = [set(t) for t in tris]
 
     def find(i):
         while parent[i] != i:
@@ -199,17 +209,38 @@ def faces(verts, tris, tol=1e-3):
             i = parent[i]
         return i
 
+    def flat_on(big, small):
+        """Does the group *small* lie in the plane of group *big* (every vertex within tol of
+        it, facing the same way)? Judged against the plane of big's largest triangle: a
+        sliver's normal is too rough to compare, and an offset from the origin, metres away,
+        turns the least tilt between two normals into millimetres."""
+        nb, ns = norms[rep[big]], norms[rep[small]]
+        if nb is None:
+            return False
+        if ns is not None and areas[rep[small]] > SLIVER and nb[0] * ns[0] + nb[1] * ns[1] + nb[2] * ns[2] < 0.5:
+            return False                # (a sliver, where two pieces' faces all but meet, faces any way: its corners decide)
+        p = verts[tris[rep[big]][0]]
+        return all(abs(nb[0] * (verts[k][0] - p[0]) + nb[1] * (verts[k][1] - p[1]) + nb[2] * (verts[k][2] - p[2])) < tol
+                   for k in pts[small])
+
     by_edge = {}
     for i, (a, b, c) in enumerate(tris):
         for e in ((a, b), (b, c), (c, a)):
             by_edge[e] = i
+    # largest triangles first, so a group's plane is its biggest triangle's
+    pairs = []
     for (a, b), i in by_edge.items():
         j = by_edge.get((b, a))
-        if j is None or j <= i or norms[i] is None or norms[j] is None:
+        if j is not None and j > i:
+            pairs.append((-max(areas[i], areas[j]), i, j))
+    for _size, i, j in sorted(pairs):
+        x, y = find(i), find(j)
+        if x == y:
             continue
-        ni, nj = norms[i], norms[j]
-        if ni[0] * nj[0] + ni[1] * nj[1] + ni[2] * nj[2] > 1.0 - 1e-6 and abs(offs[i] - offs[j]) < tol:
-            parent[find(i)] = find(j)
+        big, small = (x, y) if areas[rep[x]] >= areas[rep[y]] else (y, x)
+        if flat_on(big, small):
+            parent[small] = big
+            pts[big] |= pts[small]
     groups = {}
     for i in range(len(tris)):
         groups.setdefault(find(i), []).append(i)
@@ -248,10 +279,10 @@ def faces(verts, tris, tol=1e-3):
                     clean = False
                     break
                 loops.append(loop)
+        n = norms[max(members, key=lambda i: areas[i])] or (0.0, 0.0, 1.0)
         if not clean or not loops:
-            out += [(list(tris[i]), []) for i in members]
+            out += _outline(verts, tris, members, n) or [(list(tris[i]), []) for i in members]
             continue
-        n = norms[members[0]] or (0.0, 0.0, 1.0)
 
         def area(loop):
             s = [0.0, 0.0, 0.0]
@@ -265,7 +296,107 @@ def faces(verts, tris, tol=1e-3):
         loops.sort(key=area, reverse=True)
         outer, inner = loops[0], loops[1:]
         if area(outer) <= 0.0 or any(area(h) >= 0.0 for h in inner):
-            out += [(list(tris[i]), []) for i in members]      # more than one outline facing out: keep its triangles
+            out += _outline(verts, tris, members, n) or [(list(tris[i]), []) for i in members]   # else keep its triangles
             continue
         out.append((outer, inner))
     return out
+
+
+
+def _outline(verts, tris, members, n):
+    """The faces of coplanar triangles *members* (normal *n*) where their rim will not trace
+    into one outline and its holes: two corners touching, or more than one outline. The rim
+    is traced flat in the plane taking, at a corner with more than one way on, the sharpest
+    turn left, so touching outlines come apart as loops of their own; each loop running
+    anticlockwise about *n* is a face, each running the other way a hole in the face that
+    holds it. None where the rim will not come apart so (the triangles are kept)."""
+    ax = (1.0, 0.0, 0.0) if abs(n[0]) < 0.9 else (0.0, 1.0, 0.0)
+    e1 = (n[1] * ax[2] - n[2] * ax[1], n[2] * ax[0] - n[0] * ax[2], n[0] * ax[1] - n[1] * ax[0])
+    size = math.sqrt(sum(c * c for c in e1))
+    e1 = tuple(c / size for c in e1)
+    e2 = (n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0])
+    o = verts[tris[members[0]][0]]
+    edges = set()
+    for i in members:
+        a, b, c = tris[i]
+        edges.update(((a, b), (b, c), (c, a)))
+    rim = [e for e in edges if (e[1], e[0]) not in edges]
+    flat, ways = {}, {}
+    for a, b in rim:
+        ways.setdefault(a, []).append(b)
+        for k in (a, b):
+            if k not in flat:
+                d = (verts[k][0] - o[0], verts[k][1] - o[1], verts[k][2] - o[2])
+                flat[k] = (d[0] * e1[0] + d[1] * e1[1] + d[2] * e1[2], d[0] * e2[0] + d[1] * e2[1] + d[2] * e2[2])
+
+    def turn(p, q, r):          # the turn left at q, p to q to r, in radians (-pi, pi]
+        a1 = math.atan2(flat[q][1] - flat[p][1], flat[q][0] - flat[p][0])
+        a2 = math.atan2(flat[r][1] - flat[q][1], flat[r][0] - flat[q][0])
+        t = a2 - a1
+        while t <= -math.pi:
+            t += 2.0 * math.pi
+        while t > math.pi:
+            t -= 2.0 * math.pi
+        return t
+
+    used, loops = set(), []
+    for start in rim:
+        if start in used:
+            continue
+        used.add(start)
+        loop, prev, at = [start[0]], start[0], start[1]
+        while at != start[0]:
+            left = [b for b in ways.get(at, []) if (at, b) not in used]
+            if not left or len(loop) > len(rim):
+                return None
+            b = max(left, key=lambda c: turn(prev, at, c)) if len(left) > 1 else left[0]
+            used.add((at, b))
+            loop.append(at)
+            prev, at = at, b
+        loops += _split(loop)
+
+    def area(loop):
+        return sum(flat[loop[k]][0] * flat[loop[(k + 1) % len(loop)]][1] - flat[loop[(k + 1) % len(loop)]][0] * flat[loop[k]][1]
+                   for k in range(len(loop))) / 2.0
+
+    def holds(loop, pt):
+        x, y, inside = pt[0], pt[1], False
+        for k in range(len(loop)):
+            (x1, y1), (x2, y2) = flat[loop[k]], flat[loop[(k + 1) % len(loop)]]
+            if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+                inside = not inside
+        return inside
+
+    outers = [[lp, []] for lp in loops if area(lp) > 1e-9]
+    for lp in loops:
+        if area(lp) > 1e-9:
+            continue
+        if area(lp) > -1e-9 or len(set(lp)) != len(lp):
+            return None
+        (x1, y1), (x2, y2) = flat[lp[0]], flat[lp[1]]
+        mid = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+        home = [f for f in outers if holds(f[0], mid)]
+        if not home:
+            return None
+        min(home, key=lambda f: area(f[0]))[1].append(lp)
+    if any(len(set(lp)) != len(lp) for lp, _h in outers):
+        return None
+    return [(lp, hs) for lp, hs in outers] or None
+
+
+def _split(loop):
+    """*loop* cut into simple loops where it passes a vertex twice (a hole touching the
+    outline at a corner): each stretch between the two visits is a loop of its own."""
+    out, todo = [], [loop]
+    while todo:
+        lp = todo.pop()
+        seen = {}
+        for k, v in enumerate(lp):
+            if v in seen:
+                i = seen[v]
+                todo += [lp[i:k], lp[:i] + lp[k:]]
+                break
+            seen[v] = k
+        else:
+            out.append(lp)
+    return [lp for lp in out if len(lp) >= 3] if all(len(lp) >= 3 for lp in out) else [loop]

@@ -350,7 +350,9 @@ def eaves_parts(meshes, p, infos):
             continue
         back, t = min(float(m["depth"]) for m in trays), float(p["seam_t"])
         tol = edge_settings(elev)["bottom"] + EDGE_TOL
-        reach = VERGE_TRAY + 5.0            # a tray widened over a verge strip is still at the eaves
+        # a tray widened over a verge strip is still at the eaves (and over a verge carried out
+        # over a wall's cladding, by that much more)
+        reach = VERGE_TRAY + 5.0 + max([float(g.get("over") or 0.0) for g in info.get("verges") or []] + [0.0])
         V, U, N = frame_v(frame), frame["u"], frame["n"]
         toward = [-float(c) for c in V]                                    # out over the edge: down the slope
         along = [float(c) for c in U]
@@ -394,7 +396,11 @@ def eaves_parts(meshes, p, infos):
                 for m in mine:
                     kind = m.get("ifc_type")
                     pts = m["profile"]
-                    at = [u0 - reach <= q[0] <= u1 + reach and vat(q[0]) - 1.0 <= q[1] <= vat(q[0]) + tol for q in pts]
+                    # (past an end of a raking eaves, over a verge strip, the edge may run on at the
+                    # end's level as well as on the line: either is the eaves)
+                    at = [u0 - reach <= q[0] <= u1 + reach
+                          and min(vat(q[0]), vat(min(max(q[0], u0), u1))) - 1.0 <= q[1] <= max(vat(q[0]), vat(min(max(q[0], u0), u1))) + tol
+                          for q in pts]
                     mid = [q[0] for q, on in zip(pts, at) if on]
                     if not mid or not (a - (reach if a == u0 else 0.0) <= sum(mid) / len(mid) <= b + (reach if b == u1 else 0.0)):
                         continue

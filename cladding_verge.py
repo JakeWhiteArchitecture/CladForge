@@ -151,11 +151,18 @@ def _edges(info):
         return {}
     out = {}
     for side, pick in (("l", min), ("r", max)):
-        u_ext = pick(min(e["p1"][0], e["p2"][0]) if side == "l" else max(e["p1"][0], e["p2"][0]) for e in sides)
-        mine = [e for e in sides if abs(pick(e["p1"][0], e["p2"][0]) - u_ext) < 1.0 + VERGE_RAKE * abs(e["p1"][1] - e["p2"][1])]
-        pts = sorted({(round(q[1], 3), round(q[0], 3)) for e in mine for q in (e["p1"], e["p2"])})
-        if not pts or pts[-1][0] - pts[0][0] < 300.0:
+        # the outermost side at least 300 long: a scrap of side edge further out (a few mm
+        # of upright at a hip's foot) does not hide the verge behind it
+        found = None
+        for u_ext in sorted({pick(e["p1"][0], e["p2"][0]) for e in sides}, reverse=(side == "r")):
+            mine = [e for e in sides if abs(pick(e["p1"][0], e["p2"][0]) - u_ext) < 1.0 + VERGE_RAKE * abs(e["p1"][1] - e["p2"][1])]
+            pts = sorted({(round(q[1], 3), round(q[0], 3)) for e in mine for q in (e["p1"], e["p2"])})
+            if pts and pts[-1][0] - pts[0][0] >= 300.0:
+                found = pts
+                break
+        if found is None:
             continue
+        pts = found
         (v0, u0), (v1, u1) = pts[0], pts[-1]
         r = (u1 - u0) / (v1 - v0)
         out[side] = (u0, v0, v1, 0.0 if abs(u1 - u0) < 0.5 else r)
@@ -302,8 +309,8 @@ def verge_parts(meshes, p, infos):
         r = ridge_of(elev)
         found = _edges(info)
         for side in sides:
-            if side not in found:
-                continue
+            if side not in found or side in (elev.get("verge_caps") or {}):
+                continue                                                # (a verge between two mono ridges: cladding_vergehead)
             u, v0, v1, rake = found[side]
             at = lambda v, v0=v0, rake=rake: rake * (v - v0)                 # noqa: E731 — the edge's lean, out from its foot, at v
             first = len(extra)
@@ -500,6 +507,9 @@ def _cut_end(m, cuts, at_start=True):
     return out
 
 
+JOIN_ALONG = 0.97     # an eaves drip at least this square to the verge (cos): a raking eaves' (EAVES_RAKE) too
+
+
 def join_drips(meshes, p):
     """Where an eaves meets a G3 verge, close the corner: the eaves drip runs on out to the
     outside of the verge's drip, and **the verge drip comes down the slope to the back of
@@ -523,8 +533,9 @@ def join_drips(meshes, p):
                      and " Verge Flashing " in m.get("name", "") + " " and not m.get("drip_end")]
         clips = [m for m in out_meshes if m.get("elevation") == name and m.get("ifc_type") == "verge_strip"
                  and " Verge Clip " in m.get("name", "") + " " and not m.get("drip_end")]
+        # (a raking eaves' drip runs along its edge, a little off the face's u: EAVES_RAKE)
         eaves = [m for m in out_meshes if m.get("elevation") == name and m.get("eaves_info") and m.get("tray_sheet")
-                 and abs(dot(m["frame"]["n"], U)) > 0.99]
+                 and abs(dot(m["frame"]["n"], U)) > JOIN_ALONG]
         if not (verge or flashings) or not eaves:
             continue
         N = [float(c) for c in frame["n"]]
@@ -565,7 +576,7 @@ def join_drips(meshes, p):
             # the eaves drip nearest this verge, and which of its ends is there
             def end_u(m):
                 a = uv(m["frame"]["origin"])[0]
-                b = a + float(m["thickness"]) * (1.0 if dot(m["frame"]["n"], U) > 0 else -1.0)
+                b = a + float(m["thickness"]) * dot(m["frame"]["n"], U)
                 return a, b
             near = min(eaves, key=lambda m: min(abs(x - ue) for x in end_u(m)))
             a, b = end_u(near)
@@ -578,25 +589,28 @@ def join_drips(meshes, p):
             clad = bool(extras) or " Verge Flashing " in low.get("name", "") + " "
             inside = min(x for x, _y in low["profile"])
             target = ue + side * ((inside - 0.5) if clad else (reach + 1.0))
+            along = abs(dot(near["frame"]["n"], U))                       # its length per mm of u
             fwd = dot(near["frame"]["n"], U) > 0
             at_start = (side < 0) == fwd                                   # the verge is at the eaves drip's start
             if at_start:
-                grow = abs(min(a, b) - target) if side < 0 else abs(target - max(a, b))
+                grow = (abs(min(a, b) - target) if side < 0 else abs(target - max(a, b))) / along
                 near["frame"] = dict(near["frame"], origin=[c - grow * k for c, k in zip(near["frame"]["origin"], near["frame"]["n"])])
                 near["thickness"] = float(near["thickness"]) + grow
             else:
-                near["thickness"] = float(near["thickness"]) + (abs(target - max(a, b)) if side > 0 else abs(min(a, b) - target))
+                near["thickness"] = float(near["thickness"]) + (abs(target - max(a, b)) if side > 0 else abs(min(a, b) - target)) / along
+            # the drip's end at this verge, as a depth along it
+            d_end = float(near["depth"]) if at_start else float(near["depth"]) + float(near["thickness"])
             t = float(p["seam_t"])
             # the back of the eaves drip's drop: a plane along the eaves, plumb, through the drop's inside face
             ux, uy = near["drip_under"]
-            under = frame_to_world(near["frame"], ux, uy, float(near["depth"]))
+            under = frame_to_world(near["frame"], ux, uy, d_end)
             up = [V[0], V[1], 0.0]
             hs = dot(up, up) ** 0.5
             up = [c / hs for c in up]                                      # level, up the slope
             back = [c + t / 2.0 * k for c, k in zip(under, up)]
             # the mitre of the two bullnoses: square to the roof, through the corner of their outsides
             e_reach = max(x for x, _y in near["profile"])                   # the eaves drip's outside, down the slope from its line
-            e_line = uv(frame_to_world(near["frame"], 0.0, 0.0, float(near["depth"])))[1]
+            e_line = uv(frame_to_world(near["frame"], 0.0, 0.0, d_end))[1]
             corner = frame_to_world(frame, ue + side * reach, e_line - e_reach, 0.0)
             mitre = [side * U[i] + V[i] for i in range(3)]
             # where the eaves drip's drop stops: the outside of the G3 verge drip's drop; with
@@ -606,8 +620,7 @@ def join_drips(meshes, p):
             # with cladding the flashing's drop runs on out to the front of the eaves drip (its
             # bullnose, under the edge seam's end), and is cut plumb there, closing the side of
             # the eaves drip and the space under its bullnose
-            front = min((frame_to_world(near["frame"], x, y, d) for d in (float(near["depth"]), float(near["depth"]) + float(near["thickness"]))
-                         for x, y in near["profile"]), key=lambda q: dot(q, up))
+            front = min((frame_to_world(near["frame"], x, y, d_end) for x, y in near["profile"]), key=lambda q: dot(q, up))
             # bring the verge drip down past the eaves, then cut both at the corner
             v_start = min(uv(back)[1], uv(front)[1]) - 200.0
             for piece in [low] + extras:
@@ -657,6 +670,21 @@ def _up_to_plane(m, point, normal, frame, r):
     return [m]
 
 
+CAP_END_NEAR = 400.0     # mm – a verge piece reaching no further in along the cap than this is at its end
+CAP_END_REACH = 1000.0   # mm – nor starting further out past it
+
+
+def _own_ridge(elev, cap):
+    """The ridge record (cladding_ridge.ridge_of) the cap is over: on a top with more than
+    one head verge, the head it is the cap of (by its span), else the face's ridge or head."""
+    span = cap.get("head_span")
+    if span and elev.get("head_more"):
+        for rec in [elev.get("head_ridge")] + list(elev.get("head_more") or []):
+            if rec and abs(float(rec["u0"]) - span[0]) < 1.0 and abs(float(rec["u1"]) - span[1]) < 1.0:
+                return ridge_of(dict(elev, ridge=None, head_ridge=rec))
+    return ridge_of(elev)
+
+
 def close_cap_ends(meshes, p):
     """Where a ridge cap or a head verge cap ends at a verge, close it (VMZINC's stop end):
 
@@ -675,7 +703,7 @@ def close_cap_ends(meshes, p):
     by = {e.get("name"): e for e in p.get("elevations", [])}
     out = list(meshes)
     caps = [m for m in out if m.get("ifc_type") == "ridge_cap" and (m.get("ridge_info") or m.get("head_info"))
-            and not m.get("stop_end")]
+            and not m.get("stop_end") and not m.get("drip_end")]
     for cap in caps:
         info = cap.get("ridge_info") or {}
         faces = info.get("between") or [cap.get("elevation")]
@@ -694,7 +722,7 @@ def close_cap_ends(meshes, p):
         angle = v_angle(by.get(faces[0]) if faces else None)
         for name in faces:
             elev = by.get(name)
-            r = ridge_of(elev) if elev else None
+            r = _own_ridge(elev, cap) if elev else None
             if not r:
                 continue
             frame = elev["frame"]
@@ -705,6 +733,8 @@ def close_cap_ends(meshes, p):
                       and (m.get("verge_drip") or m.get("verge_support") or m.get("verge_seam")
                            or (m.get("ifc_type") == "verge_strip" and re_flash(m.get("name", ""))))]
             for end in (0, 1):
+                if end in (cap.get("mitred_ends") or []):
+                    continue                                            # mitred onto a raking cap (cladding_vergehead)
                 here = []
                 for m in pieces:
                     pts = [frame_to_world(m["frame"], x, y, d) for x, y in m["profile"]
@@ -712,7 +742,10 @@ def close_cap_ends(meshes, p):
                     if max(dot([a - b for a, b in zip(q, frame["origin"])], V) for q in pts) < r["v"] - 800.0:
                         continue                                            # a length lower down the verge (at the eaves, say)
                     s = [along(q) for q in pts]
-                    if (end == 0 and max(s) < length / 2.0) or (end == 1 and min(s) > length / 2.0):
+                    # a verge at this end of the cap: not one at the far end of a longer top, past
+                    # where this cap stops (a head over a wall for part of a top, a free head the rest)
+                    if (end == 0 and max(s) < min(length / 2.0, CAP_END_NEAR) and min(s) > -CAP_END_REACH) or \
+                            (end == 1 and min(s) > max(length / 2.0, length - CAP_END_NEAR) and max(s) < length + CAP_END_REACH):
                         here.append((m, s, pts))
                 if not here:
                     continue

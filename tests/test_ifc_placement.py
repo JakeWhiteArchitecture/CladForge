@@ -17,7 +17,7 @@ from cladding_constants import frame_to_world  # noqa: E402
 from cladding_preview import generate_preview  # noqa: E402
 from cladding_primitives import ring_at  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
-from ifc_generator import meshes_to_ifc, _handed  # noqa: E402
+from ifc_generator import seam_sheets, meshes_to_ifc, _handed  # noqa: E402
 
 geom = pytest.importorskip("ifcopenshell.geom")
 
@@ -83,6 +83,9 @@ def test_every_part_is_where_the_build_put_it(upper, lower, kw):
     out, ifc = _two_areas(upper, lower, **kw)
     boxes = _ifc_boxes(ifc)
     names = [m["name"] for m in out["geometry"]]
+    # a tray's element: its own pieces, and the overcloak folded from it on its other side (seam_sheets)
+    sheets = [m for g in {e: [x for x in out["geometry"] if x.get("elevation") == e]
+                          for e in {x.get("elevation") for x in out["geometry"]}}.values() for m in seam_sheets(g)]
     checked = 0
     for mesh in out["geometry"]:
         if names.count(mesh["name"]) > 1 or mesh.get("section_ring"):
@@ -90,8 +93,9 @@ def test_every_part_is_where_the_build_put_it(upper, lower, kw):
         if mesh["name"] not in boxes:
             assert mesh["ifc_type"] == "seam" or mesh.get("of")     # a tray's seam, or its head turned out under a sill: in the tray's element
             continue
-        parts = [_built_box(mesh)] + [_built_box(m) for m in out["geometry"] if mesh["ifc_type"] == "plank"
-                                      and m["name"].startswith(mesh["name"] + " ") and m["name"] not in boxes]
+        parts = [_built_box(mesh)] + [_built_box(m) for m in sheets if mesh["ifc_type"] == "plank"
+                                      and (m.get("of") or m["name"]).startswith(mesh["name"]) and m is not mesh
+                                      and m["name"] not in boxes]
         want = [min(b[k] for b in parts) for k in range(3)] + [max(b[k] for b in parts) for k in range(3, 6)]
         got = boxes[mesh["name"]]
         assert got == pytest.approx(want, abs=0.6), mesh["name"]

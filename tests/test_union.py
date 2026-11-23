@@ -12,7 +12,7 @@ import ifcopenshell  # noqa: E402
 
 import cladding_union  # noqa: E402
 from cladding_union import _ear_clip, _volume, faces, piece_mesh, union_pieces  # noqa: E402
-from ifc_generator import meshes_to_ifc, tray_owners  # noqa: E402
+from ifc_generator import meshes_to_ifc, seam_sheets, tray_owners  # noqa: E402
 from solid_checks import one_closed_solid, volume  # noqa: E402
 from test_verge import _one, _roof, SEAM  # noqa: E402
 from test_hip import _hipped_roof  # noqa: E402
@@ -64,6 +64,37 @@ def test_overlapping_pieces_union_to_one_solid_with_merged_faces():
     assert _volume(v, t) == pytest.approx(200 * 100 * 100, rel=1e-5)
 
 
+
+def test_a_tray_far_from_the_origin_goes_out_as_flat_faces_not_triangles():
+    """On the job the roof is metres from the origin, and the trays came out of the IFC as
+    a hundred-odd triangles each, drawn as lines across them: two triangles a hair out of
+    line, read as a plane's offset from the origin, were millimetres apart. Each tray of a
+    pitched roof, moved 18 m off, is a closed shell of polygon faces with only the odd
+    triangle the shape really has."""
+    _params, out = _one()
+    groups = _elements_of_pieces(out)
+    trays = [g for n, g in groups.items() if " Tray " in n]
+    assert trays
+    for pieces in trays[:6]:
+        moved = []
+        for m in pieces:
+            fr = dict(m["frame"], origin=[m["frame"]["origin"][0] + 18000.0, m["frame"]["origin"][1] - 14000.0,
+                                          m["frame"]["origin"][2] + 3000.0])
+            moved.append(dict(m, frame=fr))
+        got = union_pieces([piece_mesh(m) for m in moved])
+        assert got is not None
+        fs = faces(*got)
+        edges = {}
+        for outer, inner in fs:
+            for ring in [outer] + inner:
+                for k in range(len(ring)):
+                    e = (ring[k], ring[(k + 1) % len(ring)])
+                    edges[e] = edges.get(e, 0) + 1
+        assert all(n == 1 and edges.get((e[1], e[0])) == 1 for e, n in edges.items())     # still closed
+        assert sum(1 for o, h in fs if len(o) == 3 and not h) <= 8, len(fs)     # its sheared ends: real triangles
+        assert len(fs) < len(got[1]) / 2
+
+
 def test_without_a_union_the_pieces_go_out_as_they_were(monkeypatch):
     params, out = _one()
     monkeypatch.setattr(cladding_union, "_native", lambda pieces: None)
@@ -81,6 +112,7 @@ def _elements_of_pieces(out):
     for m in out["geometry"]:
         by.setdefault(m.get("elevation", ""), []).append(m)
     for g in by.values():
+        g = seam_sheets(g)                     # each overcloak with the tray it is folded from, as the IFC has it
         own = tray_owners(g)
         for m in g:
             if id(m) in own:
@@ -139,3 +171,34 @@ def test_every_square_ended_piece_meshes_to_its_own_volume(roof):
         assert _volume(*got) == pytest.approx(ring.area * float(m["thickness"]), rel=1e-6), m["name"]
         checked += 1
     assert checked > 20
+
+
+def test_two_trays_share_each_seam_each_with_its_own_half():
+    """A standing seam is two trays' edges folded together: the undercloak is one tray's
+    sheet, the overcloak the neighbour's. Both halves were built and named with one tray,
+    and went out in its element. Now each overcloak piece goes with the tray whose side its
+    root stands on, cut at that tray's cross joints where they fall elsewhere, and nothing
+    is lost in the cutting."""
+    _params, out = _one()
+    g = [m for m in out["geometry"] if m.get("elevation") == "Roof A"]
+    sheets = seam_sheets(g)
+    trays = {m["name"]: m for m in g if m["ifc_type"] == "plank"}
+    legs = [m for m in sheets if m["ifc_type"] == "seam" and m["name"].endswith(" Seam overcloak")]
+    given = [m for m in legs if m.get("of")]
+    assert given
+    for m in given:
+        owner = trays[m["of"]]
+        root = [q[0] for q in m["profile"]]
+        side = [q[0] for q in owner["profile"]]
+        assert min(abs(max(side) - min(root)), abs(max(side) - max(root)), abs(min(side) - min(root)), abs(min(side) - max(root))) <= 1.5
+        vs, ov = [q[1] for q in m["profile"]], [q[1] for q in owner["profile"]]
+        assert min(vs) >= min(ov) - 2.0 or max(vs) <= max(ov) + 2.0                    # beside its owner
+    # nothing lost: each seam's overcloak, however cut, as long as it was
+    before = sum(max(q[1] for q in m["profile"]) - min(q[1] for q in m["profile"]) for m in g
+                 if m["ifc_type"] == "seam" and m["name"].endswith(" Seam overcloak"))
+    after = sum(max(q[1] for q in m["profile"]) - min(q[1] for q in m["profile"]) for m in legs)
+    assert after == pytest.approx(before, abs=1.0)
+    # and the undercloaks stay with the tray they were built with
+    for m in sheets:
+        if m["ifc_type"] == "seam" and " Seam undercloak" in m["name"]:
+            assert not m.get("of")

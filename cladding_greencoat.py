@@ -599,6 +599,9 @@ def _fold_ring(xt, xf, v0, t):
     return [[round(x, 3), round(y, 3)] for x, y in list(sheet.exterior.coords)[:-1]], bottom - t / 2.0
 
 
+DRIP_NOTCH = 60.0    # mm – a long level edge this near the outline's lowest point is still its foot
+
+
 def cladding_drips(meshes, p, infos):
     """GreenCoat's cladding drip at the foot of a steel standing seam wall. Along every level
     bottom edge of the wall's plywood: the drip flashing (_drip_ring), fixed to the plywood's
@@ -608,9 +611,10 @@ def cladding_drips(meshes, p, infos):
     drip, and each tray's foot is turned round its leg's end and back up behind it: the tray's
     own fold (_fold_ring, FOLD_AIR of air round the leg), one element with the tray. The seams
     run down with the tray to the fold, their bottom ends folded at 45° or square as the chain
-    sets them (cladding_edges.finish_seams)."""
+    sets them (cladding_edges.finish_seams). Built on steel, and on any metal where the chain
+    asks for it ("base_drip": a zinc skirt's foot over a wall below)."""
     from cladding_ridge import _same_frame
-    if not steel(p):
+    if not (steel(p) or p.get("base_drip")):
         return meshes
     info_by = {i["elevation"]: i for i in infos}
     t = float(p["seam_t"])
@@ -628,7 +632,11 @@ def cladding_drips(meshes, p, infos):
         runs = []
         for d in decks:
             ring = d["profile"]
-            v0 = min(q[1] for q in ring)
+            # the foot: the lowest long level edge (a corner's notch a few mm below it, a stray
+            # vertex, is not the foot)
+            level = [min(a[1], b[1]) for a, b in zip(ring, ring[1:] + ring[:1]) if abs(a[1] - b[1]) < 0.5 and abs(b[0] - a[0]) > 50.0]
+            low = min(q[1] for q in ring)
+            v0 = min((v for v in level if v - low <= DRIP_NOTCH), default=low)
             for a, b in zip(ring, ring[1:] + ring[:1]):
                 if abs(a[1] - v0) < 0.5 and abs(b[1] - v0) < 0.5 and abs(b[0] - a[0]) > 50.0:
                     runs.append((min(a[0], b[0]), max(a[0], b[0]), v0, float(d["depth"]), float(d["depth"]) + float(d["thickness"])))
