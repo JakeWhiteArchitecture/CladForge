@@ -192,10 +192,19 @@ def test_a_steel_wall_has_greencoats_cladding_drip_at_its_foot():
     xb, xf = deck["depth"], deck["depth"] + deck["thickness"]
     xs, ys = [q[0] for q in drips[0]["profile"]], [q[1] for q in drips[0]["profile"]]
     assert min(ys) == pytest.approx(v0 - DRIP_DOWN, abs=0.5)               # the drip below the plywood's foot
-    assert min(xs) == pytest.approx(xb - 0.6, abs=0.1) and max(xs) == pytest.approx(xf + 0.6, abs=0.1)   # round its foot
-    # the trays carried down over it, to its hem
+    assert min(xs) == pytest.approx(xb - 0.6, abs=0.1) and max(xs) == pytest.approx(xf + 0.6, abs=0.1)   # round its foot, no hem
+    # the trays carried down over it and turned round its leg's end as their own fold, 1.2 of air round it,
+    # one element with the tray
+    from cladding_greencoat import FOLD_AIR
     trays = [m for m in g if m["ifc_type"] == "plank"]
-    assert min(min(q[1] for q in m["profile"]) for m in trays) == pytest.approx(v0 - DRIP_DOWN - 0.6, abs=0.1)
+    low = v0 - DRIP_DOWN - FOLD_AIR * 0.6 - 0.6
+    assert min(min(q[1] for q in m["profile"]) for m in trays) == pytest.approx(low, abs=0.1)
+    folds = [m for m in g if m.get("drip_fold")]
+    names = {m["name"] for m in trays}
+    assert folds and all(m["of"] in names for m in folds)
+    assert min(q[1] for q in folds[0]["profile"]) == pytest.approx(low, abs=0.1)
+    assert min(q[0] for q in folds[0]["profile"]) == pytest.approx(xf - FOLD_AIR * 0.6 - 0.6, abs=0.1)   # behind the leg
+    assert out["info"][0]["cladding_drip"]["fold_air"] == 1.2
 
 
 @pytest.mark.parametrize("bottom, folded", [("folded", True), ("flat", False)])

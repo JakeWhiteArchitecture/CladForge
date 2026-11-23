@@ -556,7 +556,8 @@ DRIP_UP = 30.0       # mm – the drip flashing's back leg up the plywood's face
 DRIP_DOWN = 25.0     # mm – its drip below the plywood's foot, hemmed (placeholder)
 DRIP_TURN = 20.0     # mm – its return under the plywood, turned up the plywood's back (placeholder)
 MESH_T = 1.0         # mm – the insect mesh across the cavity under the plywood
-DRIP_AIR = 1.0       # the air in the drip's hemmed fold, between its two legs, in sheet thicknesses
+FOLD_AIR = 2.0       # the air round the drip's leg inside the tray's fold, in sheet thicknesses
+FOLD_HOOK = 15.0     # mm – the tray's fold turned back up behind the drip's leg (placeholder)
 
 
 def _wall(frame):
@@ -565,16 +566,33 @@ def _wall(frame):
 
 
 def _drip_ring(xb, xf, v0, t):
-    """The drip flashing in section, (out of the face, up): down the plywood's face from
-    DRIP_UP above its foot *v0*, on down DRIP_DOWN as the drip, hemmed back up inside, then in
-    under the plywood's foot to its back *xb* and DRIP_TURN up it. *xf*: the plywood's face."""
+    """The drip flashing in section, (out of the face, up): fixed DRIP_UP up the plywood's face
+    *xf* and on down past its foot *v0* as the drip's leg, DRIP_DOWN below it; and from that
+    corner in under the plywood's foot to its back *xb* and DRIP_TURN up it. The tray hooks
+    over the leg (_fold_ring): the fold is the tray's own, not the flashing's."""
     from shapely.geometry import LineString
     from shapely.geometry.polygon import orient
-    f, h = xf + t / 2.0, t * (1.0 + DRIP_AIR)                       # leg to leg, centre to centre: a sheet and the air
-    path = [(f, v0 + DRIP_UP), (f, v0 - DRIP_DOWN), (f - h, v0 - DRIP_DOWN), (f - h, v0 - t / 2.0),
-            (xb - t / 2.0, v0 - t / 2.0), (xb - t / 2.0, v0 + DRIP_TURN)]
-    sheet = orient(LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0), 1.0)
+    from shapely.ops import unary_union
+    f = xf + t / 2.0
+    leg = LineString([(f, v0 + DRIP_UP), (f, v0 - DRIP_DOWN)])
+    under = LineString([(f, v0 - t / 2.0), (xb - t / 2.0, v0 - t / 2.0), (xb - t / 2.0, v0 + DRIP_TURN)])
+    sheet = unary_union([g.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0) for g in (leg, under)])
+    sheet = orient(sheet if sheet.geom_type == "Polygon" else max(sheet.geoms, key=lambda g: g.area), 1.0)
     return [[round(x, 3), round(y, 3)] for x, y in list(sheet.exterior.coords)[:-1]]
+
+
+def _fold_ring(xt, xf, v0, t):
+    """The tray's own foot hooked over the drip's leg, in section: from the tray's flat (its
+    back at *xt*) round under the leg's end, FOLD_AIR clear of it, and FOLD_HOOK back up behind
+    it. Returns (ring, the level the tray's flat comes down to)."""
+    from shapely.geometry import LineString
+    from shapely.geometry.polygon import orient
+    air = FOLD_AIR * t
+    bottom = v0 - DRIP_DOWN - air - t / 2.0                            # the fold's sheet, centred, under the leg's end
+    back = xf - air - t / 2.0                                          # its return, behind the leg (the leg is xf..xf+t)
+    path = [(xt + t / 2.0, bottom + 2.0 * t), (xt + t / 2.0, bottom), (back, bottom), (back, bottom + FOLD_HOOK)]
+    sheet = orient(LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0), 1.0)
+    return [[round(x, 3), round(y, 3)] for x, y in list(sheet.exterior.coords)[:-1]], bottom - t / 2.0
 
 
 def cladding_drips(meshes, p, infos):
@@ -583,8 +601,10 @@ def cladding_drips(meshes, p, infos):
     face behind the trays, its drip DRIP_DOWN below the plywood's foot and its return under the
     foot turned up the plywood's back; an insect mesh across the cavity under the plywood, from
     the back of the battens to that return. The trays and their seams are carried down over the
-    drip to its hem, so the seams' bottom ends, folded at 45° or square as the chain sets them
-    (cladding_edges.finish_seams), land on the drip."""
+    drip, and each tray's foot is turned round its leg's end and back up behind it: the tray's
+    own fold (_fold_ring, FOLD_AIR of air round the leg), one element with the tray. The seams
+    run down with the tray to the fold, their bottom ends folded at 45° or square as the chain
+    sets them (cladding_edges.finish_seams)."""
     from cladding_ridge import _same_frame
     if not steel(p):
         return meshes
@@ -621,17 +641,26 @@ def cladding_drips(meshes, p, infos):
                           0.0, u1 - u0, sec, "dpm", "%s Insect Mesh %d" % (name, k + 1), name)
             mesh.update(color="#3a3f44", insect_mesh=True)
             extra.append(mesh)
-            # the trays and their seams carried down over the drip, to its hem
-            low = v0 - DRIP_DOWN - t
+            # the trays and their seams carried down over the drip, each tray's foot turned round
+            # the drip's leg as its own fold
             for m in mine:
                 if m["ifc_type"] not in ("plank", "seam") or float(m["depth"]) < xf - 0.5:
                     continue
                 ring = m["profile"]
-                if not any(abs(q[1] - v0) < 0.5 and u0 - 0.5 <= q[0] <= u1 + 0.5 for q in ring):
+                at = [q for q in ring if abs(q[1] - v0) < 0.5 and u0 - 0.5 <= q[0] <= u1 + 0.5]
+                if not at:
                     continue
+                fold, low = _fold_ring(float(m["depth"]), xf, v0, t)
                 m["profile"] = [[q[0], low] if abs(q[1] - v0) < 0.5 and u0 - 0.5 <= q[0] <= u1 + 0.5 else q for q in ring]
+                if m["ifc_type"] == "plank" and len(at) >= 2:
+                    a, b = min(q[0] for q in at), max(q[0] for q in at)
+                    if b - a > 5.0:
+                        tray_sec = dict(sec, origin=frame_to_world(frame, b, 0.0, 0.0))
+                        piece = _prism(fold, 0.0, b - a, tray_sec, "seam", "%s Drip Fold" % m.get("name", "Tray"), name)
+                        piece.update(opacity=1.0, of=m.get("of") or m.get("name"), drip_fold=True)
+                        extra.append(piece)
         info = info_by.get(name)
         if info is not None:
             info["cladding_drip"] = {"runs": len(runs), "length": round(sum(r[1] - r[0] for r in runs), 1),
-                                     "down": DRIP_DOWN, "up": DRIP_UP, "turn": DRIP_TURN}
+                                     "down": DRIP_DOWN, "up": DRIP_UP, "turn": DRIP_TURN, "fold_air": round(FOLD_AIR * t, 2)}
     return meshes + extra
