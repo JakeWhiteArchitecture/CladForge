@@ -90,7 +90,10 @@ def test_uprights_stop_short_of_the_head_and_sill_barriers(elevation, clad, gap)
     beside = [b for b in uprights if b not in over]
     assert any(b[2] < FRAME[2] and b[3] > FRAME[3] and b[1] <= FRAME[0] for b in beside)
     assert any(b[2] < FRAME[2] and b[3] > FRAME[3] and b[0] >= FRAME[1] for b in beside)
-    assert out["info"][0]["barriers"] == {"openings": 1, "gap": gap, "cut": out["info"][0]["barriers"]["cut"], "dpm": 8}
+    got = out["info"][0]["barriers"]
+    assert got == {"openings": 1, "gap": gap, "cut": got["cut"], "dpm": 8, "supports": got["supports"], "level_gap": got["level_gap"]}
+    matrix = clad == PLANK_V                        # level battens on counter-battens
+    assert (got["supports"], got["level_gap"]) == ((2, 100.0) if matrix else (0, 0.0))
     assert out["info"][0]["barriers"]["cut"] >= 1
 
 
@@ -167,14 +170,19 @@ def test_gaskets_stop_with_their_battens(elevation):
 def test_level_battens_are_cut_out_of_the_frame_not_short_of_it(elevation):
     """Vertical boards: the level battens end on the jamb barriers and are cut out of the
     head and sill ones, which are solid timber where they were; it is the uprights behind
-    them, the counter-battens, that stop short."""
+    them, the counter-battens, that stop short. On this batten matrix a level batten also
+    stands 100 mm clear of the head and sill barriers: the one the grid puts on top of the
+    head barrier is cut out between the jamb closers, its ends on the uprights beside them."""
     out = generate_preview(_params(elevation, **PLANK_V))
     level = [b for b in (_box(m) for m in out["geometry"] if m["ifc_type"] == "batten") if b[1] - b[0] > b[3] - b[2]]
     inside = lambda b: b[0] < FRAME[1] - 0.5 and b[1] > FRAME[0] + 0.5 and b[2] < FRAME[3] - 0.5 and b[3] > FRAME[2] + 0.5   # noqa: E731
     assert level and not any(inside(b) for b in level)
     assert any(abs(b[1] - FRAME[0]) < 0.01 for b in level) and any(abs(b[0] - FRAME[1]) < 0.01 for b in level)
-    # in the 200 mm above the head barrier one runs straight across
-    assert any(b[0] < FRAME[0] and b[1] > FRAME[1] and FRAME[3] <= b[2] <= FRAME[3] + 200.0 for b in level)
+    # none runs across within 100 mm of the head barrier: the one there ends at the jamb closers' outsides
+    assert not any(b[0] < FRAME[1] and b[1] > FRAME[0] and FRAME[3] - 0.5 <= b[2] < FRAME[3] + 100.0 for b in level)
+    near = [b for b in level if FRAME[3] - 0.5 <= b[2] < FRAME[3] + 100.0]
+    assert near and {round(b[1]) for b in near if b[1] <= FRAME[0] + 0.5} == {FRAME[0]} \
+        and {round(b[0]) for b in near if b[0] >= FRAME[1] - 0.5} == {FRAME[1]}
 
 
 def _joints(out):
@@ -238,3 +246,34 @@ def test_barriers_export(elevation):
     membranes = [e for e in ifc.by_type("IfcCovering") if "Barrier DPM" in e.Name]
     assert len(membranes) == 8 and {e.PredefinedType for e in membranes} == {"MEMBRANE"}
     assert len([e for e in ifc.by_type("IfcElement") if not e.is_a("IfcElementAssembly")]) == len(out["geometry"])
+
+
+def test_on_a_batten_matrix_level_battens_stand_off_and_the_jambs_carry_their_ends(elevation):
+    """Level battens on upright counter-battens: none within 100 mm of the head or sill barrier
+    (one nearer is cut out from jamb closer to jamb closer), and an upright counter-batten tight
+    to each jamb closer carries the level battens' ends there, from below the sill's gap to above
+    the head's."""
+    from cladding_geometry import BARRIER_LEVEL_GAP
+    params = _params(elevation, counter_batten="yes", **PLANK_V)
+    out = generate_preview(params)
+    level = [_box(m) for m in out["geometry"] if m["ifc_type"] == "batten"]
+    level = [b for b in level if b[1] - b[0] > b[3] - b[2]]
+    over = [b for b in level if b[0] < FRAME[1] and b[1] > FRAME[0]]          # running across the opening's width
+    for u0, u1, v0, v1 in over:
+        assert v0 >= FRAME[3] + BARRIER_LEVEL_GAP - 0.5 or v1 <= FRAME[2] - BARRIER_LEVEL_GAP + 0.5
+    supports = {m["name"][-2:]: _box(m) for m in out["geometry"] if m.get("barrier_support")}
+    assert sorted(supports) == ["1L", "1R"]
+    assert supports["1L"][1] == FRAME[0] and supports["1R"][0] == FRAME[1]     # tight to the closers
+    for u0, u1, v0, v1 in level:                                               # every level end at a jamb lands on one
+        for end in (u0, u1):
+            if abs(end - FRAME[0]) < 0.5:
+                assert supports["1L"][2] <= v0 and v1 <= supports["1L"][3]
+            if abs(end - FRAME[1]) < 0.5:
+                assert supports["1R"][2] <= v0 and v1 <= supports["1R"][3]
+    assert out["info"][0]["barriers"]["supports"] == 2
+
+
+def test_without_counter_battens_nothing_changes(elevation):
+    out = generate_preview(_params(elevation, **PLANK_H))
+    assert not [m for m in out["geometry"] if m.get("barrier_support")]
+    assert out["info"][0]["barriers"]["level_gap"] == 0.0

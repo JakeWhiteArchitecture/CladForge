@@ -1529,6 +1529,7 @@ def _row_list(elev, p, rows):
 
 BARRIER_BESIDE = 25.0     # mm – an upright timber this close beside a barrier counts as joining it: no way past for air
 BARRIER_STUB = 150.0      # mm – a batten end shorter than this, left between a barrier's clear zone and the edge, is left out
+BARRIER_LEVEL_GAP = 100.0  # mm – on a batten matrix: the least air between a level batten and a head or sill barrier
 UPRIGHTS = ("batten", "counter_batten", "cross_batten")
 
 
@@ -1580,9 +1581,19 @@ def _barriers(p, elev, meshes, zones, cavity_start, cavity_t):
     """The head and sill barriers of each opening closed on all four sides (barrier_zones),
     and the battens cut clear of them: uprights out of the whole clear box, level battens
     out of the frame itself (the barrier is solid timber where they were). The cut is made
-    when the parts are trimmed (cladding_booleans: "keep_clear"). Returns
-    {"openings", "gap", "cut": how many battens stop short, "dpm": how many timbers carry a membrane}."""
+    when the parts are trimmed (cladding_booleans: "keep_clear").
+
+    **On a batten matrix** (level battens on upright counter-battens) a level batten stands
+    at least BARRIER_LEVEL_GAP clear of the head and sill barriers, so air passes over and
+    under them: one nearer is cut out from one jamb closer's outside to the other's. And at
+    each jamb an extra upright, a counter-batten tight to the closer, carries the level
+    battens' ends there (theirs and the cut ones'), from below the sill's gap to above the
+    head's. Returns {"openings", "gap", "cut": how many battens stop short, "dpm": how many
+    timbers carry a membrane, "supports": the extra uprights}."""
     name, frame, cut, dpm = elev["name"], elev["frame"], set(), 0
+    matrix = bool(p.get("has_cb")) and p.get("battens") == "horizontal"
+    cbs = [m for m in meshes if m.get("elevation") == name and m["ifc_type"] == "counter_batten"]
+    supports = 0
     for z in zones:
         for key, tag in (("head", "H"), ("sill", "S")):
             if z[key]:
@@ -1614,17 +1625,36 @@ def _barriers(p, elev, meshes, zones, cavity_start, cavity_t):
             meshes.append(_prism(_rect(at, min(vs), at + DPM_T, max(vs)), cavity_start, cavity_t + DPM_T, frame, "dpm",
                                  "%s Barrier DPM Side %d%s" % (name, z["index"] + 1, tags[m["name"]]), name))
             dpm += 1
+        sa, sbot, sb, stop = z["solid"]
+        level = (sa, sbot - (BARRIER_LEVEL_GAP if matrix and z["sill"] else 0.0),
+                 sb, stop + (BARRIER_LEVEL_GAP if matrix and z["head"] else 0.0))
         for m in meshes:
             if m.get("elevation") != name or m["ifc_type"] not in UPRIGHTS or m.get("clip_v_at"):
                 continue
             us, vs = [q[0] for q in m["profile"]], [q[1] for q in m["profile"]]
             upright = max(vs) - min(vs) > max(us) - min(us)
-            a, lo, b, hi = z["clear"] if upright else z["solid"]
+            a, lo, b, hi = z["clear"] if upright else level
             if min(us) < b - 0.5 and max(us) > a + 0.5 and min(vs) < hi - 0.5 and max(vs) > lo + 0.5:
                 m.setdefault("keep_clear", []).append([a, lo, b, hi])
                 if upright:
                     cut.add(m["name"])
-    return {"openings": len(zones), "gap": zones[0]["gap"] if zones else 0.0, "cut": len(cut), "dpm": dpm}
+        if matrix and cbs:
+            # the level battens' ends at the jambs, and those cut short of the head and sill, carried
+            # on an upright tight to each jamb closer, in the counter-battens' layer
+            band_lo, band_hi = clip_bounds_v(elev)
+            depth, t = float(cbs[0]["depth"]), float(cbs[0]["thickness"])
+            reach = BARRIER_LEVEL_GAP + float(p["batten_w"])
+            lo_v = max(band_lo, sbot - (reach if z["sill"] else 0.0))
+            hi_v = min(band_hi, stop + (reach if z["head"] else 0.0))
+            cw = float(p["cb_w"])
+            for tag, (u0, u1) in (("L", (sa - cw, sa)), ("R", (sb, sb + cw))):
+                piece = _prism(_rect(u0, lo_v, u1, hi_v), depth, t, frame, "counter_batten",
+                               "%s Counter Batten Barrier %d%s" % (name, z["index"] + 1, tag), name)
+                piece["barrier_support"] = True
+                meshes.append(piece)
+                supports += 1
+    return {"openings": len(zones), "gap": zones[0]["gap"] if zones else 0.0, "cut": len(cut), "dpm": dpm,
+            "supports": supports, "level_gap": BARRIER_LEVEL_GAP if matrix else 0.0}
 
 
 def _openings_extras(p, elev, meshes, holes, cavity_start, cavity_t, face, board, prof, base):
