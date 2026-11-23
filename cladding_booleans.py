@@ -318,6 +318,58 @@ def _tidy(pg):
         return pg
 
 
+TIMBERS = frozenset({"batten", "counter_batten", "cross_batten"})
+SLIVER = 0.4        # a timber kept over less than this of its width, along some length of it, loses that length
+SHAVE = 25.0        # mm – a timber shaved along its edge by no more than this (an edge offset meant for the
+                    # boards, grazing it) is left whole there
+
+
+def _no_slivers(clipped, profile, outline=None):
+    """A batten (an upright or level rectangle) trimmed to the clad region is not left
+    shaved along its edge: where the trim takes no more than SHAVE off its width along some
+    length of it (the boards' edge offset at a notch in the outline grazing it), it is left
+    whole there, its edge straight, and the board ends there keep their support; where the
+    trim leaves less than SLIVER of its width, a strip no fixing could go into, that length
+    is cut out. A slanted end (a gable's) is left as it is. *outline*: the face's own
+    outline, openings and all, before any offset: a batten is only made whole within it,
+    never into an opening or past the face's edge."""
+    us, vs = [q[0] for q in profile], [q[1] for q in profile]
+    if len(profile) != 4 or len({round(u, 3) for u in us}) != 2 or len({round(v, 3) for v in vs}) != 2:
+        return clipped                                              # not a plain rectangle
+    u0, u1, v0, v1 = min(us), max(us), min(vs), max(vs)
+    level = u1 - u0 >= v1 - v0
+    width = (v1 - v0) if level else (u1 - u0)
+    if width <= 1.0:
+        return clipped
+    stops = set()
+    for pg in iter_polygons(clipped):
+        for x, y in pg.exterior.coords:
+            stops.add(round(x if level else y, 3))
+    stops = sorted(stops)
+    keep, dropped = [], False
+    for a, b in zip(stops, stops[1:]):
+        if b - a < 0.01:
+            continue
+        cell = _intersection(clipped, box(a, v0 - 1.0, b, v1 + 1.0) if level else box(u0 - 1.0, a, u1 + 1.0, b))
+        cell = unary_union(list(iter_polygons(cell))) if cell is not None else None      # its area only: no stray edges
+        if cell is None or cell.is_empty:
+            continue
+        kept = cell.area / (b - a)
+        if kept < SLIVER * width:
+            dropped = True
+            continue
+        cx0, cy0, cx1, cy1 = cell.bounds
+        square = abs(cell.area - (cx1 - cx0) * (cy1 - cy0)) < 0.5         # a plain strip, not a slanted end
+        whole = box(a, v0, b, v1) if level else box(u0, a, u1, b)
+        if square and width - SHAVE <= kept < width - 0.5 and (outline is None or outline.buffer(0.5).contains(whole)):
+            dropped = True                                                # shaved: whole again over this length
+            cell = whole
+        keep.append(cell)
+    if not dropped:
+        return clipped
+    return unary_union(keep) if keep else None
+
+
 def apply_boolean_ops(meshes, p):
     """Return a new mesh list with every trimmable prism clipped to its elevation.
 
@@ -325,8 +377,12 @@ def apply_boolean_ops(meshes, p):
     Elements that fall entirely inside an opening or splash zone are dropped;
     elements split by an opening become several prisms with a letter suffix.
     """
-    regions, prepared = {}, {}
+    regions, prepared, outlines = {}, {}, {}
     for elev in p.get("elevations", []):
+        try:
+            outlines[elev.get("name", "")] = region_polygon(elev)          # the face itself: no offsets, openings cut out
+        except Exception:
+            outlines[elev.get("name", "")] = None
         # stood back from the top, side and bottom edges by the chain's offsets
         region = offset_region(elev, clip_region(elev, p["splash"]))
         regions[elev.get("name", "")] = region
@@ -366,6 +422,8 @@ def apply_boolean_ops(meshes, p):
             clipped = _intersection(poly, region)
         if clear and clipped is not None:
             clipped = _difference(clipped, unary_union([box(*c) for c in clear]))
+        if mesh.get("ifc_type") in TIMBERS and clipped is not None:
+            clipped = _no_slivers(clipped, mesh["profile"], outlines.get(mesh.get("elevation")))
         parts = [pg for pg in iter_polygons(clipped) if pg.area > _MIN_AREA]
         if not parts:
             continue
