@@ -1347,6 +1347,9 @@ _json.dumps(_o)`);
         console.error('preview failed', err);
         if (/fatally failed|Aborted/i.test(err.message || '')) {
             if (await restartEngine()) return updatePreview();
+            // the same step killed it again: say where, the one thing that helps
+            const where = window._engineStep || window._engineDiedIn;
+            if (where) { setStatus('Preview error: the engine crashed in ' + where + ' — ' + err.message, 'busy'); return; }
         }
         setStatus('Preview error: ' + err.message, 'busy');
     }
@@ -2317,8 +2320,11 @@ function pyRun(code) {
 async function restartEngine() {
     if (_restarting) return false;          // one rebuild at a time
     _restarting = true;
-    log('engine died — rebuilding');
-    setStatus('Engine stopped — rebuilding it…', 'busy');
+    // the engine leaves where it is on the page as it goes (cladding_preview._crumb)
+    window._engineDiedIn = window._engineStep || '';
+    log('engine died' + (window._engineDiedIn ? ' in ' + window._engineDiedIn : '') + ' — rebuilding');
+    if (window._engineDiedIn) console.error('engine died in ' + window._engineDiedIn);
+    setStatus('Engine stopped' + (window._engineDiedIn ? ' in ' + window._engineDiedIn : '') + ' — rebuilding it…', 'busy');
     pyReady = false; ifcReady = false; pyodide = null; window.pyodide = null;
     try {
         await initPyodide();     // resumes anything queued while it was down

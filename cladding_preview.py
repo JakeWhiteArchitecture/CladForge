@@ -28,6 +28,11 @@ from cladding_window import window_parts
 from cladding_lod import at_lod, masses, tag  # noqa: F401 — at_lod is the app's and the exporters'
 from cladding_match import plan_matches
 
+try:                                   # in the browser: the page, for _crumb
+    import js as _js                   # noqa: F401
+except ImportError:
+    _js = None
+
 
 def _prepare(p):
     """One group's faces made ready to build: (the faces, clipped; the chains' layout)."""
@@ -166,54 +171,78 @@ def build_all_groups(params):
 
 def generate_preview(params):
     meshes, dims, infos = [], [], []
-    join_verges(params)      # a verge over a clad wall: how far its plywood oversails
-    join_eaves(params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
-    join_abuts(params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
-    link_seams(params)       # faces whose seams follow another's are given its seam lines
-    for p, ready in _groups(params):
+    _crumb.faces = "every face"
+    _run(join_verges, params)      # a verge over a clad wall: how far its plywood oversails
+    _run(join_eaves, params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
+    _run(join_abuts, params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
+    _run(link_seams, params)       # faces whose seams follow another's are given its seam lines
+    for p, ready in _run(_groups, params):
         m, d, i = _preview_one(p, ready)
         meshes, dims, infos = meshes + m, dims + d, infos + i
     # Each mesh says the lowest level of development it is there at, and LOD 100's sheets
     # go with them (cladding_lod): the app and the exporters choose, the build is always whole.
-    meshes = tag(_ensure_unique_names(meshes))
-    return {"geometry": meshes, "dimensions": dims, "info": infos, "masses": masses(meshes, setting_groups(params))}
+    _crumb.faces = "every face"
+    meshes = _run(tag, _ensure_unique_names(meshes))
+    out = {"geometry": meshes, "dimensions": dims, "info": infos, "masses": _run(masses, meshes, setting_groups(params))}
+    _crumb("")
+    return out
+
+
+def _crumb(text):
+    """Where the engine is: in the browser, left on the page as it goes. An abort inside
+    WASM (GEOS, running out of heap) kills Python outright, so the app reads this to say
+    which step, on which faces, the engine died in."""
+    if _js is not None:
+        try:
+            _js.globalThis._engineStep = text
+        except Exception:      # pragma: no cover
+            pass
+
+
+_crumb.faces = ""
+
+
+def _run(fn, *args):
+    _crumb("%s (%s)" % (fn.__name__.strip("_"), _crumb.faces))
+    return fn(*args)
 
 
 def _preview_one(p, ready=None):
     """One group of faces sharing their settings (*p*, parsed), built, trimmed, mitred and
     finished."""
-    meshes, dims, infos = _build_all(p, ready)
+    _crumb.faces = ", ".join(str(e.get("name")) for e in p.get("elevations") or [])
+    meshes, dims, infos = _run(_build_all, p, ready)
     if p["trim"]:
-        meshes = apply_boolean_ops(meshes, p)
-    meshes = valley_cut(meshes, p)       # the cladding stands back from a valley, before its seams are finished
+        meshes = _run(apply_boolean_ops, meshes, p)
+    meshes = _run(valley_cut, meshes, p)       # the cladding stands back from a valley, before its seams are finished
     # Boards are mitred to the reveal linings on the finished outline, so the edges of
     # holes left by trimming are mitred as well as the ends that land on a jamb.
-    meshes = mitre_to_linings(meshes, p, infos)
-    meshes = finish_seams(meshes, p)     # where a seam runs out: folded down, or flat
-    head_ridges(p)                       # a monopitch's head verge is cut as half a ridge
-    abut_ridges(p)                       # and so is a slope run up to a wall: the head-wall abutment
-    meshes = ridge_ends(meshes, p, infos)    # two slopes meeting at a ridge: cut to it, the vent slot left
-    meshes = meshes + ridge_parts(p, meshes, infos)    # and the cap over it
-    meshes = hip_ends(meshes, p, infos)      # two slopes meeting at a hip: the same, along a sloping line
-    meshes = hip_parts(meshes, p, infos)
-    meshes = rake_ends(meshes, p, infos)     # a leaning wall's corner with another wall: mitred, or under a corner profile
-    meshes = rake_parts(meshes, p, infos)
-    meshes = verge_parts(meshes, p, infos)   # a roof slope's free side edges: the last tray out over a verge strip
-    meshes = valley_parts(meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
-    meshes = eaves_parts(meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
-    meshes = join_drips(meshes, p)           # where it meets a G3 verge: the verge drip down to the back of the eaves drip
-    meshes = join_hip_drips(meshes, p)       # where it runs into a hip: the two slopes' drips mitred on the hip's plan line
-    meshes = eaves_under(meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
-    meshes = window_parts(meshes, p, infos)  # a standing seam wall's openings: the sill capping and the head strip
-    meshes = cladding_drips(meshes, p, infos)   # a coated steel standing seam wall's foot: GreenCoat's cladding drip
-    meshes = head_parts(meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
-    meshes = abut_parts(meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
-    meshes = abut_over(meshes, p, infos)     # and that wall's layers stop above the roof
-    meshes = close_cap_ends(meshes, p)       # a ridge or head verge cap that ends at a verge: the verge up to its plane, a stop end
-    meshes = gablet_hip_tops(meshes, p, infos)   # a hip under a gablet's gable: its cap stops on the rake's seam, the slope dressed out to it
-    meshes = break_at_seams(meshes, p)       # last: each tray's flat drawn back to its own upstand, clear of the next tray's
+    meshes = _run(mitre_to_linings, meshes, p, infos)
+    meshes = _run(finish_seams, meshes, p)     # where a seam runs out: folded down, or flat
+    _run(head_ridges, p)                     # a monopitch's head verge is cut as half a ridge
+    _run(abut_ridges, p)                     # and so is a slope run up to a wall: the head-wall abutment
+    meshes = _run(ridge_ends, meshes, p, infos)    # two slopes meeting at a ridge: cut to it, the vent slot left
+    meshes = meshes + _run(ridge_parts, p, meshes, infos)    # and the cap over it
+    meshes = _run(hip_ends, meshes, p, infos)      # two slopes meeting at a hip: the same, along a sloping line
+    meshes = _run(hip_parts, meshes, p, infos)
+    meshes = _run(rake_ends, meshes, p, infos)     # a leaning wall's corner with another wall: mitred, or under a corner profile
+    meshes = _run(rake_parts, meshes, p, infos)
+    meshes = _run(verge_parts, meshes, p, infos)   # a roof slope's free side edges: the last tray out over a verge strip
+    meshes = _run(valley_parts, meshes, p, infos)  # the layers under it meet on the valley, and the gutter lies on them
+    meshes = _run(eaves_parts, meshes, p, infos)   # a roof slope's level bottom edge: the trays turned round the plywood's end into the drip
+    meshes = _run(join_drips, meshes, p)           # where it meets a G3 verge: the verge drip down to the back of the eaves drip
+    meshes = _run(join_hip_drips, meshes, p)       # where it runs into a hip: the two slopes' drips mitred on the hip's plan line
+    meshes = _run(eaves_under, meshes, p, infos)   # and the wall it comes down to the head of stops under its soffit
+    meshes = _run(window_parts, meshes, p, infos)  # a standing seam wall's openings: the sill capping and the head strip
+    meshes = _run(cladding_drips, meshes, p, infos)   # a coated steel standing seam wall's foot: GreenCoat's cladding drip
+    meshes = _run(head_parts, meshes, p, infos)    # a monopitch's level top edge: the G3 head verge over it
+    meshes = _run(abut_parts, meshes, p, infos)    # a slope run up to a wall: the G3 flashing up it, or the trays turned up under its cladding
+    meshes = _run(abut_over, meshes, p, infos)     # and that wall's layers stop above the roof
+    meshes = _run(close_cap_ends, meshes, p)       # a ridge or head verge cap that ends at a verge: the verge up to its plane, a stop end
+    meshes = _run(gablet_hip_tops, meshes, p, infos)   # a hip under a gablet's gable: its cap stops on the rake's seam, the slope dressed out to it
+    meshes = _run(break_at_seams, meshes, p)       # last: each tray's flat drawn back to its own upstand, clear of the next tray's
     if p["trim"]:                        # a custom profile's real section; a plain board while dragging
-        meshes = profile_planks(meshes, p)
+        meshes = _run(profile_planks, meshes, p)
     if p.get("seam"):                    # a metal facade reads solid: its reveal linings too
         for m in meshes:
             if m.get("ifc_type") == "reveal":

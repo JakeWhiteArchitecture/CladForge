@@ -182,3 +182,25 @@ def test_sliding_the_offset_keeps_the_batten_centres(elevation):
             assert gaps and all(abs(g - pitch) < 1.0 for g in gaps), (kind, off, gaps)
             labels = [d["label"] for d in out["dimensions"] if "c/c" in d["label"]]
             assert labels == ["%.0f c/c" % pitch], (kind, off, labels)
+
+
+def test_the_engine_leaves_where_it_is_on_the_page(elevation, monkeypatch):
+    """An abort inside WASM kills Python outright, so as it builds the preview leaves the step
+    and the faces it is on where the app can read them after a crash; cleared once done."""
+    import cladding_preview
+
+    class Page:
+        def __init__(self):
+            self.seen = []
+
+        def __setattr__(self, name, value):
+            if name == "_engineStep":
+                self.seen.append(value)
+            object.__setattr__(self, name, value)
+
+    page = Page()
+    monkeypatch.setattr(cladding_preview, "_js", type("JS", (), {"globalThis": page}))
+    generate_preview({"elevations": [dict(elevation, offset=0)], "trim": True})
+    assert "apply_boolean_ops (%s)" % elevation["name"] in page.seen
+    assert any(s.startswith("hip_ends (") for s in page.seen)
+    assert page.seen[-1] == ""
