@@ -12,7 +12,7 @@ from cladding_constants import _parse, chain_params, frame_to_world, v_to_z
 from cladding_profiles import profile_planks
 from cladding_geometry import build_elevation
 from cladding_booleans import apply_boolean_ops, clip_elevation
-from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds_v, base_level
+from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds, clip_bounds_v, base_level
 from cladding_edges import mitre_to_linings, finish_seams, break_at_seams
 from cladding_checks import check_rules as _check_rules
 from cladding_ridge import ridge_ends, ridge_parts
@@ -51,7 +51,49 @@ def _prepare(p):
         if elev.get("chain") in datums:
             elev["course_datum_z"] = datums[elev["chain"]]
             elev["course_datum_locked"] = elev["chain"] in chosen
+    for elev in live:
+        _clear_corner_seams(elev, p)
     return live, layout
+
+
+SEAM_CORNER_CLEAR = 100.0     # mm – a seam no nearer than this to where a hip or valley meets the eaves
+
+
+def _clear_corner_seams(elev, p):
+    """A roof face on its own in trays run with the fall, with a hip or valley, and its seams
+    not shifted by hand: where a seam would land within SEAM_CORNER_CLEAR of a point where
+    the face's eaves meets its hip or valley (a triangular face's seams all arrive there, a
+    sliver of tray beside the gutter), the trays are slid over, up to half a tray, to the
+    shift that keeps every seam clearest of those points ("auto_shift")."""
+    if not (p.get("seam") and p.get("plank_orient") == "vertical") or elev.get("chain") or float(elev.get("offset") or 0.0):
+        return
+    if float(elev.get("pitch") or 90.0) >= 80.0 or not any(v.get("kind") in ("hip", "valley") for v in elev.get("valleys") or []):
+        return
+    cover = float(p["plank_w"])
+    lo, hi = clip_bounds(elev)
+    pts = [q for pg in elev.get("polygons") or [] for q in pg["exterior"]]
+    if not pts or cover <= 2.0 * SEAM_CORNER_CLEAR:
+        return
+    low = min(q[1] for q in pts)
+    corners = []
+    for pg in elev.get("polygons") or []:
+        ring = pg["exterior"]
+        for a, b in zip(ring, ring[1:] + ring[:1]):
+            if abs(a[1] - low) < 5.0 and abs(b[1] - low) < 5.0 and abs(a[0] - b[0]) > 300.0:       # the eaves
+                corners += [u for u in (a[0], b[0]) if lo + 1.0 < u < hi - 1.0]                  # its ends inside the face
+    if not corners:
+        return
+    mid = (lo + hi) / 2.0
+
+    def clearance(off):
+        base = mid + off + cover / 2.0
+        return min(abs(((u - base + cover / 2.0) % cover) - cover / 2.0) for u in corners)
+    if clearance(0.0) >= SEAM_CORNER_CLEAR:
+        return
+    best = max((k * 5.0 for k in range(-int(cover / 10.0), int(cover / 10.0) + 1)), key=lambda off: (clearance(off), -abs(off)))
+    if clearance(best) > clearance(0.0):
+        elev["offset"] = best
+        elev["auto_shift"] = best
 
 
 def _build_all(p, ready=None):

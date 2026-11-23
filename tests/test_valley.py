@@ -232,3 +232,37 @@ def test_a_face_of_two_patches_is_judged_by_the_one_at_the_valley():
     assert len(a["polygons"]) == 2
     link = valley_link(a, c)
     assert link and link["kind"] == "valley" and link["length"] > 3000.0
+
+
+def test_a_lone_face_s_seams_are_slid_clear_of_where_its_valley_meets_the_eaves():
+    """A small slope on its own with a valley: a seam landing a few mm from where the valley
+    meets the eaves leaves a sliver of tray beside the gutter. Its trays are slid over (no
+    more than half a tray) so every seam stands SEAM_CORNER_CLEAR clear of that point; a
+    shift set by hand, or a face in a chain, is left as it is."""
+    import math as _m
+    from cladding_preview import _groups, SEAM_CORNER_CLEAR
+    a, c = _pair()
+    link = valley_link(a, c)
+    ra, rc = _records(a, c, link)
+    params = {"elevations": [ra, rc], "trim": True, "splash": 0, "cladding_type": "plank", "plank_profile": "seam",
+              "plank_orient": "vertical"}
+    for sub, (live, _layout) in _groups(params):
+        for e in live:
+            if e.get("auto_shift") is None:
+                continue
+            cover = float(sub["plank_w"])
+            assert abs(e["auto_shift"]) <= cover / 2.0 + 1.0
+    hand = dict(ra, offset=40.0)
+    for sub, (live, _layout) in _groups(dict(params, elevations=[hand, rc])):
+        assert all(e.get("auto_shift") is None for e in live if e["name"] == ra["name"])
+    from cladding_preview import _clear_corner_seams
+    from cladding_constants import _parse
+    p = _parse(dict(params))
+    e = {"name": "T", "pitch": 30.0, "valleys": [{"kind": "valley"}], "width": 4000.0, "height": 3000.0,
+         "polygons": [{"exterior": [[0.0, 0.0], [3000.0, 0.0], [4000.0, 3000.0], [0.0, 3000.0]], "holes": []}]}
+    cover = float(p["plank_w"])
+    e["polygons"][0]["exterior"][1][0] = 2000.0 + cover / 2.0 + 10.0           # the eaves ends 10 mm past a seam
+    _clear_corner_seams(e, p)
+    shift = e.get("auto_shift") or 0.0
+    seams = [2000.0 + shift + cover / 2.0 + k * cover for k in range(-6, 7)]
+    assert min(abs(s - e["polygons"][0]["exterior"][1][0]) for s in seams) >= SEAM_CORNER_CLEAR - 0.5
