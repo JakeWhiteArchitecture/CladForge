@@ -567,3 +567,18 @@ def test_with_cladding_the_eaves_corner_is_closed_as_the_g3_one():
             assert min(d) >= max(f) - 0.01                                     # the drip stops at the flashing's inside face
         else:
             assert max(d) <= min(f) + 0.01
+
+
+def test_a_verge_whose_edge_turns_into_a_hip_stops_where_the_edge_does():
+    """A small slope's side edge runs 1.2 m up and then turns off into a hip, under a head
+    verge at its top (a real model's front slope). Its verge stops where the edge does: run
+    on up to the head it lay across the next slope, a bar out past the eaves corner."""
+    t = math.tan(math.radians(25.0))
+    s, c = math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    plan = [(0, 0), (6000, 0), (6000, 3000), (1800, 3000), (0, 1200)]
+    pts = [[x, y, y * t] for x, y in plan]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[i], pts[i + 1]] for i in range(1, len(pts) - 1)],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", head="g3", eaves="none")], "trim": True, "splash": 0, **SEAM})
+    (left,) = [v for i in out["info"] for v in i.get("verges", []) if v["side"] == "l"]
+    assert left["length"] < 1500.0, left["length"]

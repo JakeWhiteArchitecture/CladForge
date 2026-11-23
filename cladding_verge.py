@@ -151,6 +151,7 @@ def _edges(info):
 
 
 VERGE_WALL_REACH = 400.0   # mm – the roof's edge this far or less out from a wall's face stands over that wall
+VERGE_TO_RIDGE = 400.0     # mm – a side edge reaching this near the ridge (or head) runs on up to it
 VERGE_WALL_SHORT = 60.0    # mm – or this far or less short of it
 
 
@@ -314,8 +315,12 @@ def verge_parts(meshes, p, infos):
                 roll_path, drop_path = eaves_paths(back, soffit, t, 0.0, VERGE_BELOW)[:2]
             else:
                 foot = back - 1.0 - drop
-            if r:       # at a ridge: square-ended, its foot no nearer the bisecting plane than the trays come
+            # at a ridge: square-ended, its foot no nearer the bisecting plane than the trays come. Only where the side
+            # edge runs up to it: one that turns off into a hip on the way up stops where the edge does
+            if r and v1 >= r["v"] - VERGE_TO_RIDGE:
                 v1 = _slot(r) + r["k"] * foot
+            if v1 - v0 < 300.0:
+                continue                               # what is left of it is no verge (a step in a stepped top, under the ridge)
             V, U, N = frame_v(frame), frame["u"], frame["n"]
             toward = [out * c for c in U]
             across = [V[1] * toward[2] - V[2] * toward[1], V[2] * toward[0] - V[0] * toward[2], V[0] * toward[1] - V[1] * toward[0]]
