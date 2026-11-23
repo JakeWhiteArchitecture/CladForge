@@ -166,10 +166,12 @@ def test_an_eaves_exports():
     # each tray with its seams and its drip is one closed solid (cladding_union), no more than its pieces hold
     from solid_checks import one_closed_solid, volume
     from cladding_union import piece_mesh, _volume
+    from ifc_generator import seam_sheets, tray_owners
+    sheets = seam_sheets(out["geometry"])                  # one face: each overcloak with the tray it is folded from
+    own = tray_owners(sheets)
     for e in trays:
         solid = volume(one_closed_solid(e))
-        pieces = [m for m in out["geometry"] if m["name"] == e.Name or m.get("of") == e.Name
-                  or (m["ifc_type"] == "seam" and m["name"].startswith(e.Name + " "))]
+        pieces = [m for m in sheets if m["name"] == e.Name or (id(m) in own and own[id(m)]["name"] == e.Name)]
         assert len(pieces) > 1
         whole = sum(_volume(*piece_mesh(m)) for m in pieces)
         assert 0.97 * whole < solid <= whole * (1.0 + 1e-4) + 1.0, (e.Name, solid, whole)

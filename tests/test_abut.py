@@ -118,6 +118,10 @@ def test_a_wall_of_the_model_that_stands_over_the_roof_is_found_though_it_is_not
     assert not abuts_of(dict(roof, walls_above=[w for w in roof["walls_above"] if w["name"] == "Side wall"]), p), "a wall along its side is no head wall"
     assert not abuts_of(dict(roof, abutment="none"), p) and not abuts_of(roof, _parse(dict(PANEL))), "trays that run with the fall only"
     assert not abuts_of(dict(roof, ridge={"with": "B", "v": 1.0, "u0": 0, "u1": 1, "k": 1}), p)
+    # where the chain asks for G3 heads, a wall of the model not picked leaves the top a mono
+    # ridge (the job's step between two monopitches); one asked for still makes an abutment
+    assert not abuts_of(dict(roof, head="g3"), p)
+    assert abuts_of(dict(roof, head="g3", abutment="g3"), p)
 
 
 @pytest.mark.parametrize("pitch", [5.0, 15.0, 30.0])

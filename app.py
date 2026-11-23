@@ -20,7 +20,7 @@ app = Flask(__name__, template_folder=os.path.join(ROOT, "templates"),
             static_folder=os.path.join(ROOT, "static"))
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024
 
-PY_MODULES = ("cladding_constants", "cladding_window", "cladding_lod", "cladding_primitives", "cladding_edges", "cladding_corners", "cladding_ridge", "cladding_verge", "cladding_valley", "cladding_greencoat", "cladding_hip", "cladding_eaves", "cladding_head", "cladding_abut", "cladding_rake", "cladding_match", "cladding_nesting", "cladding_state", "cladding_geometry", "cladding_booleans", "cladding_profiles", "cladding_union",
+PY_MODULES = ("cladding_constants", "cladding_window", "cladding_lod", "cladding_primitives", "cladding_edges", "cladding_corners", "cladding_ridge", "cladding_verge", "cladding_valley", "cladding_greencoat", "cladding_hip", "cladding_eaves", "cladding_head", "cladding_vergehead", "cladding_abut", "cladding_rake", "cladding_match", "cladding_nesting", "cladding_state", "cladding_geometry", "cladding_booleans", "cladding_profiles", "cladding_union",
               "cladding_checks", "cladding_preview", "fabric_extract", "dxf_generator", "cladding_elevations",
               "ifc_generator")
 

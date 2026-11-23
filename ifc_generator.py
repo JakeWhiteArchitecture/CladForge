@@ -380,6 +380,129 @@ def tray_owners(group):
     return out
 
 
+OVERCLOAK = " Seam overcloak"
+SEAM_TOUCH = 1.5     # mm – a tray's side this near the overcloak's root is the sheet it is folded from
+
+
+def seam_sheets(group):
+    """One elevation's meshes with each standing seam's overcloak given to the tray it is
+    folded from. A seam is built with the tray on one side of it and named after that tray,
+    both its halves; but only the undercloak is that tray's sheet: the overcloak is turned
+    up from the tray on the other side. So each overcloak piece says whose it is ("of"),
+    the neighbour whose side its root stands on, and where that side is in more than one
+    length (its trays' cross joints fall elsewhere) it is cut there, a piece to each. A
+    tray's element is then the tray, the undercloak up one side and the overcloak up the
+    other: two trays share each seam, as they are made. Pieces with no neighbour (the last
+    seam at a verge, a tray cut to a hip) stay with the tray they were built with."""
+    trays = [m for m in group if m.get("ifc_type") == "plank" and m.get("name")]
+    if not trays:
+        return group
+    by_name = {m["name"]: m for m in trays}
+    legs = {m["name"][:-len(OVERCLOAK)]: m for m in group
+            if m.get("ifc_type") == "seam" and (m.get("name") or "").endswith(OVERCLOAK)}
+    if not legs:
+        return group
+    split = {}                                   # base tray: [(v from, v to, neighbour)]
+    for base, leg in legs.items():
+        mine = by_name.get(base)
+        if mine is None:
+            continue
+        us = [q[0] for q in leg["profile"]]
+        vs = [q[1] for q in leg["profile"]]
+        u0, u1, v0, v1 = min(us), max(us), min(vs), max(vs)
+        near = []
+        for t in trays:
+            if t is mine or not _same_plane(t, leg):
+                continue
+            tu = [q[0] for q in t["profile"]]
+            tv = [q[1] for q in t["profile"]]
+            touches = min(abs(max(tu) - u0), abs(max(tu) - u1), abs(min(tu) - u0), abs(min(tu) - u1)) <= SEAM_TOUCH
+            if touches and min(tv) < v1 - 1.0 and max(tv) > v0 + 1.0:
+                near.append((min(tv), max(tv), t["name"]))
+        if not near:
+            continue
+        near.sort()
+        bands, lo = [], -1.0e9
+        for i, (a, b, name) in enumerate(near):
+            hi = (b + near[i + 1][0]) / 2.0 if i + 1 < len(near) else 1.0e9
+            bands.append((lo, hi, name))
+            lo = hi
+        split[base] = bands
+    if not split:
+        return group
+    out = []
+    for m in group:
+        name = m.get("name") or ""
+        base = name.split(OVERCLOAK)[0] if OVERCLOAK in name and m.get("ifc_type") == "seam" else None
+        bands = split.get(base)
+        if not bands:
+            out.append(m)
+            continue
+        if len(bands) == 1 or m.get("holes"):
+            out.append(dict(m, of=bands[0][2] if len(bands) == 1 else _most(m, bands)))
+            continue
+        for a, b, who in bands:
+            piece = _band_of(m, a, b)
+            if piece is not None:
+                piece["of"] = who
+                piece["name"] = "%s%s" % (who, name[len(base):])
+                out.append(piece)
+    return out
+
+
+def _same_plane(a, b):
+    fa, fb = a["frame"], b["frame"]
+    return all(abs(float(x) - float(y)) < 1e-6 for x, y in zip(fa["n"], fb["n"])) and \
+        all(abs(float(x) - float(y)) < 1e-6 for x, y in zip(fa["u"], fb["u"])) and \
+        all(abs(float(x) - float(y)) < 1e-3 for x, y in zip(fa["origin"], fb["origin"]))
+
+
+def _most(m, bands):
+    """The neighbour beside most of the piece's length."""
+    vs = [q[1] for q in m["profile"]]
+    lo, hi = min(vs), max(vs)
+    return max(bands, key=lambda bd: min(hi, bd[1]) - max(lo, bd[0]))[2]
+
+
+def _band_of(m, a, b):
+    """The part of the prism *m* between v = a and v = b (in its own outline), its per-vertex
+    shifts with depth ("vshift") carried to the new corners along the edges they are cut on.
+    None if nothing of it lies there."""
+    ring = [list(q) for q in m["profile"]]
+    shift = (m.get("vshift") or [None])[0]
+    rows = [list(r) for r in shift] if shift else [[0.0] * 4 for _q in ring]
+    pts = [(q, r) for q, r in zip(ring, rows)]
+
+    def clip(pts, keep, at):
+        out = []
+        for i, (q, r) in enumerate(pts):
+            p, pr = pts[i - 1]
+            if keep(q):
+                if not keep(p):
+                    out.append(at(p, pr, q, r))
+                out.append((q, r))
+            elif keep(p):
+                out.append(at(p, pr, q, r))
+        return out
+
+    def cut(level):
+        def at(p, pr, q, r):
+            t = (level - p[1]) / (q[1] - p[1])
+            return ([p[0] + t * (q[0] - p[0]), level], [x + t * (y - x) for x, y in zip(pr, r)])
+        return at
+    pts = clip(pts, lambda q: q[1] >= a, cut(a)) if a > -1.0e8 else pts
+    pts = clip(pts, lambda q: q[1] <= b, cut(b)) if pts and b < 1.0e8 else pts
+    if len(pts) < 3:
+        return None
+    area = sum(p[0][0] * q[0][1] - q[0][0] * p[0][1] for p, q in zip(pts, pts[1:] + pts[:1])) / 2.0
+    if abs(area) < 1.0:
+        return None
+    piece = dict(m, profile=[[round(q[0], 4), round(q[1], 4)] for q, _r in pts])
+    if shift:
+        piece["vshift"] = [[r for _q, r in pts]] + list((m.get("vshift") or [])[1:])
+    return piece
+
+
 def own_elements(meshes):
     """The meshes that are an element of their own in the IFC: all but those that are part
     of a standing seam tray (tray_owners), which go out in the tray's element."""
@@ -562,6 +685,7 @@ def meshes_to_ifc(meshes, params, infos=None):
     by_elev = {}
     for m in meshes:
         by_elev.setdefault(m.get("elevation", ""), []).append(m)
+    by_elev = {k: seam_sheets(g) for k, g in by_elev.items()}   # each overcloak in the tray it is folded from
 
     elements, fingerprints, assemblies, by_material = [], {}, [], {}
     for elev in elevations:

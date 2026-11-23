@@ -248,3 +248,69 @@ def test_a_top_over_a_wall_for_part_of_its_length_takes_a_free_head_for_the_rest
     assert free and walled and all(m.get("vshift") for m in free + walled)
     assert max(q[1] for m in free for q in m["profile"]) <= float(r["height"]) + 1.0
     assert min(q[1] for m in walled for q in m["profile"] if q[1] > 1000.0) > float(r["height"]) + 30.0
+
+
+@pytest.mark.parametrize("proud", [40.0, 75.0, 120.0])
+def test_over_a_roof_edge_proud_of_the_wall_the_drop_clears_whichever_is_further_out(proud):
+    """The job's clerestories: the roof's top edge 75–91 mm proud of the wall's face, about as
+    far as the wall's cladding stands out. The cap's drop was set HEAD_CLEAR beyond the
+    cladding measured from the roof's edge, so it hung about 100 mm out in the air. It
+    clears the wall's cladding or the roof's edge, whichever is further out, by HEAD_CLEAR."""
+    t, s, c = math.tan(math.radians(21.0)), math.sin(math.radians(21.0)), math.cos(math.radians(21.0))
+    w = _face("Wall", [[0, 0, 0], [6000, 0, 0], [6000, 0, H], [0, 0, H]], (0, -1, 0))
+    y0, z0 = -proud, H + proud * t
+    r = _face("Roof", [[6000, y0, z0], [0, y0, z0], [0, 3000, H - 3000 * t], [6000, 3000, H - 3000 * t]], (0, s, c))
+    link = head_link(w, r)
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    roof = dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none", eaves="none")
+    wall = dict(w, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[rec("a", "Roof")])
+    out = generate_preview({"elevations": [wall, roof], "trim": True, "splash": 0})
+    info = {i["elevation"]: i for i in out["info"]}
+    outside = max([h for h, _z in _section(out, "Wall", "seam")] + [info["Wall"]["total_depth"]])
+    sec = _section(out, "Roof", "ridge_cap")
+    assert sec
+    assert max(h for h, _z in sec) == pytest.approx(max(outside, proud) + HEAD_CLEAR, abs=1.5)
+
+
+def test_two_heads_on_one_top_each_close_only_at_their_own_verge():
+    """With verges at both ends of the top, each cap ran on out to both verges when its ends
+    were closed, so the short cap over the wall was stretched the whole top over the free
+    head's: two caps on one ridge. Each cap now runs out over the verge at its own end only."""
+    t, s, c = math.tan(math.radians(15.0)), math.sin(math.radians(15.0)), math.cos(math.radians(15.0))
+    w = _face("Wall", [[0, 0, 0], [2000, 0, 0], [2000, 0, H], [0, 0, H]], (0, -1, 0))
+    r = _face("Roof", [[6000, 0, H], [0, 0, H], [0, 3000, H - 3000 * t], [6000, 3000, H - 3000 * t]], (0, s, c))
+    link = head_link(w, r)
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    roof = dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="both",
+                verge_type="cladding", eaves="none", head="g3")
+    wall = dict(w, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[rec("a", "Roof")])
+    out = generate_preview({"elevations": [wall, roof], "trim": True, "splash": 0})
+    caps = sorted((m for m in out["geometry"] if m["ifc_type"] == "ridge_cap" and m["name"].startswith("Roof Head Verge Cap")),
+                  key=lambda m: m["thickness"])
+    assert len(caps) == 2
+    assert 2000.0 <= caps[0]["thickness"] < 2300.0 and 4000.0 <= caps[1]["thickness"] < 4300.0, [m["thickness"] for m in caps]
+    stops = [m for m in out["geometry"] if " Stop End " in m["name"] and m["name"].startswith("Roof Head Verge")]
+    assert len(stops) == 2                                                  # one at each verge, none where the caps meet
+
+
+def test_back_to_back_monopitches_at_two_heights_close_the_step_between_their_caps():
+    """The job's E and H: two monopitches falling away from each other, their tops side by
+    side on plan, one 300 mm above the other. Each takes its own G3 head (mono ridge), and
+    the higher cap's drop runs on down past the top of the lower cap, so the step's face
+    between them is closed, not left open between the caps."""
+    t, s, c = math.tan(math.radians(20.0)), math.sin(math.radians(20.0)), math.cos(math.radians(20.0))
+    step = 300.0
+    hi = _face("High", [[6000, 0, H + step], [0, 0, H + step], [0, -3000, H + step - 3000 * t], [6000, -3000, H + step - 3000 * t]],
+               (0, -s, c))
+    lo = _face("Low", [[0, 60, H], [6000, 60, H], [6000, 3060, H - 3000 * t], [0, 3060, H - 3000 * t]], (0, s, c))
+    elevs = [dict(hi, offset=0, chain="Chain 1", settings=dict(SEAM), verge="none", eaves="none", head="g3"),
+             dict(lo, offset=0, chain="Chain 2", settings=dict(SEAM), verge="none", eaves="none", head="g3")]
+    out = generate_preview({"elevations": elevs, "trim": True, "splash": 0})
+    zs = {}
+    for m in out["geometry"]:
+        if m["ifc_type"] == "ridge_cap" and m["name"].endswith("Head Verge Cap"):
+            pts = [frame_to_world(m["frame"], u, v, d) for d in (m["depth"], m["depth"] + m["thickness"]) for u, v in ring_at(m, 0, d)]
+            zs[m["elevation"]] = (min(q[2] for q in pts), max(q[2] for q in pts))
+    assert set(zs) == {"High", "Low"}
+    assert zs["High"][0] < zs["Low"][1] - 20.0, zs                 # the high cap's drop laps down past the low cap's top
+    assert zs["High"][0] > zs["Low"][1] - HEAD_DROP - 40.0, zs      # by about a drop, no more

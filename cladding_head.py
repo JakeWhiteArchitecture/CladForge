@@ -38,8 +38,9 @@ import math
 from shapely.geometry import LineString
 from shapely.geometry.polygon import orient
 
-from cladding_constants import _prism, frame_to_world, frame_v
+from cladding_constants import _parse, _prism, chain_params, frame_to_world, frame_v
 from cladding_eaves import _joins
+from cladding_primitives import buildup_depth
 from cladding_ridge import (RIDGE_GAP, RIDGE_HEM, RIDGE_LEG, RIDGE_REST, FILLER_EDGE, FILLER_GAP, FILLER_W, _fillers, _slot,
                             _up_slope)
 from cladding_verge import ROOF_PITCH
@@ -105,8 +106,11 @@ def heads_of(elev, p):
                     if d - c >= HEAD_MIN:
                         out.append({"u0": c, "u1": d, "v": v, "over": None, "pitch": float(pitch), "depth": 0.0, "top": 0.0})
             u0, u1 = a, b
+        # how far the wall's cladding stands out past the roof's edge, on plan: its depth, less
+        # what the edge already oversails the wall's face by (the drop clears whichever is further out)
+        proud = max(0.0, v - over["v"]) * math.cos(math.radians(float(pitch))) if over else 0.0
         out.append({"u0": u0, "u1": u1, "v": v, "over": over["with"] if over else None, "pitch": float(pitch),
-                    "depth": (over["depth"] + over["seam"]) if over else 0.0, "top": over["top"] if over else 0.0})
+                    "depth": max(0.0, over["depth"] + over["seam"] - proud) if over else 0.0, "top": over["top"] if over else 0.0})
     return out
 
 
@@ -115,6 +119,57 @@ def _plane(h):
     HEAD_BACK inside the line of the drop; else on the edge."""
     c = math.cos(math.radians(h["pitch"]))
     return max(0.0, h["depth"] + HEAD_CLEAR - HEAD_BACK) / c
+
+
+STEP_REACH = 500.0    # mm – on plan, how near a lower roof's head may lie under a higher one's
+STEP_MAX = 400.0      # mm – the most a head's drop is run on down over a step; a taller step's face is clad
+
+
+def head_steps(params):
+    """Before anything is built, every face in view whatever its chain: a free head stepped
+    over a lower roof's free head, back to back (two monopitches at different heights, the
+    job's E and H), is told how far down to run its drop ("head_steps", [{"u0", "u1", "to":
+    the height its drop's foot goes down to}]): HEAD_DROP past the top of the lower cap, so
+    the step's face between the two caps is closed. Up to STEP_MAX deeper than its own."""
+    elevs = [e for e in params.get("elevations") or [] if e.get("ok", True) and e.get("polygons")]
+    found = []
+    for e in elevs:
+        e.pop("head_steps", None)
+        try:
+            pe = _parse(dict(chain_params(params, e), elevations=[e]))
+            heads = [h for h in heads_of(e, pe) if not h["over"]]
+        except Exception:   # noqa: BLE001 — a face that will not say is left out
+            continue
+        if not heads:
+            continue
+        rest = buildup_depth(pe) + (float(pe["seam_h"]) if pe.get("seam") else 0.0) + RIDGE_REST
+        for h in heads:
+            a = frame_to_world(e["frame"], h["u0"], h["v"], 0.0)
+            b = frame_to_world(e["frame"], h["u1"], h["v"], 0.0)
+            top = a[2] + rest / max(0.2, math.cos(math.radians(h["pitch"])))
+            found.append((e, h, a, b, top))
+    for e, h, a, b, _top in found:
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        size = math.hypot(dx, dy)
+        if size < 1.0:
+            continue
+        dx, dy = dx / size, dy / size
+        for f, g, ga, gb, gtop in found:
+            if f is e or not 50.0 < a[2] - ga[2] <= STEP_MAX + HEAD_DROP + 200.0:
+                continue
+            gx, gy = gb[0] - ga[0], gb[1] - ga[1]
+            gs = math.hypot(gx, gy)
+            if gs < 1.0 or abs((gx * dx + gy * dy) / gs) < 0.995:
+                continue                                                    # not parallel on plan
+            if abs((ga[0] - a[0]) * dy - (ga[1] - a[1]) * dx) > STEP_REACH:
+                continue                                                    # not under it
+            s0 = (ga[0] - a[0]) * dx + (ga[1] - a[1]) * dy
+            s1 = (gb[0] - a[0]) * dx + (gb[1] - a[1]) * dy
+            lo, hi = max(0.0, min(s0, s1)), min(size, max(s0, s1))
+            if hi - lo < HEAD_MIN:
+                continue
+            k = (h["u1"] - h["u0"]) / size                                  # its u per mm along the line
+            e.setdefault("head_steps", []).append({"u0": h["u0"] + lo * k, "u1": h["u0"] + hi * k, "to": gtop - HEAD_DROP})
 
 
 def head_ridges(p):
@@ -180,6 +235,11 @@ def _head_cap(meshes, p, elev, r, info):
     drop = h["depth"] + HEAD_CLEAR - back * c          # the drop's line, beyond the plane on plan
     head = -back * s - h["top"]                        # the top of the wall's cladding (or the roof's edge), up from the section's origin
     foot = head - HEAD_DROP
+    # stepped over a lower roof's head: the drop runs on down past the top of that one's cap (head_steps)
+    step = next((q for q in elev.get("head_steps") or [] if min(h["u1"], q["u1"]) - max(h["u0"], q["u0"]) >= HEAD_MIN), None)
+    if step is not None and not h["over"]:
+        z0 = frame_to_world(frame, h["u0"], r["v"], 0.0)[2]
+        foot = max(foot - STEP_MAX, min(foot, step["to"] - z0))
     ring, width = _cap_ring(h["pitch"], rest, drop, foot, t)
     up, U = frame_v(frame), frame["u"]
     level = [-up[0] / math.hypot(up[0], up[1]), -up[1] / math.hypot(up[0], up[1]), 0.0]
@@ -188,6 +248,7 @@ def _head_cap(meshes, p, elev, r, info):
     start = h["u0"] if sum(a * b for a, b in zip(along, U)) > 0 else h["u1"]
     place = {"origin": frame_to_world(frame, start, r["v"], 0.0), "u": level, "v": [0.0, 0.0, 1.0], "n": along}
     cap = _prism(ring, 0.0, length, place, "ridge_cap", "%s Head Verge Cap" % name, name)
+    cap["head_span"] = [h["u0"], h["u1"]]          # which of the face's heads it is (cladding_verge.close_cap_ends)
     cap["head_info"] = {"length": round(length, 1), "width": round(width, 1), "drop": HEAD_DROP, "clear": HEAD_CLEAR,
                         "thickness": t, "over": h["over"], "run": round(back, 1), "standard": width <= RIDGE_LEG + 0.5}
     out.append(cap)

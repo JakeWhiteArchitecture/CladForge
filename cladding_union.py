@@ -172,6 +172,9 @@ def _browser(pieces):
     return verts, tris
 
 
+SLIVER = 0.05        # mm² – a triangle this small has no direction worth comparing
+
+
 def faces(verts, tris, tol=1e-3):
     """A closed triangle mesh's faces as polygons: [(outer loop, [inner loops])] of vertex
     indices, each the edge-connected triangles that lie in one plane facing one way, their
@@ -212,8 +215,10 @@ def faces(verts, tris, tol=1e-3):
         sliver's normal is too rough to compare, and an offset from the origin, metres away,
         turns the least tilt between two normals into millimetres."""
         nb, ns = norms[rep[big]], norms[rep[small]]
-        if nb is None or (ns is not None and nb[0] * ns[0] + nb[1] * ns[1] + nb[2] * ns[2] < 0.5):
+        if nb is None:
             return False
+        if ns is not None and areas[rep[small]] > SLIVER and nb[0] * ns[0] + nb[1] * ns[1] + nb[2] * ns[2] < 0.5:
+            return False                # (a sliver, where two pieces' faces all but meet, faces any way: its corners decide)
         p = verts[tris[rep[big]][0]]
         return all(abs(nb[0] * (verts[k][0] - p[0]) + nb[1] * (verts[k][1] - p[1]) + nb[2] * (verts[k][2] - p[2])) < tol
                    for k in pts[small])

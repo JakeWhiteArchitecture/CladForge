@@ -302,8 +302,8 @@ def verge_parts(meshes, p, infos):
         r = ridge_of(elev)
         found = _edges(info)
         for side in sides:
-            if side not in found:
-                continue
+            if side not in found or side in (elev.get("verge_caps") or {}):
+                continue                                                # (a verge between two mono ridges: cladding_vergehead)
             u, v0, v1, rake = found[side]
             at = lambda v, v0=v0, rake=rake: rake * (v - v0)                 # noqa: E731 — the edge's lean, out from its foot, at v
             first = len(extra)
@@ -663,6 +663,21 @@ def _up_to_plane(m, point, normal, frame, r):
     return [m]
 
 
+CAP_END_NEAR = 400.0     # mm – a verge piece reaching no further in along the cap than this is at its end
+CAP_END_REACH = 1000.0   # mm – nor starting further out past it
+
+
+def _own_ridge(elev, cap):
+    """The ridge record (cladding_ridge.ridge_of) the cap is over: on a top with more than
+    one head verge, the head it is the cap of (by its span), else the face's ridge or head."""
+    span = cap.get("head_span")
+    if span and elev.get("head_more"):
+        for rec in [elev.get("head_ridge")] + list(elev.get("head_more") or []):
+            if rec and abs(float(rec["u0"]) - span[0]) < 1.0 and abs(float(rec["u1"]) - span[1]) < 1.0:
+                return ridge_of(dict(elev, ridge=None, head_ridge=rec))
+    return ridge_of(elev)
+
+
 def close_cap_ends(meshes, p):
     """Where a ridge cap or a head verge cap ends at a verge, close it (VMZINC's stop end):
 
@@ -681,7 +696,7 @@ def close_cap_ends(meshes, p):
     by = {e.get("name"): e for e in p.get("elevations", [])}
     out = list(meshes)
     caps = [m for m in out if m.get("ifc_type") == "ridge_cap" and (m.get("ridge_info") or m.get("head_info"))
-            and not m.get("stop_end")]
+            and not m.get("stop_end") and not m.get("drip_end")]
     for cap in caps:
         info = cap.get("ridge_info") or {}
         faces = info.get("between") or [cap.get("elevation")]
@@ -700,7 +715,7 @@ def close_cap_ends(meshes, p):
         angle = v_angle(by.get(faces[0]) if faces else None)
         for name in faces:
             elev = by.get(name)
-            r = ridge_of(elev) if elev else None
+            r = _own_ridge(elev, cap) if elev else None
             if not r:
                 continue
             frame = elev["frame"]
@@ -711,6 +726,8 @@ def close_cap_ends(meshes, p):
                       and (m.get("verge_drip") or m.get("verge_support") or m.get("verge_seam")
                            or (m.get("ifc_type") == "verge_strip" and re_flash(m.get("name", ""))))]
             for end in (0, 1):
+                if end in (cap.get("mitred_ends") or []):
+                    continue                                            # mitred onto a raking cap (cladding_vergehead)
                 here = []
                 for m in pieces:
                     pts = [frame_to_world(m["frame"], x, y, d) for x, y in m["profile"]
@@ -718,7 +735,10 @@ def close_cap_ends(meshes, p):
                     if max(dot([a - b for a, b in zip(q, frame["origin"])], V) for q in pts) < r["v"] - 800.0:
                         continue                                            # a length lower down the verge (at the eaves, say)
                     s = [along(q) for q in pts]
-                    if (end == 0 and max(s) < length / 2.0) or (end == 1 and min(s) > length / 2.0):
+                    # a verge at this end of the cap: not one at the far end of a longer top, past
+                    # where this cap stops (a head over a wall for part of a top, a free head the rest)
+                    if (end == 0 and max(s) < min(length / 2.0, CAP_END_NEAR) and min(s) > -CAP_END_REACH) or \
+                            (end == 1 and min(s) > max(length / 2.0, length - CAP_END_NEAR) and max(s) < length + CAP_END_REACH):
                         here.append((m, s, pts))
                 if not here:
                     continue
