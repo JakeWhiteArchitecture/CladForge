@@ -448,3 +448,22 @@ def test_a_wall_leaning_out_under_an_eaves_still_has_the_eaves(lean):
              dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none")]
     built = generate_preview({"elevations": elevs, "trim": True, "splash": 0})
     assert _aprons(built), "the drip at the eaves"
+
+
+def test_a_gently_raking_eaves_still_gets_its_drip():
+    """A roof's eaves that follows a wall's raked head (a canopy's leaning wall in a real
+    model, about 3.5 degrees across the face): an eaves all the same, each tray turned
+    into its drip where it ends, the drip running up the line with the edge."""
+    t, s, c = math.tan(math.radians(25.0)), math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
+    rise = 360.0                                       # the eaves line on plan, 360 mm up the slope over 6 m
+    pts = [[0, 0, 0], [6000, rise, rise * t], [6000, 4000, 4000 * t], [0, 4000, 4000 * t]]
+    roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[1], pts[2]], [pts[0], pts[2], pts[3]]],
+                              "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    out = generate_preview({"elevations": [dict(roof, offset=0, chain="Roof", settings=dict(SEAM), verge="none")],
+                            "trim": True, "splash": 0, **SEAM})
+    feet = [m for m in out["geometry"] if m["ifc_type"] == "plank" and min(q[1] for q in m["profile"]) < 600.0]   # the trays at the eaves
+    drips = _aprons(out)
+    assert feet and len(drips) >= len(feet) - 1, "a drip at every bottom tray's foot"
+    lows = sorted((min(frame_to_world(m["frame"], u, v, float(m["depth"]))[2] for u, v in ring_at(m, 0, float(m["depth"]))), m["name"])
+                  for m in drips)
+    assert lows[-1][0] - lows[0][0] > 100.0, "the drip rises with the edge"
