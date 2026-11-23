@@ -259,3 +259,15 @@ def test_a_roofs_edge_past_the_wall_it_lands_on_can_be_trimmed_to_it():
     assert sorted({round(p[1]) for p in ring}) == [-300, 0] and heal["trim"]["over"] == pytest.approx(300.0 / C, abs=0.1)
     cut = _extract("Roof", _fan([(0, -300), (6000, -300), (6000, 3000), (0, 3000)], lambda x, y: 2700.0 + y * T), (0, -S, C), trims=heal["trim"]["a"])
     assert cut["height"] == pytest.approx(3000.0 / C, abs=0.1) and heal_link(cut, wall) is None
+
+
+def test_two_slopes_one_a_hair_past_their_ridge_heal_as_a_ridge():
+    """Two slopes rising to one line, one of them modelled 75 mm past it and the other short
+    (a real model's two roofs at their ridge). Ticked, they must meet at a ridge: the app
+    joins them in one chain and caps it. Offered as an abutment, they kept their own chains
+    and each top was a free edge, the trays stopping short of the line."""
+    a = _fan([(0, 0), (6000, 0), (6000, 3075), (0, 3075)], lambda x, y: y * T)                    # 75 past y = 3000
+    b = _fan([(0, 3400), (6000, 3400), (6000, 6000), (0, 6000)], lambda x, y: (6000 - y) * T)       # 400 short of it
+    ra, rb = _extract("Roof A", a, (0, -S, C)), _extract("Roof B", b, (0, S, C))
+    heal = heal_link(ra, rb)
+    assert heal and heal["kind"] == "ridge"

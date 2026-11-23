@@ -181,3 +181,18 @@ def test_the_head_verge_cap_s_stop_end_closes_the_corner_as_a_box(style, verge_t
         edge = (corner[0] - start[0], corner[1] - start[1])
         cos = (up[0] * edge[0] + up[1] * edge[1]) / math.hypot(*up) / math.hypot(*edge)
         assert abs(math.degrees(math.acos(cos)) - angle) < 0.5
+
+
+@pytest.mark.parametrize("proud, found", [(0.0, True), (75.0, True), (140.0, True), (200.0, False)])
+def test_the_roof_s_top_edge_may_stand_proud_of_the_wall_s_face(proud, found):
+    """The deck is often carried over the wall's head: a clerestory's head with the roof
+    behind it falling away, its top edge 75 mm proud of the wall's face (a real model). Up
+    to HEAD_OVERSAIL it is still the head; further out the roof sails on, and is not."""
+    t, s, c = math.tan(math.radians(21.0)), math.sin(math.radians(21.0)), math.cos(math.radians(21.0))
+    wall = _face("Wall", [[0, 0, 0], [6000, 0, 0], [6000, 0, H], [0, 0, H]], (0, -1, 0))
+    y0, z0 = -proud, H + proud * t                     # on the roof's own plane through the wall's head
+    roof = _face("Roof", [[6000, y0, z0], [0, y0, z0], [0, 3000, H - 3000 * t], [6000, 3000, H - 3000 * t]], (0, s, c))
+    link = head_link(wall, roof)
+    assert bool(link) is found
+    if found:
+        assert link["length"] == pytest.approx(6000.0, abs=1.0)

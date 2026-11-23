@@ -427,3 +427,24 @@ def test_at_a_hip_the_two_slopes_drips_are_mitred_on_the_hips_line_and_the_cap_f
         assert m["of"]                                                   # one element with its tray (or support)
     stops = sorted(m["name"] for m in out["geometry"] if m.get("stop_end"))
     assert stops == ["Roof A Hip Stop End Roof C", "Roof C Hip Stop End Roof A"]
+
+
+@pytest.mark.parametrize("lean", [1.0, 2.7, 10.0])
+def test_a_wall_leaning_out_under_an_eaves_still_has_the_eaves(lean):
+    """A canopy's wall leans out (its head further out than its foot): the roof that comes
+    down to its head is still an eaves, with its drip; not a mansard's knuckle."""
+    t, s, c = math.tan(math.radians(30.0)), 0.5, math.cos(math.radians(30.0))
+    out = math.tan(math.radians(lean)) * 2700.0         # how far out its head stands
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]                                # noqa: E731
+    face = lambda name, pts, n: extract_elevation({"name": name, "faces": quad(pts), "outward": list(n), "context": [],   # noqa: E731
+                                                   "options": {"debug": False, "clad_depth": 150.0}})
+    a = math.radians(lean)
+    w = face("Wall", [[0, 0, 0], [6000, 0, 0], [6000, -out, 2700], [0, -out, 2700]], (0, -math.cos(a), -math.sin(a)))
+    r = face("Roof", [[0, -out, 2700], [6000, -out, 2700], [6000, 3000, 2700 + (3000 + out) * t], [0, 3000, 2700 + (3000 + out) * t]], (0, -s, c))
+    link = eaves_link(w, r)
+    assert link and link["kind"] == "eaves" and not link["mansard"] and link["length"] == pytest.approx(6000.0, abs=1.0)
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    elevs = [dict(w, offset=0, chain="Chain 1", settings=dict(cladding_type="panel"), valleys=[rec("a", "Roof")]),
+             dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none")]
+    built = generate_preview({"elevations": elevs, "trim": True, "splash": 0})
+    assert _aprons(built), "the drip at the eaves"
