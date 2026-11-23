@@ -277,3 +277,25 @@ def test_without_counter_battens_nothing_changes(elevation):
     out = generate_preview(_params(elevation, **PLANK_H))
     assert not [m for m in out["geometry"] if m.get("barrier_support")]
     assert out["info"][0]["barriers"]["level_gap"] == 0.0
+
+
+def test_a_batten_grazed_by_the_boards_edge_offset_at_a_notch_stays_whole(elevation):
+    """The synthetic wall's outline has a notch (a slab through it, 1400 to 1600 high, from the
+    corner to 1500). The boards stand their edge offset (10 mm) off it, and the level battens
+    either side of it, which only touch that offset, were shaved 10 mm along their edge for
+    1.5 m: a step in the batten. They are left whole; a batten is only ever made whole within
+    the face's own outline, never into an opening."""
+    from cladding_booleans import _no_slivers
+    from shapely.geometry import Polygon, box
+    out = generate_preview(_params(elevation, counter_batten="yes", **PLANK_V))
+    for m in out["geometry"]:
+        if m["ifc_type"] == "batten":
+            assert len(m["profile"]) == 4, (m["name"], m["profile"])
+    # into an opening: not made whole, the shave stays
+    shaved = box(0, 1350, 1500, 1390).union(box(1500, 1350, 3000, 1400))
+    face = Polygon([(0, 0), (3000, 0), (3000, 3000), (0, 3000)], [[(200, 1395), (1400, 1395), (1400, 2000), (200, 2000)]])
+    kept = _no_slivers(shaved, [[0, 1350], [3000, 1350], [3000, 1400], [0, 1400]], face)
+    assert kept.bounds[3] == 1400 and abs(kept.area - shaved.area) < 1.0
+    # a sliver (10 of 50 mm) is cut out
+    sliver = box(0, 1350, 1500, 1360).union(box(1500, 1350, 3000, 1400))
+    assert _no_slivers(sliver, [[0, 1350], [3000, 1350], [3000, 1400], [0, 1400]], None).bounds[0] == 1500
