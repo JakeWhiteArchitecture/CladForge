@@ -30,8 +30,12 @@ The dimensions are placeholders, the detail's proportions, until GreenCoat's are
 
 import math
 
+import shapely
+
 from cladding_constants import _prism, frame_to_world, SEAM_STANDOFF
 from cladding_ridge import JOIN_TOL, CLAD, MEET  # noqa: F401 — MEET kept for symmetry with cladding_hip
+
+GRID = 0.01          # mm – overlays of shapes that share edges are run on this grid
 
 HIP1_W = 47.0          # mm – the batten's width (placeholder)
 HIP1_H = 50.0          # mm – its depth at its sides, off the deck (placeholder)
@@ -73,7 +77,6 @@ def past_fill(meshes, p, main, end, h, S, T):
     seam up to the hip's top, would be left open. It is filled with the trays' own sheet, laid
     as they are, clipped to the slope's outline and clear of the trays already there."""
     from shapely.geometry import Polygon
-    from shapely.ops import unary_union
     from cladding_hip import hips_of
     from cladding_ridge import _same_frame
     from cladding_primitives import ring_at
@@ -100,8 +103,10 @@ def past_fill(meshes, p, main, end, h, S, T):
         strip = Polygon([(sx + near * mx, sy + near * my), (tx + near * mx, ty + near * my),
                          (tx + far * mx, ty + far * my), (sx + far * mx, sy + far * my)])
         try:
-            covered = unary_union([Polygon(ring_at(m, 0, mid)).buffer(0) for m in trays])
-            fill = strip.buffer(0).difference(covered)
+            # side by side, the trays share their edges: joined and cut on the grid, where GEOS
+            # cannot fail (a TopologyException kills the engine in the browser)
+            covered = shapely.union_all([Polygon(ring_at(m, 0, mid)).buffer(0) for m in trays], grid_size=GRID)
+            fill = shapely.difference(strip.buffer(0), covered, grid_size=GRID)
         except (ValueError, TypeError):
             continue
         for k, g in enumerate(getattr(fill, "geoms", [fill])):
@@ -284,7 +289,7 @@ def _half(ring, cx, side):
     from shapely.geometry import Polygon, box
     from shapely.geometry.polygon import orient
     big = 1e5
-    cut = Polygon(ring).buffer(0).intersection(box(cx, -big, cx + big, big) if side > 0 else box(cx - big, -big, cx, big))
+    cut = shapely.intersection(Polygon(ring).buffer(0), box(cx, -big, cx + big, big) if side > 0 else box(cx - big, -big, cx, big), grid_size=GRID)
     if cut.is_empty or cut.geom_type != "Polygon" or cut.area < 1.0:
         return None
     return [[round(x, 4), round(y, 4)] for x, y in list(orient(cut, 1.0).exterior.coords)[:-1]]
@@ -572,11 +577,10 @@ def _drip_ring(xb, xf, v0, t):
     over the leg (_fold_ring): the fold is the tray's own, not the flashing's."""
     from shapely.geometry import LineString
     from shapely.geometry.polygon import orient
-    from shapely.ops import unary_union
     f = xf + t / 2.0
     leg = LineString([(f, v0 + DRIP_UP), (f, v0 - DRIP_DOWN)])
     under = LineString([(f, v0 - t / 2.0), (xb - t / 2.0, v0 - t / 2.0), (xb - t / 2.0, v0 + DRIP_TURN)])
-    sheet = unary_union([g.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0) for g in (leg, under)])
+    sheet = shapely.union_all([g.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0) for g in (leg, under)], grid_size=GRID)
     sheet = orient(sheet if sheet.geom_type == "Polygon" else max(sheet.geoms, key=lambda g: g.area), 1.0)
     return [[round(x, 3), round(y, 3)] for x, y in list(sheet.exterior.coords)[:-1]]
 

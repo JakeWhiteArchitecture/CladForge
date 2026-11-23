@@ -299,3 +299,17 @@ def test_a_batten_grazed_by_the_boards_edge_offset_at_a_notch_stays_whole(elevat
     # a sliver (10 of 50 mm) is cut out
     sliver = box(0, 1350, 1500, 1360).union(box(1500, 1350, 3000, 1400))
     assert _no_slivers(sliver, [[0, 1350], [3000, 1350], [3000, 1400], [0, 1400]], None).bounds[0] == 1500
+
+
+def test_a_batten_s_strips_are_joined_on_the_grid():
+    """The strips a batten is cut into share their edges, and where a cut's corner is a hair
+    off another's (here 0.004 mm) a plain union can throw, which kills the engine in the
+    browser. They are joined on the 0.01 mm grid: one clean batten, whole where it was shaved."""
+    from cladding_booleans import _no_slivers
+    from shapely.geometry import Polygon
+    profile = [[0, 1350], [3000, 1350], [3000, 1400], [0, 1400]]
+    shaved = Polygon([(0, 1350), (3000, 1350), (3000, 1400), (1500.004, 1400), (1500.004, 1390.001),
+                      (1500, 1390), (0, 1390)])
+    kept = _no_slivers(shaved, profile, None)
+    assert kept.is_valid and kept.geom_type == "Polygon"
+    assert kept.bounds == (0.0, 1350.0, 3000.0, 1400.0) and abs(kept.area - 3000 * 50) < 1.0
