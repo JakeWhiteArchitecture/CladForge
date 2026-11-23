@@ -138,7 +138,8 @@ def _joins(elev, roof, kind="eaves"):
     out = []
     for j in valleys_of(elev, kind):
         v = raw.get(j["with"]) or {}
-        if bool(v.get("roof")) != roof or "other_depth" not in v or abs(j["p1"][1] - j["p2"][1]) > 2.0:
+        # level to 1 in 200 (a modelled line a hair off the face's own level: 35 mm in 9.5 m in a real model)
+        if bool(v.get("roof")) != roof or "other_depth" not in v or abs(j["p1"][1] - j["p2"][1]) > max(2.0, 0.005 * abs(j["p1"][0] - j["p2"][0])):
             continue
         u0, u1 = sorted((j["p1"][0], j["p2"][0]))
         out.append(dict(j, u0=u0, u1=u1, v=(j["p1"][1] + j["p2"][1]) / 2.0, depth=float(v["other_depth"]),

@@ -196,3 +196,25 @@ def test_the_roof_s_top_edge_may_stand_proud_of_the_wall_s_face(proud, found):
     assert bool(link) is found
     if found:
         assert link["length"] == pytest.approx(6000.0, abs=1.0)
+
+
+def test_a_top_edge_a_hair_off_level_is_still_a_head():
+    """A modelled top edge 35 mm off the face's own level over 9.5 m (a real model's roof
+    behind a clerestory) is level for a head verge (HEAD_LEVEL, 1 in 200)."""
+    from cladding_head import _top_edges
+    elev = {"polygons": [{"exterior": [[0.0, 0.0], [9500.0, 0.0], [9500.0, 9562.0], [0.0, 9527.0]], "holes": []}]}
+    (edge,) = _top_edges(elev)
+    assert edge[0] == 0.0 and edge[1] == 9500.0
+
+
+def test_a_face_with_a_ridge_elsewhere_still_takes_its_head_verge():
+    """A roof's top stepped: a ridge with another slope on one part, a clerestory's head on
+    the higher part (a real model). The ridge no longer takes the head verge away."""
+    w, r = _pair(15.0)
+    link = head_link(w, r)
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})    # noqa: E731
+    ridge = {"with": "Other", "v": float(r["height"]) - 2000.0, "u0": 0.0, "u1": 1500.0, "k": 0.27, "angle": 30.0, "master": True}
+    roof = dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none", eaves="none", ridge=ridge)
+    wall = dict(w, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[rec("a", "Roof")])
+    out = generate_preview({"elevations": [wall, roof], "trim": True, "splash": 0})
+    assert [m for m in out["geometry"] if "Head Verge Cap" in (m.get("name") or "")], "the head verge on the higher part"
