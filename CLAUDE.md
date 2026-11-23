@@ -52,12 +52,17 @@ stale one produces confusing browser failures.
 
 Pyodide, the IfcOpenShell WASM wheel and Shapely must agree. The wheel's ABI tag has to
 match the Pyodide build, and Shapely must exist for that build or the whole engine stops.
-Currently Pyodide 0.29.0 (CPython 3.13, `pyodide_2025_0`) with IfcOpenShell 0.8.5, which
-carries IFC4X3_ADD2. Never bump one alone.
+Currently Pyodide 0.29.5 (CPython 3.13, ABI `2025_0`) with IfcOpenShell 0.8.5 (its
+`pyodide_2025_0` wheel, which 0.29.5 still accepts), which carries IFC4X3_ADD2. Never bump
+one alone.
 
 ## The engine dies rather than raises
 
-A C++ abort inside WASM — GEOS, IfcOpenShell, or running out of heap — kills the Pyodide
-runtime outright. `try`/`except` cannot catch it. So: ask before you try (see
+A C++ abort inside WASM — IfcOpenShell, or running out of heap — kills the Pyodide
+runtime outright. `try`/`except` cannot catch it. GEOS used to as well: Pyodide 0.29.0's
+Shapely aborted on any GEOS error (a TopologyException from one bad shape in the model took
+the engine down). 0.29.5's Shapely raises `GEOSException` instead, and the smoke test checks
+it does; keep the robust-overlay habits (`_safe`, the 0.01 mm grid) all the same, since a
+caught error still loses that element. So: ask before you try (see
 `_create_file` probing `schema_names()`), bound anything unbounded (see
 `CONTEXT_TRI_BUDGET`), and keep `restartEngine()` working as the way back.

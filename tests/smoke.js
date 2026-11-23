@@ -37,7 +37,7 @@ async function main() {
     if (vendor) {
         const mime = { js: 'application/javascript', wasm: 'application/wasm', json: 'application/json', zip: 'application/zip', whl: 'application/octet-stream' };
         const map = [
-            [/^https:\/\/cdn\.jsdelivr\.net\/pyodide\/v0\.29\.0\/full\/(.+)$/, m => path.join(vendor, 'pyodide', m[1])],
+            [/^https:\/\/cdn\.jsdelivr\.net\/pyodide\/v0\.29\.5\/full\/(.+)$/, m => path.join(vendor, 'pyodide', m[1])],
             [/^https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/three\.js\/r128\/three\.min\.js$/, () => path.join(vendor, 'three', 'build', 'three.min.js')],
             [/^https:\/\/cdn\.jsdelivr\.net\/npm\/three@0\.128\.0\/(.+)$/, m => path.join(vendor, 'three', m[1])],
             [/^https:\/\/cdn\.jsdelivr\.net\/npm\/web-ifc@[\d.]+\/(.+)$/, m => path.join(vendor, 'web-ifc', m[1])],
@@ -121,6 +121,24 @@ async function main() {
     console.log('resolution rules:', JSON.stringify(ratio));
     if (Object.values(ratio).some(v => !v)) throw new Error('the resolution rules broke: ' + JSON.stringify(ratio));
     console.log('engine ready');
+    // A GEOS error is a Python exception, not the end of the engine: Pyodide 0.29.0's Shapely
+    // aborted the whole runtime on one (a bad shape from the model killed the page's engine);
+    // 0.29.5's catches it. Raise one on purpose and check the engine is still there after.
+    const geos = await page.evaluate(async () => {
+        try {
+            const r = await pyodide.runPythonAsync(`
+import shapely
+try:
+    shapely.from_wkt('POLYGON((0 0,10 0,0 10,10 10,0 0))').intersection(shapely.from_wkt('POLYGON((0 0,10 0,10 10,0 10,0 0))'))
+    _r = 'no error'
+except Exception as _e:
+    _r = type(_e).__name__
+_r`);
+            return r + ' / alive: ' + (await pyodide.runPythonAsync('1 + 1'));
+        } catch (err) { return 'engine died: ' + (err.message || '').slice(0, 120); }
+    });
+    console.log('GEOS error:', geos);
+    if (geos !== 'GEOSException / alive: 2') throw new Error('a GEOS error is not caught as a Python exception: ' + geos);
 
     // Aim at a named element's face and click the middle of the canvas. Named rather
     // than positioned, because the viewer recentres the model on import.
