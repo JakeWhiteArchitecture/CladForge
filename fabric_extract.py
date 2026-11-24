@@ -293,6 +293,23 @@ def _union_faces(faces, n, u):
         return unary_union([pg.buffer(0) for pg in polys])
 
 
+UNDER_RISE = 50.0       # mm – an element this far or less up through a roof's face, and
+UNDER_DEPTH = 100.0     # mm – at least this far down under it, is under the roof, not through it
+
+
+def _rise(tris, n, d):
+    """How far an element stands up out of the face's plane (negative: wholly behind it)."""
+    return max(_dot(v, n) - d for tri in tris for v in tri)
+
+
+def _under_roof(tris, n, d):
+    """An element under a roof slope whose top comes a little up through it: a box at the
+    eaves, a beam, modelled a hair high. Not a penetration (a flue, a rooflight's upstand
+    stands well up out of the roof)."""
+    hs = [_dot(v, n) - d for tri in tris for v in tri]
+    return max(hs) <= UNDER_RISE and min(hs) <= -UNDER_DEPTH
+
+
 def _section(tris, n, d, u, mode="wall"):
     """Intersection of an element with the face plane, in local (u, v).
 
@@ -606,6 +623,11 @@ def _extract(payload):
                                           "name": elem.get("name", "")})
                 if straddles or shadow is not None:
                     cuts.append((poly if straddles else None, elem, shadow))
+            elif straddles and roofish and _under_roof(tris, n, d):
+                # under the roof, its top a few mm up through it (an eaves box modelled a hair too
+                # high): not a hole; the roof runs on over it as over anything below its eaves
+                result["warnings"].append("%s sits under the roof but rises %.0f mm up through it: not cut out of the roof "
+                                          "(an eaves box modelled a little high?)" % (elem.get("name") or etype, _rise(tris, n, d)))
             elif (straddles and options.get("penetrations", True)) or shadow is not None:
                 cuts.append((poly if straddles and options.get("penetrations", True) else None, elem, shadow))
         except Exception:   # noqa: BLE001

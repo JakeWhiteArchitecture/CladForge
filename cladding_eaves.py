@@ -62,7 +62,7 @@ EAVES_DROP = 50.0     # mm – the drop's foot, below the edge of the roof's sur
 EAVES_OVER = 20.0     # mm – over a clad wall: the deck's underside out beyond the wall cladding's outside, on plan (assumed)
 EAVES_WALL_LAP = 60.0 # mm – over a clad wall: the drop's foot below the top of the wall's cladding (assumed)
 EAVES_MIN = 300.0     # mm – a level bottom edge shorter than this is not an eaves
-EAVES_RAKE = 0.2      # dv/du – a bottom edge raking up to this (about 11 degrees across the face; a valley's rakes far more) is still an eaves
+EAVES_RAKE = 0.3      # dv/du – a bottom edge raking up to this (about 17 degrees across the face; a valley's rakes far more) is still an eaves
 EDGE_TOL = 12.0       # mm – an end this close to where the bottom offset left it is an end at the eaves
 OWN = ("ridge_cap", "ridge_filler", "verge_strip", "valley_gutter", "eaves_strip")
 
