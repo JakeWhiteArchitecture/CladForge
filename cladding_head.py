@@ -58,8 +58,9 @@ def head_setting(elev):
     return said if said in ("g3", "none") else "auto"
 
 
-def _top_edges(elev):
-    """[(u0, u1, v)]: the level top edges of the face as picked, HEAD_MIN long or more."""
+def _top_edges(elev, every=False):
+    """[(u0, u1, v)]: the level top edges of the face as picked, HEAD_MIN long or more: those
+    at its top, or with *every* those of a stepped top's lower steps too."""
     out = []
     for pg in elev.get("polygons") or []:
         ring = pg["exterior"]
@@ -68,7 +69,7 @@ def _top_edges(elev):
             if abs(a[1] - b[1]) <= max(0.5, HEAD_LEVEL * abs(a[0] - b[0])) and abs(a[0] - b[0]) >= HEAD_MIN and a[0] > b[0]:   # outlines run anticlockwise: a top edge runs back
                 out.append((min(a[0], b[0]), max(a[0], b[0]), max(a[1], b[1])))
     top = max((v for _a, _b, v in out), default=None)
-    return sorted(e for e in out if top is not None and abs(e[2] - top) < 1.0)
+    return sorted(e for e in out if top is not None and (every or abs(e[2] - top) < 1.0))
 
 
 def heads_of(elev, p):

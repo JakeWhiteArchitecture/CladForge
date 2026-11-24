@@ -20,12 +20,14 @@ def _face(name, pts, out):
                               "options": {"debug": False, "clad_depth": 150.0}})
 
 
-def _job_corner():
+def _job_corner(mirror=False):
     """The job's corner: a low monopitch's top edge ends where a higher one's raking side
-    starts, that side running up to the higher one's own top. Both fall the same way."""
+    starts, that side running up to the higher one's own top. Both fall the same way.
+    *mirror*: the same, handed the other way (x to -x)."""
     t, s, c = math.tan(math.radians(20.0)), math.sin(math.radians(20.0)), math.cos(math.radians(20.0))
-    low = _face("Low", [[0, -3000, Z0 - 3000 * t], [4000, -3000, Z0 - 3000 * t], [4000, 0, Z0], [0, 0, Z0]], (0, -s, c))
-    high = _face("High", [[4000, 0, Z0], [8000, 0, Z0], [8000, 3000, Z0 + 3000 * t], [4000, 3000, Z0 + 3000 * t]], (0, -s, c))
+    m = (lambda pts: [[-x, y, z] for x, y, z in reversed(pts)]) if mirror else (lambda pts: pts)   # noqa: E731
+    low = _face("Low", m([[0, -3000, Z0 - 3000 * t], [4000, -3000, Z0 - 3000 * t], [4000, 0, Z0], [0, 0, Z0]]), (0, -s, c))
+    high = _face("High", m([[4000, 0, Z0], [8000, 0, Z0], [8000, 3000, Z0 + 3000 * t], [4000, 3000, Z0 + 3000 * t]]), (0, -s, c))
     elevs = [dict(low, offset=0, chain="Low", settings=dict(SEAM), verge="none", eaves="none", head="g3"),
              dict(high, offset=0, chain="High", settings=dict(SEAM), verge="both", verge_type="cladding", eaves="none", head="g3")]
     return elevs, generate_preview({"elevations": elevs, "trim": True, "splash": 0})
@@ -53,3 +55,26 @@ def test_a_verge_with_a_mono_ridge_at_both_ends_is_a_mono_ridge_mitred_onto_both
     assert [n for n in names if n.endswith("Verge Upstand")]
     info = next(i for i in out["info"] if i["elevation"] == "High")
     assert info["verge_caps"][0]["length"] > 2900.0
+
+
+def _ends(m):
+    f = m["frame"]
+    d0, d1 = float(m["depth"]), float(m["depth"]) + float(m["thickness"])
+    return [[float(o) + d * float(n) for o, n in zip(f["origin"], f["n"])] for d in (d0, d1)]
+
+
+def test_a_mitred_head_cap_ends_at_its_stop_end_not_past_it():
+    """A head cap cut on a mitre at one end starts part way along its frame; its stop end at
+    the other end is where the cap ends (the cap ran on ~500 past it: the job's roof E).
+    Both hands: the mitre at the cap's start one way, at its far end the other."""
+    seen = 0
+    for mirror in (False, True):
+        geo = _job_corner(mirror)[1]["geometry"]
+        for stop in [m for m in geo if m.get("stop_end") and "Head Verge Stop End" in m["name"]]:
+            cap = next(m for m in geo if m["name"] == stop["of"])
+            if not cap.get("mitred_ends"):
+                continue
+            seen += 1
+            far = min(math.dist(e, s) for e in _ends(cap) for s in _ends(stop))
+            assert far < 2.0, (mirror, cap["name"], far)
+    assert seen

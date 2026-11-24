@@ -155,11 +155,11 @@ def verge_head_parts(meshes, p, infos):
                 start = [float(c) for c in f["origin"]]
                 far = [a + float(cap["thickness"]) * b for a, b in zip(start, n)]
                 at_start = math.dist(start, mit["point"]) < math.dist(far, mit["point"])
+                run = dict(cap, thickness=float(cap["thickness"]) + MITRE_RUN)   # run on past the corner, then cut back
                 if at_start:
-                    cap["frame"] = dict(f, origin=[a - MITRE_RUN * b for a, b in zip(start, n)])
-                cap["thickness"] = float(cap["thickness"]) + MITRE_RUN
-                pieces = _cut_end(cap, [(None, mit["point"], mit["normal"], "Mitre")], at_start=at_start)
-                if pieces:
+                    run["frame"] = dict(f, origin=[a - MITRE_RUN * b for a, b in zip(start, n)])
+                pieces = _cut_end(run, [(None, mit["point"], mit["normal"], "Mitre")], at_start=at_start)
+                if pieces:                          # (no cut: the cap stays as it was, not run on 400 past its end)
                     for piece in pieces:
                         if not piece.get("drip_end"):
                             piece["mitred_ends"] = sorted(set((piece.get("mitred_ends") or []) + [0 if at_start else 1]))
