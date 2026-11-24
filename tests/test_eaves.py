@@ -452,12 +452,14 @@ def test_a_wall_leaning_out_under_an_eaves_still_has_the_eaves(lean):
     assert _aprons(built), "the drip at the eaves"
 
 
-def test_a_gently_raking_eaves_still_gets_its_drip():
+@pytest.mark.parametrize("rise", [360.0, 1300.0])
+def test_a_gently_raking_eaves_still_gets_its_drip(rise):
     """A roof's eaves that follows a wall's raked head (a canopy's leaning wall in a real
-    model, about 3.5 degrees across the face): an eaves all the same, each tray turned
-    into its drip where it ends, the drip running up the line with the edge."""
+    model, about 3.5 degrees across the face; the job's revised canopy, 13.4 degrees): an
+    eaves all the same, each tray turned into its drip where it ends, the drip running up
+    the line with the edge."""
     t, s, c = math.tan(math.radians(25.0)), math.sin(math.radians(25.0)), math.cos(math.radians(25.0))
-    rise = 360.0                                       # the eaves line on plan, 360 mm up the slope over 6 m
+    # (*rise*: the eaves line on plan, so far up the slope over 6 m)
     pts = [[0, 0, 0], [6000, rise, rise * t], [6000, 4000, 4000 * t], [0, 4000, 4000 * t]]
     roof = extract_elevation({"name": "Roof", "faces": [[pts[0], pts[1], pts[2]], [pts[0], pts[2], pts[3]]],
                               "outward": [0, -s, c], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
@@ -520,3 +522,34 @@ def test_a_raking_eaves_meets_its_verges():
     xs = [frame_to_world(m["frame"], u, v, d)[0] for m in out["geometry"] if "Eaves Drip" in m["name"]
           for d in (float(m["depth"]), float(m["depth"]) + float(m["thickness"])) for u, v in ring_at(m, 0, d)]
     assert min(xs) < -2.0 and max(xs) > 6002.0, "the drip runs on under the flashing at both ends"
+
+
+def _box_tris(x0, y0, z0, x1, y1, z1):
+    c = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0), (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+    quads = [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+    return [[list(c[a]), list(c[b]), list(c[d])] for f in quads for a, b, d in ((f[0], f[1], f[2]), (f[0], f[2], f[3]))]
+
+
+@pytest.mark.parametrize("rise, cut", [(30.0, False), (-10.0, False), (400.0, True)])
+def test_a_box_under_the_eaves_a_little_up_through_the_roof_is_not_cut_out_of_it(rise, cut):
+    """An eaves box modelled a hair high (the job's, 30 mm up through the deck) is under the
+    roof, not through it: the face keeps its eaves, and the trays run out to its edge. One
+    standing well up out of the roof (a flue, an upstand) is still a hole."""
+    pitch = 20.0
+    t, s, c = math.tan(math.radians(pitch)), math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+    z = lambda y: 3000.0 + (y + 3000.0) * t                                                  # noqa: E731 – the roof's surface
+    roof = [[0, -3000, z(-3000)], [6000, -3000, z(-3000)], [6000, 0, z(0)], [0, 0, z(0)]]
+    y0, y1 = -2960.0, -2800.0                        # the box: 160 deep, its outside 40 in from the eaves
+    top = z(y0) + rise / c                           # its top, level: so far up through the roof at its outer side
+    box = {"type": "IfcBeam", "name": "BOX", "tris": _box_tris(500, y0, z(y0) - 250, 5500, y1, top)}
+    face = extract_elevation({"name": "Roof", "faces": [[roof[0], roof[1], roof[2]], [roof[0], roof[2], roof[3]]],
+                              "outward": [0, -s, c], "context": [box], "options": {"debug": False, "clad_depth": 150.0}})
+    area = 6000.0 * 3000.0 / c
+    if cut:
+        assert face["area"] < area - 100000.0
+        return
+    assert face["area"] == pytest.approx(area, rel=1e-3)
+    assert any("BOX" in w and "not cut out" in w for w in face["warnings"]) == (rise > 0)
+    out = generate_preview({"elevations": [dict(face, offset=0, chain="Roof", settings=dict(SEAM), verge="none")], "trim": True, "splash": 0})
+    info = next(i for i in out["info"] if i["elevation"] == "Roof")
+    assert info.get("eaves") and sum(e["length"] for e in info["eaves"]) == pytest.approx(6000.0, abs=5.0)

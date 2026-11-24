@@ -58,3 +58,29 @@ def test_a_leaning_side_keeps_its_wedge_in_the_end_tray():
     assert not [u for u in seams if 0.0 < u < lean + 1.0], cols                  # none in the wedge
     assert seams[0] - lean >= COVER / 2.0 - 2.0, cols                            # half a tray or more at its narrowest
     assert seams[0] <= COVER + 1.0, cols                                          # a tray at most at its widest
+
+
+def _widths(cols):
+    return [round(b - a) for a, b in cols]
+
+
+def test_an_end_a_little_over_a_tray_slides_the_seams_rather_than_splitting_into_two_narrow_trays():
+    """The job's roof B: its trays run 82 past one verge, and the run of seams left an 8 mm
+    sliver there, shared with the tray beside it as 269 + 269. Where the other end has room,
+    the seams slide instead: one sheet at the verge."""
+    from cladding_geometry import seam_columns
+    W = 6708.07
+    cols = seam_columns(W, 530.0, 721.5 - W / 2, [], (0.0, W), (82.3, 3.2), ((100.0, 530.0), (100.0, 530.0)), (True, True))
+    w = _widths(cols)
+    assert w[0] == 530 and all(x >= 400 for x in w), w
+    assert sum(w) == pytest.approx(W + 82.3 + 3.2, abs=2)
+    # an end tray 22 over (roof A: 552 at a verge run on 64 over the wall below): slid, not halved
+    from cladding_geometry import _slide_ends
+    assert _slide_ends([552.0, 1082.0], 0.0, 1382.0, ((100.0, 530.0), (100.0, 530.0))) == [530.0, 1060.0]
+
+
+def test_with_no_room_at_the_other_end_an_end_too_wide_is_still_split():
+    from cladding_geometry import _slide_ends
+    seams = [530.0, 1060.0]
+    # both ends 560 wide: sliding one end over its most only makes the other too wide
+    assert _slide_ends(seams, -30.0, 1620.0, ((100.0, 530.0), (100.0, 530.0))) == seams

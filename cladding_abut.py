@@ -82,6 +82,7 @@ ABUT_EDGE_T = 1.0     # mm – its metal (the detail's 1 mm)
 ABUT_EDGE_DRIP = 8.0  # mm – and below it, kicked out (assumed)
 ABUT_VENT = 10.0      # mm – the least left between the upstand and the back of the wall's plywood: the vent (assumed)
 ABUT_WALL_TOL = 80.0  # mm – a wall of the model this close to the top edge's line stands on it
+ABUT_LINE_TOL = 30.0     # mm – the wall's line on the roof this near the roof's top edge is its abutment
 ABUT_NEAR = 150.0     # mm – an abutment line of the wall's this close to the junction is the roof's own
 
 
@@ -105,12 +106,16 @@ def abuts_of(elev, p):
     raw = {v.get("with"): v for v in elev.get("valleys") or [] if v.get("kind") == "abut"}
     walls = elev.get("walls_above") or []
     out = []
-    for u0, u1, v in _top_edges(elev):
-        over = next((j for j in joins if abs(j["v"] - v) < 2.0 and j["u0"] < u1 - 50.0 and j["u1"] > u0 + 50.0), None)
+    top = max((v for _a, _b, v in _top_edges(elev)), default=None)
+    for u0, u1, v in _top_edges(elev, every=True):
+        # the line the wall meets the roof on: on the top edge, or a little off it (the roof
+        # stopped just short of the wall, 5 to 8 mm in a real model; or the edge or the line out
+        # of level along its length, 30 over 8 m)
+        over = next((j for j in joins if abs(j["v"] - v) < ABUT_LINE_TOL and j["u0"] < u1 - 50.0 and j["u1"] > u0 + 50.0), None)
         wall = None if over else next((w for w in walls if abs(float(w["v"]) - v) <= ABUT_WALL_TOL
                                        and min(u1, float(w["u1"])) - max(u0, float(w["u0"])) >= HEAD_MIN), None)
-        if over is None and wall is None and said != "g3":
-            continue
+        if over is None and wall is None and (said != "g3" or v < top - 1.0):
+            continue                                     # (a stepped top's lower step: only where a wall stands over it)
         if over is not None:
             u0, u1 = max(u0, over["u0"]), min(u1, over["u1"])
         elif wall is not None:
@@ -251,7 +256,10 @@ def abut_ridges(p):
     """Before the ridges are cut, after cladding_head.head_ridges: give each face with a
     head-wall abutment a ridge record with no partner ("head_ridge", read by
     cladding_ridge.ridge_of) in place of any head verge's, so its layers are brought to
-    the wall as at a ridge. One a face: its longest."""
+    the wall as at a ridge. A top with more than one (a stepped top, over a wall on one step
+    and against another on the next; a top abutting two stretches of wall) keeps them all,
+    and its head verges on other stretches too: the longest is "head_ridge", the rest
+    "head_more" (cladding_ridge.head_more_of)."""
     for elev in p.get("elevations", []):
         elev.pop("abut_mitre", None)
         hs = abuts_of(elev, p)
@@ -260,10 +268,20 @@ def abut_ridges(p):
         h = max(hs, key=lambda q: q["u1"] - q["u0"])
         if h["kind"] == "mitre":                 # no half ridge: the trays run on to the corner
             elev.pop("head_ridge", None)
+            elev.pop("head_more", None)
             elev["abut_mitre"] = h
             continue
-        elev["head_ridge"] = {"with": None, "v": h["v"] + _plane(h, float(p["seam_t"])), "u0": h["u0"], "u1": h["u1"],
-                              "k": math.tan(math.radians(h["pitch"])), "master": True, "abut": h}
+        recs = [{"with": None, "v": q["v"] + _plane(q, float(p["seam_t"])), "u0": q["u0"], "u1": q["u1"],
+                 "k": math.tan(math.radians(q["pitch"])), "master": True, "abut": q} for q in hs if q["kind"] != "mitre"]
+        # head verges on stretches no abutment takes stay
+        heads = [r for r in [elev.get("head_ridge")] + list(elev.get("head_more") or []) if r and "head" in r
+                 and not any(min(r["u1"], q["u1"]) - max(r["u0"], q["u0"]) > 0.5 * (r["u1"] - r["u0"]) for q in recs)]   # (a corner's overlap is not)
+        both = sorted(heads + recs, key=lambda r: r["u0"] - r["u1"])
+        elev["head_ridge"] = both[0]
+        if len(both) > 1:
+            elev["head_more"] = both[1:]
+        else:
+            elev.pop("head_more", None)
 
 
 def _sheet(path, t):
@@ -367,13 +385,21 @@ def abut_parts(meshes, p, infos):
     info_by = {i["elevation"]: i for i in infos}
     out, gone = [], set()
     for elev in p.get("elevations", []):
-        r = elev.get("head_ridge")
         info = info_by.get(elev.get("name"))
         if info is not None and elev.get("abut_mitre"):
             _mitre_roof(meshes, p, elev, elev["abut_mitre"], info)
             continue
-        if not r or "abut" not in r or info is None:
-            continue
+        for r in [elev.get("head_ridge")] + list(elev.get("head_more") or []):
+            if not r or "abut" not in r or info is None:
+                continue
+            _abut_part(meshes, p, elev, r, info, out, gone)
+    return [m for m in meshes if id(m) not in gone] + out
+
+
+def _abut_part(meshes, p, elev, r, info, out, gone):
+    """One head-wall abutment's parts, added to *out* (and the ridge upstands it replaces to
+    *gone*); recorded on the face's info ("abut", the others in "abut_more")."""
+    if True:
         h, name, frame = r["abut"], elev.get("name"), elev["frame"]
         face, t = float(info.get("total_depth") or 0.0), float(p["seam_t"])
         sec = _section(h, face, float(p["seam_h"]), t)
@@ -401,7 +427,8 @@ def abut_parts(meshes, p, infos):
         else:
             # each tray's end turned up: in place of the short turn-up a ridge gives it
             sheet = ABUT_UPSTAND + ABUT_HOOK + 2.0 * t
-            ups = [m for m in meshes if m.get("elevation") == name and m.get("ridge_part") and m.get("name", "").endswith(" Ridge Upstand")]
+            ups = [m for m in meshes if m.get("elevation") == name and m.get("ridge_part") and m.get("name", "").endswith(" Ridge Upstand")
+                   and min(q[0] for q in m["profile"]) < h["u1"] - 1.0 and max(q[0] for q in m["profile"]) > h["u0"] + 1.0]   # on this stretch
             ups.sort(key=lambda m: min(q[0] for q in m["profile"]))
             spans = [(min(q[0] for q in m["profile"]) - 3.0, max(q[0] for q in m["profile"]) + 3.0, m) for m in ups]
             marks = [h["u0"]] + [(a[1] + b[0]) / 2.0 for a, b in zip(spans, spans[1:])] + [h["u1"]]
@@ -428,8 +455,10 @@ def abut_parts(meshes, p, infos):
             rec.update(upstand=ABUT_UPSTAND, cover=ABUT_COVER, sheet=round(sheet, 1), trays=n, saddles=count, ply=ABUT_PLY,
                        room=round(h["cavity"] - h["base"] - ABUT_PLY - t, 1))      # behind the wall's plywood, clear of the upstand: the vent
             out[-1 if not saddles else -len(saddles) - 1]["abut_info"] = rec
-        info["abut"] = rec
-    return [m for m in meshes if id(m) not in gone] + out
+        if "abut" in info:
+            info.setdefault("abut_more", []).append(rec)
+        else:
+            info["abut"] = rec
 
 
 def abut_over(meshes, p, infos):

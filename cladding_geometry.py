@@ -1000,13 +1000,15 @@ SEAM_JAMB_MERGE = 100.0     # mm – jambs closer than this share one seam line
 BALANCE_SIDE = 0.35      # du/dv – an edge leaning no more than this is a side of the face (a raking corner), not a sloping top
 
 
-def _balanced_offset(elev, lo, hi, v_lo, v_hi, cover):
+def _balanced_offset(elev, lo, hi, v_lo, v_hi, cover, reach=(0.0, 0.0)):
     """Where a face set out on its own ("seam_balanced") centres a tray: so that the trays at
     its two ends are alike, each half a tray or more, never a sliver at a corner. A side that
     leans (a raking corner with a leaning wall) takes its wedge in the end tray: that tray is
     at least half a tray where the face is narrowest and no wider than a tray where it is
     widest, so no seam falls in the wedge to leave a sliver beside it. A sloping top or bottom
-    is not a side: there the end is the face's outline."""
+    is not a side: there the end is the face's outline. *reach*: how far the trays run on
+    past each end (out over a verge's cladding, round a corner: _tray_reach), counted in
+    the end trays."""
     sides = []
     for pg in elev.get("polygons") or []:
         ring = pg["exterior"]
@@ -1018,6 +1020,8 @@ def _balanced_offset(elev, lo, hi, v_lo, v_hi, cover):
     right = [s for s in sides if hi - s[0] <= cover]
     a_out, a = (max(lo, min(s[0] for s in left)), max(lo, max(s[1] for s in left))) if left else (lo, lo)
     b, b_out = (min(hi, min(s[0] for s in right)), min(hi, max(s[1] for s in right))) if right else (hi, hi)
+    a_out, a = a_out - float(reach[0]), a - float(reach[0])
+    b, b_out = b + float(reach[1]), b_out + float(reach[1])
     wl, wr = a - a_out, b_out - b                      # each side's wedge, narrowest to widest
     span = b - a
     if span <= cover:
@@ -1068,6 +1072,26 @@ def _rephase(seams, cover, offset, a_dev, b_dev, reach, limits):
     return [u - shift for u in seams] if i == 0 else [u + shift for u in seams]
 
 
+def _slide_ends(seams, a_dev, b_dev, limits):
+    """An end tray a little over its most, or a sliver past the last seam that with the tray
+    beside it is a little over, where the other end has room: every seam slid that way (the
+    sliver's seam dropped), so that end is one sheet, not two narrow ones (the two end trays
+    sharing, or halved). The seams as they were where that will not fit."""
+    (l_least, l_most), (r_least, r_most) = limits
+    for drop_l, drop_r in ((False, False), (True, False), (False, True)):
+        s = seams[1:] if drop_l else seams[:-1] if drop_r else list(seams)
+        if not s:
+            continue
+        if drop_l and seams[0] - a_dev >= l_least - 1e-6 or drop_r and b_dev - seams[-1] >= r_least - 1e-6:
+            continue                                     # only a sliver's seam is dropped
+        el, er = s[0] - a_dev, b_dev - s[-1]
+        if el > l_most + 1e-6 and r_least <= er + (el - l_most) <= r_most:
+            return [u - (el - l_most) for u in s]
+        if er > r_most + 1e-6 and l_least <= el + (er - r_most) <= l_most:
+            return [u + (er - r_most) for u in s]
+    return seams
+
+
 def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=None, held=(False, False)):
     """The tray columns (u0, u1) across a face *W* wide. Set out from the openings, each
     jamb is a seam line, carried straight up and down past the opening, and each span between
@@ -1102,6 +1126,8 @@ def seam_columns(W, cover, offset, jambs, ends=None, reach=(0.0, 0.0), limits=No
         seams.append((seams[-1] if seams else cols[0][0]) + cover)
     seams = [u for u in seams if (a_dev < u if reach[0] else True) and (u < b_dev if reach[1] else True)]
     seams = _rephase(seams, cover, offset, a_dev, b_dev, reach, limits) or seams
+    if reach[0] and reach[1] and seams:
+        seams = _slide_ends(seams, a_dev, b_dev, limits)
     if reach[0] and seams:
         least, most = limits[0]
         if seams[0] - a_dev < least - 1e-6:               # too close to that end: the two end trays share
@@ -1233,6 +1259,11 @@ def _vertical_trays(p, elev, meshes, dims, info, depth, W, H, v0, offset, region
     jambs = [u for o in openings(elev) for u in (o[0], o[1])] if p["set_out_from_openings"] else []
     reach, limits, held = _tray_reach(p, elev, depth)
     lo, hi = clip_bounds(elev)
+    if p.get("seam_balanced"):
+        # balanced on where the trays really end: out over a verge's cladding, round a corner
+        # (a 64 mm run on at one end made its end tray 552, over a tray, and so halved)
+        v_lo, v_hi = clip_bounds_v(elev)
+        offset = _balanced_offset(elev, lo, hi, v_lo, v_hi, cover, reach) - W / 2.0
     inner = _inner_verges(p, elev, lo, hi) if not jambs else (lo, hi)
     cols = seam_columns(W, cover, offset, jambs, inner, reach, limits, held)
     cols = _beyond_verges(cols, cover, lo, hi, inner)

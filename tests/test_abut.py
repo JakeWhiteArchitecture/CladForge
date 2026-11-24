@@ -414,3 +414,44 @@ def test_followed_columns_keep_the_lines_given_and_carry_on_at_tray_centres():
     cols = followed_columns([], {"lines": [1000.0, 1500.0]}, 500.0, (0.0, 2550.0), (0.0, 40.0), ((0.0, 500.0), (150.0, 370.0)))
     assert cols[-1][1] == 2590.0 and [round(b - a, 1) for a, b in cols[-2:]] == [295.0, 295.0]
     assert followed_columns([], {"lines": [5000.0]}, 500.0, (0.0, 3000.0), (0.0, 0.0), ((0.0, 500.0), (0.0, 500.0))) is None
+
+
+def test_a_wall_whose_line_on_the_roof_is_a_few_mm_off_its_top_edge_is_still_its_abutment():
+    """A real model: the roof stopped 5 to 8 mm short of the wall above it, or the line out
+    of level by 30 over 8 m. Still the wall's abutment (the wall's cladding over the
+    flashing), not a bare wall chased into."""
+    w, r = _pair()
+    link = abut_link(w, r)
+    for off in (8.0, -12.0, 25.0):
+        b = dict(link["b"], **{"with": "Wall", "k": link["k"], "master": True})
+        b["p1"], b["p2"] = [b["p1"][0], b["p1"][1] + off], [b["p2"][0], b["p2"][1] + off]
+        elevs = [dict(w, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[dict(link["a"], **{"with": "Roof", "k": link["k"], "master": False})]),
+                 dict(r, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[b], verge="none", eaves="none")]
+        out = generate_preview({"elevations": elevs, "trim": True, "splash": 0})
+        info = next(i for i in out["info"] if i["elevation"] == "Roof")
+        assert info.get("abut") and info["abut"]["kind"] == "below" and info["abut"]["over"] == "Wall", off
+
+
+def test_a_stepped_top_keeps_its_mono_ridge_and_abuts_the_wall_over_its_lower_step():
+    """A monopitch whose top steps down: the upper step a free top (a mono ridge), the lower
+    one under a picked wall (the abutment). Both, not just the longer (the job's roof A)."""
+    t, s, c = math.tan(math.radians(15.0)), math.sin(math.radians(15.0)), math.cos(math.radians(15.0))
+    z = lambda y: HR + y * t                                                                  # noqa: E731
+    lo = -1000.0                                    # the lower step's top edge, in from the upper one's
+    ring = [[0, -4000, z(-4000)], [8000, -4000, z(-4000)], [8000, lo, z(lo)], [3000, lo, z(lo)], [3000, 0, z(0)], [0, 0, z(0)]]
+    tris = [[ring[0], ring[1], ring[2]], [ring[0], ring[2], ring[3]], [ring[0], ring[3], ring[4]], [ring[0], ring[4], ring[5]]]
+    roof = extract_elevation({"name": "Roof", "faces": tris, "outward": [0, -s, c], "context": [],
+                              "options": {"debug": False, "clad_depth": 150.0}})
+    wall = _face("Wall", [[3000, lo, z(lo)], [8000, lo, z(lo)], [8000, lo, z(0) + 1500], [3000, lo, z(0) + 1500]], (0, -1, 0))
+    link = abut_link(wall, roof)
+    assert link
+    rec = lambda side, other: dict(link[side], **{"with": other, "k": link["k"], "master": side == "b"})        # noqa: E731
+    elevs = [dict(wall, offset=0, chain="Chain 1", settings=dict(SEAM), valleys=[rec("a", "Roof")]),
+             dict(roof, offset=0, chain="Chain 2", settings=dict(SEAM), valleys=[rec("b", "Wall")], verge="none", eaves="none", head="g3")]
+    out = generate_preview({"elevations": elevs, "trim": True, "splash": 0})
+    info = next(i for i in out["info"] if i["elevation"] == "Roof")
+    assert info.get("abut") and info["abut"]["over"] == "Wall" and info["abut"]["kind"] == "below"
+    assert info["abut"]["length"] == pytest.approx(5000.0, abs=60.0)
+    assert info.get("head") and info["head"]["length"] == pytest.approx(3000.0, abs=60.0)       # the upper step's mono ridge
+    names = [m["name"] for m in out["geometry"]]
+    assert any(n.startswith("Roof Head Verge Cap") for n in names)

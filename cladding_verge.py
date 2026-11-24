@@ -705,6 +705,12 @@ def close_cap_ends(meshes, p):
     caps = [m for m in out if m.get("ifc_type") == "ridge_cap" and (m.get("ridge_info") or m.get("head_info"))
             and not m.get("stop_end") and not m.get("drip_end")]
     for cap in caps:
+        if float(cap.get("depth") or 0.0) and not cap.get("vshift"):
+            # a cap cut back at its start (a mitre: _cut_end) starts along its frame: rebased to
+            # start at its origin, as what follows reads its length from there
+            d0, f = float(cap["depth"]), cap["frame"]
+            cap["frame"] = dict(f, origin=[float(c) + d0 * float(k) for c, k in zip(f["origin"], f["n"])])
+            cap["depth"] = 0.0
         info = cap.get("ridge_info") or {}
         faces = info.get("between") or [cap.get("elevation")]
         f = cap["frame"]
