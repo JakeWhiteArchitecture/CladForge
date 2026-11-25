@@ -619,6 +619,7 @@ def _extract(payload):
         _t0 = time.perf_counter()
         try:   # one awkward element must not sink the whole extraction
             tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
+            post = None
             if etype in POST_TYPES or etype in POST_LIKE_TYPES:
                 post, why = _post_of(tris, n, d, u)
                 named = any(k in (elem.get("name") or "").lower() for k in POST_NAMES)
@@ -638,7 +639,7 @@ def _extract(payload):
             if ignored:
                 # Left alone on the face as picked; but one that passes right through a healed
                 # strip (a rafter's tail through a wall healed up to the roof) cuts that strip.
-                if strips and etype in HEAL_CUT_TYPES:
+                if strips and etype in HEAL_CUT_TYPES and not post:
                     shadow = _zone_shadow(tris, n, d, u, clad_depth, strip_area)
                     if shadow is not None:
                         cuts.append((None, elem, shadow))
@@ -649,7 +650,9 @@ def _extract(payload):
                 if fr:
                     frames.append(dict(fr, name=elem.get("name", ""), type=elem.get("type") or etype))
             straddles, touches, poly, pts = _section(tris, n, d, u)
-            shadow = _zone_shadow(tris, n, d, u, clad_depth, strip_area) if strips else None
+            # A batten stands in the cladding zone, but it is what the cladding is fixed to:
+            # it never cuts the face, through a healed strip or as a penetration.
+            shadow = _zone_shadow(tris, n, d, u, clad_depth, strip_area) if strips and not post else None
             box = _box_in_front(tris, n, d, u, clad_depth, etype, straddles, roofish, vmin0, vmax0)
             if box is not None:
                 # a box at the head of the wall (an eaves box) standing in front of it, where the
@@ -682,8 +685,8 @@ def _extract(payload):
                 # high): not a hole; the roof runs on over it as over anything below its eaves
                 result["warnings"].append("%s sits under the roof but rises %.0f mm up through it: not cut out of the roof "
                                           "(an eaves box modelled a little high?)" % (elem.get("name") or etype, _rise(tris, n, d)))
-            elif (straddles and options.get("penetrations", True)) or shadow is not None:
-                cuts.append((poly if straddles and options.get("penetrations", True) else None, elem, shadow))
+            elif (straddles and not post and options.get("penetrations", True)) or shadow is not None:
+                cuts.append((poly if straddles and not post and options.get("penetrations", True) else None, elem, shadow))
         except Exception:   # noqa: BLE001
             skipped += 1
         clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)

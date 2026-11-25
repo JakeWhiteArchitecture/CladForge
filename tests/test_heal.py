@@ -196,6 +196,30 @@ def test_a_wall_healed_up_to_a_roof_stops_under_the_plywood_that_oversails_it():
         assert cut["height"] <= 2900.0 - t_ply + 0.1
 
 
+
+def test_battens_standing_in_front_of_a_healed_strip_do_not_cut_it():
+    """The job's standing seam skirt: a wall healed up under its roof, and the client's
+    battens (beams, not named battens) for the panels below running up in front of it. A
+    batten stands in the cladding zone, as a rafter tail does, so each one cut the healed
+    strip through: the face fell into strips, and only the one the pick landed on was kept.
+    Battens are what the cladding is fixed to: offered switched off, never cut out."""
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]         # noqa: E731
+    xs = [600.0 * i + 300.0 for i in range(10)]
+    battens = [{"type": "IFCBEAM", "name": "Beam Dimension Lumber %d" % i, "id": 20 + i,
+                "tris": _box(x - 22.5, x + 22.5, -45.0, 0.0, lambda y: 2800.0, 2800.0)[1]} for i, x in enumerate(xs)]
+    strip = [[0, 0, 2700], [6000, 0, 2700], [6000, 0, 2900], [0, 0, 2900]]
+
+    def wall(context):
+        return extract_elevation({"name": "Skirt", "faces": quad([[0, 0, 0], [6000, 0, 0], [6000, 0, 2700], [0, 0, 2700]]),
+                                  "heals": [{"quad": strip, "through": [], "under": True}], "outward": [0, -1, 0],
+                                  "seeds": [[1000, 0, 1350]], "context": context,
+                                  "options": {"debug": False, "clad_depth": 150.0, "penetrations": True}})
+    plain, clad = wall([]), wall(battens)
+    assert plain["area"] == pytest.approx(6000.0 * 2900.0)
+    assert clad["width"] == pytest.approx(6000.0) and clad["area"] == pytest.approx(plain["area"])
+    assert not any("left out" in w for w in clad["warnings"])
+    assert [q["u"] for q in clad["posts"]] == pytest.approx(xs) and {q.get("default") for q in clad["posts"]} == {"off"}
+
 # ── trimming: faces that run on past the line they meet on ────────────────
 
 def _corner(over_a=0.0, over_b=0.0, short_b=0.0, trims_a=(), trims_b=(), heals_b=()):
