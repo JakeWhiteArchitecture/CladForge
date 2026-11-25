@@ -210,16 +210,64 @@ def bays_between(stops, max_panel, gap):
 MIN_BAY = 300.0   # mm – a bay set out on posts is never narrower than this where a post allows
 
 
+FULL_PANEL = 15.0   # mm – a panel this near the most a panel may be is a full one (the joint gaps come off it)
+
+
+def _best_bays(a, b, posts, max_panel, gap, min_bay):
+    """The panels across one span [a, b] with every joint on a post, chosen among all the
+    ways the posts allow: the fewest panels (the fewest vertical joints), then the most
+    full ones (a 1200 sheet uncut), then the widest narrowest one (no sliver at a corner or
+    beside an opening), then the longer panels first, as before. Posts at 600 with now and
+    then two 100 apart: a 700 panel over the pair (an extra fixing) rather than a joint
+    more. None where some stretch has no post in reach (bays_on_posts then adds battens)."""
+    if b - a <= max_panel + 1e-6:
+        return [(a, b)]
+    cand = sorted({q for q in posts if a + gap / 2.0 + 1.0 < q < b - gap / 2.0 - 1.0})
+    nodes = [a] + cand + [b]
+    start = lambda i: nodes[i] if i == 0 else nodes[i] + gap / 2.0           # noqa: E731
+    end = lambda j: nodes[j] if j == len(nodes) - 1 else nodes[j] - gap / 2.0   # noqa: E731
+    for floor in (min_bay, 1.0):          # no way within min_bay: any way at all
+        best = {0: ((0, 0, -float("inf"), ()), None)}
+        for j in range(1, len(nodes)):
+            for i in range(j):
+                if i not in best:
+                    continue
+                w = end(j) - start(i)
+                if w > max_panel + 1e-6 or w < floor - 1e-6:
+                    continue
+                (n, full, narrow, order), _p = best[i]
+                # last, as the old rule did where nothing else chooses: the longer panels first
+                score = (n + 1, full - (1 if w >= max_panel - FULL_PANEL else 0), max(narrow, -w), order + (-round(w, 3),))
+                if j not in best or score < best[j][0]:
+                    best[j] = (score, i)
+        last = len(nodes) - 1
+        if last in best:
+            out, j = [], last
+            while j:
+                i = best[j][1]
+                out.append((start(i), end(j)))
+                j = i
+            return out[::-1]
+    return None
+
+
 def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY):
     """Panels filling each span between consecutive *stops* (the ends, opening jambs: fixed
     edges, no joint gap taken there) with every joint on a post, a batten the client's
-    model fixes: the furthest post that keeps the panel within *max_panel*, so as few
-    joints as the posts allow, avoiding one that leaves a last bay under *min_bay*. Where
-    no post is in reach the joint goes at the full panel width and is listed in *extra*,
-    needing a batten of its own. Returns (panels, joints, extra)."""
+    model fixes, chosen among all the ways the posts allow (_best_bays: the fewest joints,
+    then the most full panels, then no slivers). Where some stretch has no post in reach,
+    the furthest post that keeps the panel within *max_panel*, avoiding one that leaves a
+    last bay under *min_bay*, and where none is in reach the joint goes at the full panel
+    width and is listed in *extra*, needing a batten of its own. Returns (panels, joints, extra)."""
     panels, joints, extra = [], [], []
     for a, b in zip(stops, stops[1:]):
         if b - a <= 1.0:
+            continue
+        best = _best_bays(a, b, posts, max_panel, gap, min_bay)
+        if best is not None:
+            for s0, e0 in best:
+                panels.append((s0, e0, True))
+            joints += [e0 + gap / 2.0 for _s0, e0 in best[:-1]]
             continue
         cur = a
         while b - cur > max_panel + 1e-6:

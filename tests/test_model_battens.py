@@ -164,3 +164,21 @@ def test_something_batten_shaped_is_offered_switched_off_and_can_be_turned_on():
     # a column or member on the same line as a look-alike wins
     both = _extract(proxies[:1] + [_column("Batten", POSTS[0])])
     assert len(both["posts"]) == 1 and "default" not in both["posts"][0]
+
+
+def test_on_battens_at_600_with_a_pair_100_apart_the_most_1200_panels_and_a_700_over_the_pair():
+    """The job's client battens: 600 centres, now and then two 100 apart, then 600 again.
+    The fewest vertical joints, as many 1200 panels as can be, and the pair taken in one
+    700 panel (600 + 100, an extra fixing) rather than a joint more."""
+    from cladding_primitives import bays_on_posts
+    posts = [600.0, 1200.0, 1800.0, 1900.0, 2500.0, 3100.0, 3700.0, 4300.0]
+    panels, joints, extra = bays_on_posts([0.0, 4900.0], posts, 1200.0, 10.0)
+    widths = [round(e - s) for s, e, _f in panels]
+    assert not extra and len(panels) == 5 and all(j in posts for j in joints)
+    assert sum(1 for w in widths if w >= 1185) == 3, widths          # three full sheets
+    assert any(685 <= w <= 700 for w in widths), widths               # the pair in one ~700 panel
+    # greedy from the left would have stopped at 1200 and 1900 and 3100 and 4300: the same here,
+    # but with the pair first it must look ahead: 0 | 100 pair at 600/700 | ...
+    panels, joints, extra = bays_on_posts([0.0, 3700.0], [600.0, 700.0, 1300.0, 1900.0, 2500.0, 3100.0], 1200.0, 10.0)
+    widths = [round(e - s) for s, e, _f in panels]
+    assert len(panels) == 4 and sum(1 for w in widths if w >= 1185) >= 2, widths
