@@ -172,3 +172,37 @@ def test_the_exporters_quick_build_lays_the_battens_the_same():
     meshes, _dims, infos = build_all_groups(params)
     assert {i["elevation"]: i for i in infos}["Lower"]["matched_to"]["name"] == "Upper"
     assert _lines({"geometry": meshes}, "Lower") == _lines(out, "Lower")
+
+
+def test_a_face_set_out_on_the_client_s_battens_leads_whatever_was_picked_first():
+    """The job: the standing seam skirts were picked before the Rockpanel under them, so each
+    skirt led with its own set-out, and the Rockpanel, on the client's battens, followed
+    nothing (the client's own come first). The skirt's uprights should be on the battens of
+    the chain below: a face set out on the client's columns leads, whatever the order."""
+    up, low = _face("Upper", **UPPER), _face("Lower", **LOWER)
+    cols = [600.0, 1200.0, 1800.0, 2400.0, 2500.0, 3100.0, 3700.0, 4300.0, 4900.0, 5500.0]
+    low = dict(low, posts=[{"u": u, "w": 45.0, "v0": 0.0, "v1": 1500.0, "name": "Batten %d" % i} for i, u in enumerate(cols)])
+    _p, out = _build((up, SEAM), (low, PANEL))
+    info = {i["elevation"]: i for i in out["info"]}
+    assert (info["Upper"].get("matched_to") or {}).get("name") == "Lower"
+    assert not info["Lower"].get("matched_to")
+    lower = set(_lines(out, "Lower"))
+    assert {round(x, 1) for x in cols} <= lower and set(_lines(out, "Upper")) >= {round(x, 1) for x in cols}
+
+
+def test_a_skirt_over_two_wings_follows_both():
+    """The job's skirt Q runs over two Rockpanel wings of one wall: it followed one of them
+    and set itself out over the other. It follows every face stacked under it at that height."""
+    from cladding_preview import generate_preview
+    up = _face("Upper", **UPPER)
+    a, b = _face("Lower A", x0=0.0, x1=2500.0, z0=0.0, z1=1500.0), _face("Lower B", x0=3500.0, x1=6000.0, z0=0.0, z1=1500.0)
+    ca, cb = [400.0, 1000.0, 1600.0, 2200.0], [3800.0, 4400.0, 5000.0, 5600.0]
+    cols = lambda us, x0: [{"u": u - x0, "w": 45.0, "v0": 0.0, "v1": 1500.0, "name": "B%d" % i} for i, u in enumerate(us)]   # noqa: E731
+    elevs = [dict(up, offset=0, chain="Skirt", settings=SEAM),
+             dict(a, offset=0, chain="Wing A", settings=PANEL, posts=cols(ca, 0.0)),
+             dict(b, offset=0, chain="Wing B", settings=PANEL, posts=cols(cb, 3500.0))]
+    out = generate_preview({"elevations": elevs, "trim": True, "splash": 0})
+    lines = set(_lines(out, "Upper"))
+    assert set(ca) <= lines and set(cb) <= lines
+    info = {i["elevation"]: i for i in out["info"]}
+    assert {info["Upper"]["matched_to"]["name"]} | set(info["Upper"]["matched_to"].get("also", [])) == {"Lower A", "Lower B"}
