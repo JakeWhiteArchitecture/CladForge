@@ -1865,7 +1865,8 @@ function restoreState(st, add, fileName) {
     // surfaces move onto its offset.
     const saved = (st.model && st.model.offset) || [0, 0, 0];
     let d = [0, 0, 0];
-    if (allMeshes.length || add) d = saved.map((x, k) => x - modelOffset[k]);
+    // both offsets are in the scene's axes (x, up, -y); the surfaces in the engine's (x, y, up), as ifcOffset()
+    if (allMeshes.length || add) d = [saved[0] - modelOffset[0], -(saved[2] - modelOffset[2]), saved[1] - modelOffset[1]];
     else { modelOffset = saved.slice(); modelContext = (st.model && st.model.context) || {}; }
     const s = st.settings || {};
     if (add) {

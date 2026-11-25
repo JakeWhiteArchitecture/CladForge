@@ -1277,6 +1277,19 @@ _dxf(_o["geometry"], _p, _o["info"])`);
         allMeshes = meshes;
         return { ok, back, panels: window._lastPreview.geometry.length };
     }, stateText);
+    // Saved on a model whose offset was another: the surfaces move by the difference, in the
+    // engine's axes (x, y, up) though the offsets are the scene's (x, up, -y).
+    const moved = await page.evaluate(async xml => {
+        const before = state.elevations.map(e => e.result.frame.origin.slice());
+        const mo = modelOffset, so = [mo[0] + 10, mo[1] + 20, mo[2] + 30];
+        const other = xml.replace(/(<model t="object">[\s\S]*?<offset t="nums">)[^<]*(<\/offset>)/, `$1${so.join(' ')}$2`);
+        await loadState(other, 'other-offset.xml');
+        const d = state.elevations.map((e, i) => e.result.frame.origin.map((x, k) => Math.round((x - before[i][k]) * 10) / 10));
+        await loadState(xml, 'back.xml');
+        return d;
+    }, stateText);
+    if (!moved.length || !moved.every(d => d[0] === 10 && d[1] === -30 && d[2] === 20))
+        throw new Error('a state saved on another offset did not move onto this one in the engine\'s axes: ' + JSON.stringify(moved));
     const sameAgain = (await snapshotOf()).geometry === savedLook.geometry;
     console.log('save state:', stateFile.suggestedFilename(), stateText.length, 'bytes |', loaded.status, '|', refusedState,
                 '| no model:', JSON.stringify(noModel), '| elevations', savedLook.elevations, '→', loadedLook.elevations);
