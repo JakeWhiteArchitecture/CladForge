@@ -1260,7 +1260,7 @@ function settingsSource(value) {
     if (kind === 'chain') {
         const c = state.chains[+a];
         if (!c) return null;
-        if (c === state.formChain) c.settings = formSettings();          // as the form has it now
+        if (c === state.formChain) c.settings = keepSettings(c.settings);          // as the form has it now
         return { name: c.name, kind: liveKind(c), settings: c.settings, edges: c.edges, chain: c };
     }
     if (kind === 'lib') {
@@ -1289,7 +1289,7 @@ function copyChainSettings() {
     if (!src) { setStatus('Choose a chain to copy the settings from', 'busy'); return; }
     const cladding = document.getElementById('copy-cladding').checked, edges = document.getElementById('copy-edges').checked;
     if (!cladding && !edges) { setStatus('Tick Cladding, Edges or both', 'busy'); return; }
-    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = formSettings();
+    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = keepSettings(state.formChain.settings);
     const to = document.getElementById('copy-to').value;
     const here = activeChain();
     const targets = (to === 'this' ? [here] : state.chains.filter(c => liveKind(c) === (to === 'walls' ? 'wall' : 'roof')))
@@ -1321,9 +1321,13 @@ function copyChainSettings() {
 
 function activeChain() { const e = state.elevations[state.active]; return e ? e.chain : null; }
 // Keep the chain shown in the sidebar, then show the active face's chain if it is another.
+// The form's settings over a chain's own, keeping those the form has no field for (a split
+// height set from a saved state, say), which a plain formSettings() would drop.
+function keepSettings(old) { return Object.assign({}, old || {}, formSettings()); }
+
 function showActiveChainSettings() {
     const c = activeChain();
-    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = formSettings();
+    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = keepSettings(state.formChain.settings);
     if (!c || c === state.formChain) { state.formChain = c || state.formChain; return false; }
     state.formChain = c;
     if (c.settings) { applySettings(c.settings); syncTypeUI(); }
@@ -1409,7 +1413,7 @@ function ifcOffset() {
 }
 
 function getParams() {
-    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = formSettings();
+    if (state.formChain && state.chains.includes(state.formChain)) state.formChain.settings = keepSettings(state.formChain.settings);
     // The scene's shift (modelOffset) is in the scene's axes, y up; the engine and the exports
     // work in the IFC's, z up: Three (x, y, z) <-> IFC (x, -z, y). Sent as it was, the
     // cladding went out with the model's height and its depth on plan swapped.

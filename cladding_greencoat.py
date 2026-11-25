@@ -570,36 +570,101 @@ def _wall(frame):
     return abs(float(v[2])) > 0.999                                      # stood up: a wall, not a slope
 
 
-def _drip_ring(xb, xf, v0, t):
+def _drip_ring(xb, xf, v0, t, step=0.0):
     """The drip flashing in section, (out of the face, up): fixed DRIP_UP up the plywood's face
     *xf* and on down past its foot *v0* as the drip's leg, DRIP_DOWN below it; and from that
     corner in under the plywood's foot to its back *xb* and DRIP_TURN up it. The tray hooks
-    over the leg (_fold_ring): the fold is the tray's own, not the flashing's."""
+    over the leg (_fold_ring): the fold is the tray's own, not the flashing's. *step*: the leg
+    stepped out that far at the plywood's foot (falling DRIP_STEP_FALL), then down."""
     from shapely.geometry import LineString
     from shapely.geometry.polygon import orient
     f = xf + t / 2.0
-    leg = LineString([(f, v0 + DRIP_UP), (f, v0 - DRIP_DOWN)])
+    if step:
+        leg = LineString([(f, v0 + DRIP_UP), (f, v0), (f + step, v0 - DRIP_STEP_FALL), (f + step, v0 - DRIP_STEP_FALL - DRIP_DOWN)])
+    else:
+        leg = LineString([(f, v0 + DRIP_UP), (f, v0 - DRIP_DOWN)])
     under = LineString([(f, v0 - t / 2.0), (xb - t / 2.0, v0 - t / 2.0), (xb - t / 2.0, v0 + DRIP_TURN)])
     sheet = shapely.union_all([g.buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0) for g in (leg, under)], grid_size=GRID)
     sheet = orient(sheet if sheet.geom_type == "Polygon" else max(sheet.geoms, key=lambda g: g.area), 1.0)
     return [[round(x, 3), round(y, 3)] for x, y in list(sheet.exterior.coords)[:-1]]
 
 
-def _fold_ring(xt, xf, v0, t):
+def _fold_ring(xt, xf, v0, t, step=0.0):
     """The tray's own foot hooked over the drip's leg, in section: from the tray's flat (its
     back at *xt*) round under the leg's end, FOLD_AIR clear of it, and FOLD_HOOK back up behind
-    it. Returns (ring, the level the tray's flat comes down to)."""
+    it. *step*: over a stepped drip, from the plywood's foot out along the step and down the
+    stepped leg first. Returns (ring, the level the tray's flat comes down to)."""
     from shapely.geometry import LineString
     from shapely.geometry.polygon import orient
     air = FOLD_AIR * t
-    bottom = v0 - DRIP_DOWN - air - t / 2.0                            # the fold's sheet, centred, under the leg's end
-    back = xf - air - t / 2.0                                          # its return, behind the leg (the leg is xf..xf+t)
-    path = [(xt + t / 2.0, bottom + 2.0 * t), (xt + t / 2.0, bottom), (back, bottom), (back, bottom + FOLD_HOOK)]
+    fall = DRIP_STEP_FALL if step else 0.0
+    bottom = v0 - fall - DRIP_DOWN - air - t / 2.0                     # the fold's sheet, centred, under the leg's end
+    back = xf + step - air - t / 2.0                                   # its return, behind the leg (the leg is xf..xf+t)
+    x = xt + t / 2.0
+    if step:
+        rise = x - (xf + t / 2.0)                                      # the tray stands this far off the leg
+        path = [(x, v0 + 2.0 * t), (x, v0 + rise * DRIP_STEP_FALL / step), (x + step, v0 - fall + rise * DRIP_STEP_FALL / step),
+                (x + step, bottom), (back, bottom), (back, bottom + FOLD_HOOK)]
+        sheet = orient(LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0), 1.0)
+        return [[round(a, 3), round(b, 3)] for a, b in list(sheet.exterior.coords)[:-1]], v0 + 2.0 * t
+    path = [(x, bottom + 2.0 * t), (x, bottom), (back, bottom), (back, bottom + FOLD_HOOK)]
     sheet = orient(LineString(path).buffer(t / 2.0, cap_style=2, join_style=2, mitre_limit=3.0), 1.0)
     return [[round(x, 3), round(y, 3)] for x, y in list(sheet.exterior.coords)[:-1]], bottom - t / 2.0
 
 
 DRIP_NOTCH = 60.0    # mm – a long level edge this near the outline's lowest point is still its foot
+DRIP_STEP = 25.0     # mm – a stepped drip: its leg brought this far out past the plywood's face, over cladding below
+DRIP_STEP_FALL = 5.0 # mm – the step's fall outward
+DRIP_CLEAR = 5.0     # mm – cladding below whose face comes within this of the drip's leg, or out past it, steps it
+
+
+def drip_steps(params):
+    """Before anything is built: each standing seam wall with a drip at its foot is told where
+    the cladding on a wall below, in its plane, stands out to the drip's leg or past it (boards
+    on battens and counter-battens under a skirt): "drip_steps", [(u0, u1)] in its own u. There
+    the drip is stepped out DRIP_STEP (cladding_drips), so it laps over that cladding."""
+    from cladding_constants import _parse, chain_params
+    from cladding_primitives import buildup_depth
+    elevs = [e for e in params.get("elevations") or [] if e.get("ok", True) and e.get("polygons") and e.get("frame")]
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    for e in elevs:
+        e.pop("drip_steps", None)
+    parsed = {}
+    for e in elevs:
+        try:
+            parsed[e.get("name")] = _parse(dict(chain_params(params, e), elevations=[]))
+        except Exception:   # noqa: BLE001
+            continue
+    for e in elevs:
+        pe = parsed.get(e.get("name"))
+        f = e["frame"]
+        if not pe or not pe.get("seam") or not (steel(pe) or pe.get("base_drip")) or not _wall(f):
+            continue
+        leg = buildup_depth(pe) - float(pe["plank_t"]) - 2.0              # the drip's leg: on the plywood's face
+        V = f.get("v") or (0.0, 0.0, 1.0)
+        pts = [q for pg in e["polygons"] for q in pg["exterior"]]
+        foot = min(q[1] for q in pts)
+        z_foot = frame_to_world(f, 0.0, foot, 0.0)[2]
+        found = []
+        for w in elevs:
+            pw, fw = parsed.get(w.get("name")), w["frame"]
+            if w is e or not pw or not _wall(fw) or dot(fw["n"], f["n"]) < 0.98:
+                continue
+            off = dot([a - b for a, b in zip(fw["origin"], f["origin"])], f["n"])    # its wall face, out from this one's
+            if abs(off) > 150.0:
+                continue
+            out = off + buildup_depth(pw) + (float(pw["seam_h"]) if pw.get("seam") else 0.0)
+            if out < leg - DRIP_CLEAR:
+                continue
+            wpts = [frame_to_world(fw, q[0], q[1], 0.0) for pg in w["polygons"] for q in pg["exterior"]]
+            if abs(max(p[2] for p in wpts) - z_foot) > 100.0:
+                continue                                                      # not under this one's foot
+            us = [dot([a - b for a, b in zip(p, f["origin"])], f["u"]) for p in wpts]
+            u0, u1 = max(min(us), min(q[0] for q in pts)), min(max(us), max(q[0] for q in pts))
+            if u1 - u0 > 100.0:
+                found.append((round(u0, 1), round(u1, 1)))
+        if found:
+            e["drip_steps"] = sorted(found)
 
 
 def cladding_drips(meshes, p, infos):
@@ -643,11 +708,18 @@ def cladding_drips(meshes, p, infos):
         if not runs:
             continue
         U, V, N = [float(c) for c in frame["u"]], [float(c) for c in frame.get("v") or (0, 0, 1)], [float(c) for c in frame["n"]]
-        for k, (u0, u1, v0, xb, xf) in enumerate(runs):
+        steps = elev.get("drip_steps") or []
+        split = []
+        for (u0, u1, v0, xb, xf) in runs:
+            cuts = sorted({u0, u1} | {x for a, b in steps for x in (a, b) if u0 < x < u1})
+            for a, b in zip(cuts, cuts[1:]):
+                stepped = any(s0 - 1.0 <= (a + b) / 2.0 <= s1 + 1.0 for s0, s1 in steps)
+                split.append((a, b, v0, xb, xf, DRIP_STEP if stepped else 0.0))
+        for k, (u0, u1, v0, xb, xf, step) in enumerate(split):
             # the section in (out of the face, up), run along the wall from u1 back to u0 (out × up = -along)
             sec = {"origin": frame_to_world(frame, u1, 0.0, 0.0), "u": N, "v": V, "n": [-c for c in U]}
-            drip = _prism(_drip_ring(xb, xf, v0, t), 0.0, u1 - u0, sec, "eaves_strip", "%s Cladding Drip %d" % (name, k + 1), name)
-            drip.update(opacity=1.0, cladding_drip=True)
+            drip = _prism(_drip_ring(xb, xf, v0, t, step), 0.0, u1 - u0, sec, "eaves_strip", "%s Cladding Drip %d" % (name, k + 1), name)
+            drip.update(opacity=1.0, cladding_drip=True, drip_step=step)
             extra.append(drip)
             mesh = _prism([[back_of_cavity, v0 - t - MESH_T], [xb - t, v0 - t - MESH_T], [xb - t, v0 - t], [back_of_cavity, v0 - t]],
                           0.0, u1 - u0, sec, "dpm", "%s Insect Mesh %d" % (name, k + 1), name)
@@ -662,7 +734,7 @@ def cladding_drips(meshes, p, infos):
                 at = [q for q in ring if abs(q[1] - v0) < 0.5 and u0 - 0.5 <= q[0] <= u1 + 0.5]
                 if not at:
                     continue
-                fold, low = _fold_ring(float(m["depth"]), xf, v0, t)
+                fold, low = _fold_ring(float(m["depth"]), xf, v0, t, step)
                 m["profile"] = [[q[0], low] if abs(q[1] - v0) < 0.5 and u0 - 0.5 <= q[0] <= u1 + 0.5 else q for q in ring]
                 if m["ifc_type"] == "plank" and len(at) >= 2:
                     a, b = min(q[0] for q in at), max(q[0] for q in at)
@@ -673,6 +745,7 @@ def cladding_drips(meshes, p, infos):
                         extra.append(piece)
         info = info_by.get(name)
         if info is not None:
-            info["cladding_drip"] = {"runs": len(runs), "length": round(sum(r[1] - r[0] for r in runs), 1),
+            info["cladding_drip"] = {"runs": len(split), "length": round(sum(r[1] - r[0] for r in split), 1),
+                                     "stepped": round(sum(r[1] - r[0] for r in split if r[5]), 1), "step": DRIP_STEP,
                                      "down": DRIP_DOWN, "up": DRIP_UP, "turn": DRIP_TURN, "fold_air": round(FOLD_AIR * t, 2)}
     return meshes + extra

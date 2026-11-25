@@ -90,6 +90,12 @@ def _parse(params):
         except (TypeError, ValueError):
             p[key] = float(default)
     p["sheathing"], p["insulation"] = bool(params.get("sheathing")), bool(params.get("insulation"))
+    # panels: a horizontal joint at this height, in the model's own coordinates (mm), on every face
+    # of the chain (a band round the building from a window's sill)
+    try:
+        p["panel_split_z"] = float(params["panel_split_z"]) if params.get("panel_split_z") not in (None, "") else None
+    except (TypeError, ValueError):
+        p["panel_split_z"] = None
     p["reveals"], p["set_out_from_openings"] = bool(params.get("reveals", True)), bool(params.get("set_out_from_openings", True))
     p["barriers"] = bool(params.get("barriers"))        # openings closed with cavity barriers on all four sides
     p["cladding_type"] = "panel" if params.get("cladding_type") == "panel" else "plank"

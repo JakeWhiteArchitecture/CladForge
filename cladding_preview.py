@@ -19,7 +19,7 @@ from cladding_ridge import ridge_ends, ridge_parts
 from cladding_verge import close_cap_ends, join_drips, join_hip_drips, verge_parts, join_verges
 from cladding_valley import valley_cut, valley_parts
 from cladding_hip import gablet_hip_tops, hip_ends, hip_parts
-from cladding_greencoat import cladding_drips
+from cladding_greencoat import cladding_drips, drip_steps
 from cladding_eaves import eaves_walls, eaves_parts, eaves_under, join_eaves
 from cladding_head import head_ridges, head_parts
 from cladding_vergehead import verge_heads, verge_head_parts
@@ -214,6 +214,7 @@ def generate_preview(params):
     _run(join_verges, params)      # a verge over a clad wall: how far its plywood oversails
     _run(join_eaves, params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
     _run(eaves_walls, params)      # and a roof's open eaves over a wall whose cladding stands proud of its edge
+    _run(drip_steps, params)       # a standing seam wall's drip over cladding below that stands out to it: stepped
     _run(verge_heads, params)      # a verge with a mono ridge at both ends: the mono ridge run on down it
     _run(join_abuts, params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
     _run(link_seams, params)       # faces whose seams follow another's are given its seam lines

@@ -14,7 +14,7 @@ from cladding_constants import frame_to_world, frame_v, z_to_v
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
                             opening_key, opening_frames, settings as edge_settings)
 import cladding_corners as profiles
-from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
+from cladding_primitives import (ROW_MIN, centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
                                  base_level, corner_ends, openings, buildup_depth, clip_bounds,
                                  clip_bounds_v, panel_rows, row_height, bays_on_posts, end_master)
@@ -613,6 +613,24 @@ def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None, **extra):
         d["kind"], d["value"] = kind, float(value)
     d.update(extra)
     return d
+
+
+def _split_rows(p, elev, start, H, gap):
+    """The rows that put a horizontal joint at the chain's split height (p["panel_split_z"],
+    in the model's own coordinates): the first from *start* sized to end half a joint gap
+    under it, sheet-high rows under that where it is higher than a sheet. None where the
+    chain has no split, or it falls outside this face's cladding."""
+    z = p.get("panel_split_z")
+    if z is None:
+        return None
+    off = float(((p.get("context") or {}).get("offset") or [0.0, 0.0, 0.0])[2])
+    at = z_to_v(elev["frame"], z - off)
+    first = at - start - gap / 2.0
+    if first < ROW_MIN or at > H - ROW_MIN:
+        return None
+    ph = float(p["panel_h"])
+    n = max(0, int(math.ceil((first - ph) / (ph + gap) - 1e-9)))
+    return [first - n * (ph + gap)] + [ph] * n if n else [first]
 
 
 def _datum(elev):
@@ -1457,7 +1475,8 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     # The row list starts at the chain's datum, so rows line up round its corners; a face
     # that starts higher cuts the row at its base, one that starts lower carries on down.
     datum = _datum(elev)
-    rows, short = panel_rows(elev.get("panel_rows"), p["panel_h"], gap, v0 if datum is None else datum, H, v0)
+    heights = _split_rows(p, elev, v0 if datum is None else datum, H, gap) or elev.get("panel_rows")
+    rows, short = panel_rows(heights, p["panel_h"], gap, v0 if datum is None else datum, H, v0)
     joints, dissolved, dropped = _hjoints(elev, rows, panels, gap, region)
     # A noggin between vertical battens sits on the drainage plane and dams it, so the
     # horizontal seams are left unsupported unless a counter-batten layer holds the

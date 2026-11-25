@@ -211,33 +211,42 @@ MIN_BAY = 300.0   # mm – a bay set out on posts is never narrower than this wh
 
 
 FULL_PANEL = 15.0   # mm – a panel this near the most a panel may be is a full one (the joint gaps come off it)
+JOINT_SLIP = 10.0   # mm – a joint may stand this far off its batten's centreline
+SLIPS = (0.0, -2.5, 2.5, -5.0, 5.0, -7.5, 7.5, -10.0, 10.0)
 
 
 def _best_bays(a, b, posts, max_panel, gap, min_bay):
     """The panels across one span [a, b] with every joint on a post, chosen among all the
     ways the posts allow: the fewest panels (the fewest vertical joints), then the most
-    full ones (a 1200 sheet uncut), then the widest narrowest one (no sliver at a corner or
-    beside an opening), then the longer panels first, as before. Posts at 600 with now and
+    full ones (a 1200 sheet uncut), then the joints nearest their battens' centres (one moved
+    up to JOINT_SLIP off only for a joint less or a full sheet more), then the widest
+    narrowest panel (no sliver at a corner or beside an opening), then the longer panels
+    first, as before. Posts at 600 with now and
     then two 100 apart: a 700 panel over the pair (an extra fixing) rather than a joint
     more. None where some stretch has no post in reach (bays_on_posts then adds battens)."""
     if b - a <= max_panel + 1e-6:
         return [(a, b)]
-    cand = sorted({q for q in posts if a + gap / 2.0 + 1.0 < q < b - gap / 2.0 - 1.0})
-    nodes = [a] + cand + [b]
-    start = lambda i: nodes[i] if i == 0 else nodes[i] + gap / 2.0           # noqa: E731
-    end = lambda j: nodes[j] if j == len(nodes) - 1 else nodes[j] - gap / 2.0   # noqa: E731
+    # each joint on a batten's centre, or up to JOINT_SLIP off it (a 1200 sheet over two bays
+    # set out at 605 and more, the fixings still well within the batten)
+    cand = sorted({(q + d, abs(d)) for q in posts for d in SLIPS if a + gap / 2.0 + 1.0 < q + d < b - gap / 2.0 - 1.0})
+    nodes = [(a, 0.0)] + cand + [(b, 0.0)]
+    start = lambda i: nodes[i][0] if i == 0 else nodes[i][0] + gap / 2.0           # noqa: E731
+    end = lambda j: nodes[j][0] if j == len(nodes) - 1 else nodes[j][0] - gap / 2.0   # noqa: E731
     for floor in (min_bay, 1.0):          # no way within min_bay: any way at all
-        best = {0: ((0, 0, -float("inf"), ()), None)}
+        best = {0: ((0, 0, 0.0, -float("inf"), ()), None)}
         for j in range(1, len(nodes)):
             for i in range(j):
-                if i not in best:
+                if i not in best or nodes[j][0] <= nodes[i][0]:
                     continue
                 w = end(j) - start(i)
                 if w > max_panel + 1e-6 or w < floor - 1e-6:
                     continue
-                (n, full, narrow, order), _p = best[i]
-                # last, as the old rule did where nothing else chooses: the longer panels first
-                score = (n + 1, full - (1 if w >= max_panel - FULL_PANEL else 0), max(narrow, -w), order + (-round(w, 3),))
+                (n, full, slip, narrow, order), _p = best[i]
+                # a joint off its batten's centre only for a joint less or a full sheet more; then
+                # the widest narrowest panel; last, as the old rule did where nothing else
+                # chooses: the longer panels first
+                score = (n + 1, full - (1 if w >= max_panel - FULL_PANEL else 0), round(slip + nodes[j][1], 3),
+                         max(narrow, -w), order + (-round(w, 3),))
                 if j not in best or score < best[j][0]:
                     best[j] = (score, i)
         last = len(nodes) - 1

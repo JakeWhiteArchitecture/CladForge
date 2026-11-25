@@ -182,3 +182,27 @@ def test_on_battens_at_600_with_a_pair_100_apart_the_most_1200_panels_and_a_700_
     panels, joints, extra = bays_on_posts([0.0, 3700.0], [600.0, 700.0, 1300.0, 1900.0, 2500.0, 3100.0], 1200.0, 10.0)
     widths = [round(e - s) for s, e, _f in panels]
     assert len(panels) == 4 and sum(1 for w in widths if w >= 1185) >= 2, widths
+
+
+def test_a_joint_may_stand_up_to_10_off_its_batten_to_get_a_full_sheet():
+    """Client battens at about 606: from the corner, two bays are 1212, too wide for a 1200
+    sheet with its joint on the centre. Up to JOINT_SLIP off a batten's centre, it fits."""
+    from cladding_primitives import bays_on_posts, JOINT_SLIP
+    posts = [605.0, 1212.0, 1818.0, 2424.0]
+    panels, joints, extra = bays_on_posts([0.0, 3030.0], posts, 1200.0, 10.0)
+    widths = [round(e - s) for s, e, _f in panels]
+    assert not extra and sum(1 for w in widths if w >= 1185) >= 2, widths
+    assert all(min(abs(j - q) for q in posts) <= JOINT_SLIP + 1e-6 for j in joints)
+
+
+def test_a_chain_s_split_height_puts_a_joint_at_that_level_on_every_face():
+    """The job's band: a horizontal joint at the sill of two windows (z 1774 in the model's
+    own coordinates) round the building, whatever each face's base and the model's offset."""
+    from cladding_geometry import _split_rows
+    frame = {"origin": [0.0, 0.0, -3698.0], "u": [1.0, 0.0, 0.0], "v": [0.0, 0.0, 1.0], "n": [0.0, -1.0, 0.0]}
+    p = {"panel_split_z": 1774.0, "panel_h": 2400.0, "context": {"offset": [0.0, 0.0, 3669.0]}}
+    rows = _split_rows(p, {"frame": frame}, 10.0, 2421.0, 10.0)
+    # the joint's centre at z 1774 - 3669 = -1895 in the engine, v 1803 on this face
+    assert rows == [pytest.approx(1803.0 - 10.0 - 5.0)]
+    assert _split_rows(dict(p, panel_split_z=None), {"frame": frame}, 10.0, 2421.0, 10.0) is None
+    assert _split_rows(dict(p, panel_split_z=4000.0), {"frame": frame}, 10.0, 2421.0, 10.0) is None    # above the face

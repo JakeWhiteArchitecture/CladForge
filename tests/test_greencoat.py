@@ -272,3 +272,30 @@ def test_the_drip_finds_the_foot_past_a_notch_at_the_corner():
     out = cladding_drips([deck], p, [{"elevation": "W"}])
     drips = [m for m in out if m.get("cladding_drip")]
     assert len(drips) == 1 and abs(drips[0]["thickness"] - 3605.0) < 0.5
+
+
+@pytest.mark.parametrize("below, stepped", [("boards", True), ("rockpanel", False)])
+def test_a_skirt_s_drip_over_cladding_that_stands_out_to_it_is_stepped_out(below, stepped):
+    """The job's zinc skirts: over boards on battens and counter-battens (75 out, past the
+    drip's leg on the skirt's plywood) the drip steps out DRIP_STEP to lap over them; over
+    8 mm Rockpanel on 50 battens (58 out) it does not."""
+    from cladding_greencoat import DRIP_STEP
+    from cladding_preview import generate_preview
+    from fabric_extract import extract_elevation
+    quad = lambda z0, z1: [[(0, 0, z0), (6000, 0, z0), (6000, 0, z1)], [(0, 0, z0), (6000, 0, z1), (0, 0, z1)]]   # noqa: E731
+    face = lambda name, z0, z1: extract_elevation({"name": name, "faces": quad(z0, z1), "outward": [0, -1, 0], "context": [],   # noqa: E731
+                                                   "options": {"debug": False, "clad_depth": 150.0}})
+    skirt = dict(face("Skirt", 2400, 3400), offset=0, chain="Skirt",
+                 settings=dict(cladding_type="plank", plank_profile="seam", plank_orient="vertical", seam_metal="zinc",
+                               base_drip=True, batten_d=50, counter_batten="no"))
+    lower = {"boards": dict(cladding_type="plank", plank_profile="board", plank_orient="vertical", plank_t=12, batten_d=38, cb_d=25),
+             "rockpanel": dict(cladding_type="panel", panel_t=8, batten_d=50, counter_batten="no")}[below]
+    wall = dict(face("Wall", 0, 2400), offset=0, chain="Wall", settings=lower)
+    out = generate_preview({"elevations": [skirt, wall], "trim": True, "splash": 0})
+    info = next(i for i in out["info"] if i["elevation"] == "Skirt")["cladding_drip"]
+    assert info["stepped"] == (pytest.approx(info["length"]) if stepped else 0.0)
+    drip = next(m for m in out["geometry"] if m.get("cladding_drip"))
+    deck = next(m for m in out["geometry"] if m["elevation"] == "Skirt" and m["ifc_type"] == "deck")
+    xf = deck["depth"] + deck["thickness"]
+    reach = max(q[0] for q in drip["profile"])
+    assert reach == pytest.approx(xf + (DRIP_STEP if stepped else 0.0) + 0.6, abs=0.2)
