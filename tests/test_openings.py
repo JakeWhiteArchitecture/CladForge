@@ -455,3 +455,33 @@ def test_a_door_with_a_window_beside_it_splitting_the_face_is_two_openings(eleva
     found = openings(split)
     assert (2900.0, 3800.0, 0.0, H) in found              # the door, the full height
     assert (2200.0, 2900.0, 1200.0, H) in found           # the window beside it, from 1200 up
+
+
+def test_a_window_head_on_the_chain_boundary_gets_its_barrier_from_the_face_above():
+    """The job's windows whose heads stop where the Rockpanel does, a standing seam skirt above:
+    the Rockpanel's face left the head out (its edge) and the skirt has no opening there, so the
+    barriers did not go round. The face above builds the head barrier at its foot, across the
+    window and its jamb closers, in its own cavity."""
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]   # noqa: E731
+    face = lambda name, tris: extract_elevation({"name": name, "faces": tris, "outward": [0, -1, 0], "context": [],   # noqa: E731
+                                                 "options": {"debug": False, "clad_depth": 150.0}})
+    # a 6 m wall, 2400 high, with a window from 1000 up to its top at 2000..3000; a skirt over it
+    lower = face("Wall", quad([(0, 0, 0), (6000, 0, 0), (6000, 0, 1000), (0, 0, 1000)])
+                 + quad([(0, 0, 1000), (2000, 0, 1000), (2000, 0, 2400), (0, 0, 2400)])
+                 + quad([(3000, 0, 1000), (6000, 0, 1000), (6000, 0, 2400), (3000, 0, 2400)]))
+    upper = face("Skirt", quad([(0, 0, 2400), (6000, 0, 2400), (6000, 0, 3400), (0, 0, 3400)]))
+    assert openings(lower) == [(2000.0, 3000.0, 1000.0, 2400.0)]
+    params = {"elevations": [dict(lower, offset=0, chain="Wall", settings={"cladding_type": "panel", "barriers": True}),
+                             dict(upper, offset=0, chain="Skirt", settings={"cladding_type": "plank", "plank_profile": "seam",
+                                                                           "plank_orient": "vertical", "barriers": True})],
+              "trim": True, "splash": 0, "reveals": True}
+    out = generate_preview(params)
+    heads = [m for m in out["geometry"] if m["ifc_type"] == "closer" and m["name"].startswith("Skirt Cavity Barrier") and m["name"].endswith("H")]
+    assert len(heads) == 1
+    us, vs = [q[0] for q in heads[0]["profile"]], [q[1] for q in heads[0]["profile"]]
+    cw = _parse(params)["closer_w"]
+    assert min(us) == pytest.approx(2000.0 - cw, abs=1.0) and max(us) == pytest.approx(3000.0 + cw, abs=1.0)
+    assert min(vs) == pytest.approx(0.0, abs=1.0)                       # at the skirt's foot, over the window's head
+    # the wall itself still has its jambs and sill, and no head of its own
+    own = {m["name"][-2:] for m in out["geometry"] if m["ifc_type"] == "closer" and m["name"].startswith("Wall Cavity")}
+    assert "1S" in own and "1H" not in own

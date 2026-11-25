@@ -10,7 +10,7 @@ import json
 
 from cladding_constants import _parse, chain_params, frame_to_world, v_to_z
 from cladding_profiles import profile_planks
-from cladding_geometry import build_elevation
+from cladding_geometry import build_elevation, boundary_barriers
 from cladding_booleans import apply_boolean_ops, clip_elevation
 from cladding_primitives import buildup_depth, chain_layout, corner_detail, clip_bounds, clip_bounds_v, base_level
 from cladding_edges import mitre_to_linings, finish_seams, break_at_seams
@@ -215,6 +215,7 @@ def generate_preview(params):
     _run(join_eaves, params)       # a roof on the head of a wall: each is told the other's build-up, whatever chain it is in
     _run(eaves_walls, params)      # and a roof's open eaves over a wall whose cladding stands proud of its edge
     _run(drip_steps, params)       # a standing seam wall's drip over cladding below that stands out to it: stepped
+    _run(boundary_barriers, params)  # an opening's barrier side on its face's edge: built by the face beyond
     _run(verge_heads, params)      # a verge with a mono ridge at both ends: the mono ridge run on down it
     _run(join_abuts, params)       # a roof run up to a wall that stands on above it: the wall is told how the roof is finished against it
     _run(link_seams, params)       # faces whose seams follow another's are given its seam lines

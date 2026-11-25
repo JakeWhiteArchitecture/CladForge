@@ -1682,6 +1682,87 @@ def barrier_zones(p, elev):
         out.append({"index": index, "rect": (u0, u1, v0, v1), "head": (a, v1, b, top) if head_in and top - v1 > 1.0 else None,
                     "sill": (a, bot, b, v0) if sill_in and v0 - bot > 1.0 else None,
                     "solid": (a, bot, b, top), "clear": (a - BARRIER_BESIDE, lo, b + BARRIER_BESIDE, hi), "gap": gap})
+    return out + _edge_zones(p, elev, len(out), cw, gap)
+
+
+EDGE_REACH = 30.0     # mm – past an opening's edge on its face's boundary, where the face beyond is looked for
+EDGE_PLANE = 150.0    # mm – a face whose wall face stands this near another's plane is in it
+
+
+def boundary_barriers(params):
+    """Before anything is built: an opening closed with cavity barriers whose head (or sill)
+    lies on its face's boundary, the window's head on the line where the Rockpanel stops and
+    a standing seam skirt above takes over. That face leaves the head out (it is its edge),
+    and the one above has no opening there: so no barrier. The face beyond in the same plane
+    is told ("edge_barriers", in its own u and v) and builds that side of the frame in its
+    own cavity (barrier_zones), so the barriers wrap the opening all the way round."""
+    from cladding_constants import _parse, chain_params
+    from shapely.geometry import Point, Polygon
+    elevs = [e for e in params.get("elevations") or [] if e.get("ok", True) and e.get("polygons") and e.get("frame")]
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    wall = lambda f: abs(float((f.get("v") or (0.0, 0.0, 1.0))[2])) > 0.999   # noqa: E731
+    for e in elevs:
+        e.pop("edge_barriers", None)
+    parsed, shapes = {}, {}
+    for e in elevs:
+        try:
+            parsed[e.get("name")] = _parse(dict(chain_params(params, e), elevations=[]))
+            shapes[e.get("name")] = [Polygon(pg["exterior"]).buffer(0) for pg in e["polygons"]]
+        except Exception:   # noqa: BLE001
+            continue
+
+    def local(f, q):
+        d = [a - b for a, b in zip(q, f["origin"])]
+        return dot(d, f["u"]), dot(d, f.get("v") or (0.0, 0.0, 1.0))
+    for e in elevs:
+        pe, f = parsed.get(e.get("name")), e["frame"]
+        if not pe or not wall(f):
+            continue
+        band_lo, band_hi = clip_bounds_v(e)
+        for (u0, u1, v0, v1), d in opening_details(e, pe):
+            if not d.get("barriers"):
+                continue
+            for side, v, beyond in (("head", v1, v1 + EDGE_REACH), ("sill", v0, v0 - EDGE_REACH)):
+                if (side == "head" and v1 < band_hi - 0.5) or (side == "sill" and v0 > band_lo + 0.5):
+                    continue                                    # within the face: it builds that side itself
+                probe = frame_to_world(f, (u0 + u1) / 2.0, beyond, 0.0)
+                for w in elevs:
+                    fw = w["frame"]
+                    if w is e or not wall(fw) or dot(fw["n"], f["n"]) < 0.98 or w.get("name") not in shapes:
+                        continue
+                    if abs(dot([a - b for a, b in zip(fw["origin"], f["origin"])], f["n"])) > EDGE_PLANE:
+                        continue
+                    if not any(g.buffer(1.0).contains(Point(*local(fw, probe))) for g in shapes[w["name"]]):
+                        continue
+                    a, _va = local(fw, frame_to_world(f, u0, v, 0.0))
+                    b, vb = local(fw, frame_to_world(f, u1, v, 0.0))
+                    w.setdefault("edge_barriers", []).append({"u0": round(min(a, b), 1), "u1": round(max(a, b), 1), "v": round(vb, 1),
+                                                              "side": side, "of": e.get("name")})
+                    break
+
+
+def _edge_zones(p, elev, start, cw, gap):
+    """The barriers this face builds for openings of the face beyond its edge
+    (boundary_barriers): a head at its foot, a sill at its top, the width of the opening and
+    its jamb closers; the battens kept clear of it as of its own."""
+    band_lo, band_hi = clip_bounds_v(elev)
+    out = []
+    for k, eb in enumerate(elev.get("edge_barriers") or []):
+        a, b = eb["u0"] - cw, eb["u1"] + cw
+        if eb["side"] == "head":
+            v = max(float(eb["v"]), band_lo)
+            if v + cw > band_hi:
+                continue
+            head = (a, v, b, v + cw)
+            out.append({"index": start + k, "rect": (eb["u0"], eb["u1"], v - 1.0, v), "head": head, "sill": None, "solid": head,
+                        "clear": (a - BARRIER_BESIDE, band_lo - 1.0, b + BARRIER_BESIDE, v + cw + gap), "gap": gap, "edge": eb["of"]})
+        else:
+            v = min(float(eb["v"]), band_hi)
+            if v - cw < band_lo:
+                continue
+            sill = (a, v - cw, b, v)
+            out.append({"index": start + k, "rect": (eb["u0"], eb["u1"], v, v + 1.0), "head": None, "sill": sill, "solid": sill,
+                        "clear": (a - BARRIER_BESIDE, v - cw - gap, b + BARRIER_BESIDE, band_hi + 1.0), "gap": gap, "edge": eb["of"]})
     return out
 
 
