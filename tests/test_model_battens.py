@@ -128,6 +128,24 @@ def test_a_batten_of_our_own_never_leaves_a_sliver_at_the_end():
     assert extra == [joints[-1]] and joints[-1] == pytest.approx((6249.0 + 7483.0) / 2.0)
 
 
+def test_panels_either_side_of_a_central_window_mirror_each_other():
+    """The job's recessed wall: a window near the middle, the panels either side 1190 + 423
+    and 977 + 697. Mirrored about the window, as the battens allow, they read as one
+    composition: 590 + 1023 and 1072 + 602 (each side's count of panels the same)."""
+    from cladding_primitives import bays_on_posts
+    posts = [22.0, 181.0, 187.0, 595.0, 1195.0, 1795.0, 2395.0, 2995.0, 3515.0, 3522.0, 3610.0, 4110.0, 4195.0]
+    stops = [0.0, 1623.0, 2533.0, 4217.0]
+    plain, _j, _x = bays_on_posts(stops, posts, 1200.0, 10.0)
+    mirrored, _j, _x = bays_on_posts(stops, posts, 1200.0, 10.0, axis=2078.0)
+    widths = lambda ps, a, b: [round(e - s) for s, e, _f in ps if s >= a - 1 and e <= b + 1]   # noqa: E731
+    left, right = widths(mirrored, 0, 1623), widths(mirrored, 2533, 4217)
+    assert len(left) == len(widths(plain, 0, 1623)) and len(right) == len(widths(plain, 2533, 4217))
+    assert sum(abs(a - b) for a, b in zip(left[::-1], right)) <= 100, (left, right)
+    assert all(e - s <= 1200.0 + 1e-6 for s, e, _f in mirrored)
+    # with no axis, as before
+    assert widths(plain, 0, 1623) == [1190, 423]
+
+
 # ── found more tolerantly, and saying why not ──────────────────────────────
 
 def _extract(context):

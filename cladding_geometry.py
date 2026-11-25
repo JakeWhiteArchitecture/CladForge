@@ -607,6 +607,21 @@ def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6, fram
             m["corner"] = corner
 
 
+def _symmetry_axis(holes, W):
+    """Where a face's panels may be set out as mirror images, or None: its middle, where its
+    openings stand symmetrically about it; or a lone opening's middle, where that is near the
+    face's (within 300 mm or a tenth of the face). A blank wall is left as the posts give it."""
+    from cladding_primitives import MIRROR_TOL
+    if not holes:
+        return None
+    mid = [((o[0] + o[1]) / 2.0, o[1] - o[0]) for o in holes]
+    if all(any(abs((c + c2) - W) <= MIRROR_TOL and abs(w - w2) <= MIRROR_TOL for c2, w2 in mid) for c, w in mid):
+        return W / 2.0
+    if len(mid) == 1 and abs(mid[0][0] - W / 2.0) <= max(300.0, 0.1 * W):
+        return mid[0][0]
+    return None
+
+
 def _on_face(mesh, frame):
     """Is the element laid out in the face's own frame (its u along the face's u, its
     depth out of the face)? Its origin may be moved along the face; its axes are the face's."""
@@ -1427,7 +1442,7 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         # height: the panels either side stand the joint gap apart, on a batten of ours.
         info["staggers"] = _staggers(elev, region, W, bw, holes, on)
         steps = [q["u"] for q in info["staggers"] if q["on"] and all(abs(q["u"] - j) > bw for j in jambs)]
-        panels, joints, extra = bays_on_posts(sorted([0.0] + jambs + steps + [W]), on, p["panel_w"], gap)
+        panels, joints, extra = bays_on_posts(sorted([0.0] + jambs + steps + [W]), on, p["panel_w"], gap, axis=_symmetry_axis(holes, W))
         if steps:
             at = lambda x: any(abs(x - u) < 1e-6 for u in steps)   # noqa: E731
             panels = [(s0 + (gap / 2.0 if at(s0) else 0.0), e0 - (gap / 2.0 if at(e0) else 0.0), full)

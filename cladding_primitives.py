@@ -295,7 +295,67 @@ def _best_bays(a, b, posts, max_panel, gap, min_bay):
     return None
 
 
-def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY):
+MIRROR_GAIN = 50.0   # mm – a mirrored set-out is taken where it is this much more symmetrical, in all
+MIRROR_SPANS = 2000  # the most set-outs of one span compared for a mirrored pair
+MIRROR_TOL = 150.0   # mm – spans this near mirror images of each other about the axis are a pair
+
+
+def _all_bays(a, b, posts, max_panel, gap, n, floor):
+    """Every way of filling [a, b] with *n* panels, each joint on a post (or JOINT_SLIP off
+    it), none wider than *max_panel* or narrower than *floor*: lists of (start, end)."""
+    cand = sorted({q + d for q in posts for d in SLIPS if a + gap / 2.0 + 1.0 < q + d < b - gap / 2.0 - 1.0})
+    out = []
+
+    def walk(start, left, acc):
+        if len(out) >= MIRROR_SPANS:
+            return
+        if left == 1:
+            if floor - 1e-6 <= b - start <= max_panel + 1e-6:
+                out.append(acc + [(start, b)])
+            return
+        for j in cand:
+            end = j - gap / 2.0
+            if end - start > max_panel + 1e-6:
+                break
+            if end - start >= floor - 1e-6 and b - (j + gap / 2.0) >= floor * (left - 1) - 1e-6:
+                walk(j + gap / 2.0, left - 1, acc + [(start, end)])
+    walk(a, n, [])
+    return out
+
+
+def _asymmetry(left, right):
+    """How far two spans' panels are from mirror images: the left's widths read from the
+    axis outward against the right's, and any panel without a partner counts whole."""
+    wl = [e - s for s, e in left][::-1]
+    wr = [e - s for s, e in right]
+    return sum(abs(x - y) for x, y in zip(wl, wr)) + sum(wl[len(wr):]) + sum(wr[len(wl):])
+
+
+def _mirrored(spans, posts, max_panel, gap, min_bay, axis):
+    """The set-outs of span pairs mirrored about *axis* (each the other's image, within
+    MIRROR_TOL) chosen together, as near mirror images as the posts allow with no more
+    panels than each had: where that is MIRROR_GAIN more symmetrical than each chosen alone."""
+    for i, (a, b, best) in enumerate(spans):
+        if best is None:
+            continue
+        for j in range(i + 1, len(spans)):
+            c, d, other = spans[j]
+            if other is None or abs((a + d) - 2.0 * axis) > MIRROR_TOL or abs((b + c) - 2.0 * axis) > MIRROR_TOL:
+                continue
+            now = _asymmetry(best, other)
+            if now < MIRROR_GAIN:
+                break
+            ls = _all_bays(a, b, posts, max_panel, gap, len(best), min_bay)
+            rs = _all_bays(c, d, posts, max_panel, gap, len(other), min_bay)
+            pick = min(((_asymmetry(x, y), x, y) for x in ls for y in rs), key=lambda t: t[0], default=None)
+            if pick is not None and pick[0] <= now - MIRROR_GAIN:
+                spans[i] = (a, b, pick[1])
+                spans[j] = (c, d, pick[2])
+            break
+    return spans
+
+
+def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY, axis=None):
     """Panels filling each span between consecutive *stops* (the ends, opening jambs: fixed
     edges, no joint gap taken there) with every joint on a post, a batten the client's
     model fixes, chosen among all the ways the posts allow (_best_bays: the fewest joints,
@@ -304,12 +364,14 @@ def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY):
     last bay under *min_bay*, and where none is in reach the joint goes at the full panel
     width and is listed in *extra*, needing a batten of its own; where that would leave less
     than *min_bay* to the end, it goes half way, the two panels sharing the stretch rather than
-    a sliver at the corner. Returns (panels, joints, extra)."""
+    a sliver at the corner. With an *axis* (a face whose openings stand symmetrically, or one
+    opening near its middle), spans that mirror each other about it are set out as mirror
+    images where the posts allow (_mirrored). Returns (panels, joints, extra)."""
     panels, joints, extra = [], [], []
-    for a, b in zip(stops, stops[1:]):
-        if b - a <= 1.0:
-            continue
-        best = _best_bays(a, b, posts, max_panel, gap, min_bay)
+    spans = [(a, b, _best_bays(a, b, posts, max_panel, gap, min_bay)) for a, b in zip(stops, stops[1:]) if b - a > 1.0]
+    if axis is not None:
+        spans = _mirrored(spans, posts, max_panel, gap, min_bay, axis)
+    for a, b, best in spans:
         if best is not None:
             for s0, e0 in best:
                 panels.append((s0, e0, True))
