@@ -117,6 +117,17 @@ def test_a_joint_with_no_column_in_reach_gets_a_batten_of_its_own():
     assert all(e - s <= 1200.0 + 1e-6 for s, e, _f in panels) and panels[-1][1] == 4000.0
 
 
+def test_a_batten_of_our_own_never_leaves_a_sliver_at_the_end():
+    """The job's J1: its last usable column 1234 mm from the corner, too far for one panel.
+    A batten of ours at a full sheet's width left a 24 mm strip at the corner; the stretch
+    is shared between two panels instead."""
+    from cladding_primitives import bays_on_posts
+    panels, joints, extra = bays_on_posts([0.0, 7483.0], [714.0, 1314.0, 2499.0, 3179.0, 4379.0, 5059.0, 6244.0], 1200.0, 10.0)
+    assert min(e - s for s, e, _f in panels) >= 300.0, panels
+    assert all(e - s <= 1200.0 + 1e-6 for s, e, _f in panels)
+    assert extra == [joints[-1]] and joints[-1] == pytest.approx((6249.0 + 7483.0) / 2.0)
+
+
 # ── found more tolerantly, and saying why not ──────────────────────────────
 
 def _extract(context):

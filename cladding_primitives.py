@@ -267,7 +267,9 @@ def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY):
     then the most full panels, then no slivers). Where some stretch has no post in reach,
     the furthest post that keeps the panel within *max_panel*, avoiding one that leaves a
     last bay under *min_bay*, and where none is in reach the joint goes at the full panel
-    width and is listed in *extra*, needing a batten of its own. Returns (panels, joints, extra)."""
+    width and is listed in *extra*, needing a batten of its own; where that would leave less
+    than *min_bay* to the end, it goes half way, the two panels sharing the stretch rather than
+    a sliver at the corner. Returns (panels, joints, extra)."""
     panels, joints, extra = [], [], []
     for a, b in zip(stops, stops[1:]):
         if b - a <= 1.0:
@@ -287,6 +289,8 @@ def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY):
                 j = (fair or inside)[-1]
             else:
                 j = reach
+                if b - (j + gap / 2.0) < min_bay and b - cur <= 2.0 * max_panel + gap:
+                    j = (cur + b) / 2.0        # a full sheet would leave a sliver at the end: share the stretch
                 extra.append(j)
             panels.append((cur, j - gap / 2.0, True))
             joints.append(j)
