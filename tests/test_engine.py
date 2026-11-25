@@ -292,3 +292,30 @@ def test_faces_picked_on_parallel_surfaces_are_clad_on_the_outermost():
     assert d == pytest.approx(9.0, abs=1e-6)
     n, d, warnings = fit_plane(quad(0.0, 0, 4000, 0, 2400), (0.0, -1.0, 0.0))  # one plane: as before, no warning
     assert d == pytest.approx(0.0, abs=1e-6) and not warnings
+
+
+def _box(x0, y0, z0, x1, y1, z1, kind="IfcBeam", name="BOX"):
+    c = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0), (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+    q = [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+    return {"type": kind, "name": name, "tris": [[list(c[a]), list(c[b]), list(c[e])] for f in q for a, b, e in ((f[0], f[1], f[2]), (f[0], f[2], f[3]))]}
+
+
+@pytest.mark.parametrize("what, cut", [("eaves box", True), ("batten", False), ("box mid-wall", False)])
+def test_an_eaves_box_in_front_of_a_wall_s_head_stops_the_cladding_under_it(what, cut):
+    """The job's eaves boxes stand in front of the skirt walls' heads, in the cladding zone,
+    without passing through the wall: the wall's cladding ran on up behind them. Now the face
+    is cut from the box's underside up. A batten modelled in front, or a box part way down the
+    wall, leaves the face as it is."""
+    from fabric_extract import extract_elevation as ex
+    wall = [[(0, 0, 0), (6000, 0, 0), (6000, 0, 3000)], [(0, 0, 0), (6000, 0, 3000), (0, 0, 3000)]]     # facing -y
+    box = {"eaves box": _box(1000, -120, 2750, 5000, 0, 3000),
+           "batten": _box(1000, -45, 2925, 5000, 0, 3000, name="Beam Dimension Lumber 75x45"),
+           "box mid-wall": _box(1000, -120, 1200, 5000, 0, 1450)}[what]
+    face = ex({"name": "Wall", "faces": wall, "outward": [0, -1, 0], "context": [box],
+               "options": {"debug": False, "clad_depth": 150.0}})
+    assert face["ok"]
+    if cut:
+        assert face["area"] == pytest.approx(6000 * 3000 - 4000 * 250, rel=1e-3)
+        assert any("stops under it" in w for w in face["warnings"])
+    else:
+        assert face["area"] == pytest.approx(6000 * 3000, rel=1e-3)

@@ -107,11 +107,14 @@ def verge_type(elev, side=None):
     return "cladding" if walls.get(side) else "g3"
 
 
+SIDE_REACH = 400.0   # mm – a side's edges this near its outermost are all at that side
+
+
 def _outline_sides(elev):
     """{"l": (u, v), "r": (u, v)}: on each side of a face's outline, the straight edge that
-    runs directly up the slope there (at least 300 long; at a gablet, the gable's rake
-    above the top of the hip) and the middle of it, in the face's own (u, v). A side with
-    no such edge is left out."""
+    runs directly up the slope there (at least 300 long, the longest within SIDE_REACH of
+    the side's outermost; at a gablet, the gable's rake above the top of the hip) and the
+    middle of it, in the face's own (u, v). A side with no such edge is left out."""
     runs = []
     for pg in elev.get("polygons") or []:
         ring = pg.get("exterior") or []
@@ -121,7 +124,11 @@ def _outline_sides(elev):
     if not runs:
         return {}
     out = {}
-    for side, u in (("l", min(x[0] for x in runs)), ("r", max(x[0] for x in runs))):
+    for side, end in (("l", min(x[0] for x in runs)), ("r", max(x[0] for x in runs))):
+        # the longest of the edges at that end, not the outermost: a monopitch's head can run a
+        # little past its verge (the job's roof D: 400 of it 75 out, the 5.1 m verge in from it)
+        near = [x for x in runs if abs(x[0] - end) <= SIDE_REACH]
+        u = max(near, key=lambda x: x[2] - x[1])[0]
         here = [x for x in runs if abs(x[0] - u) < 1.0]
         out[side] = (u, (min(x[1] for x in here) + max(x[2] for x in here)) / 2.0)
     return out
