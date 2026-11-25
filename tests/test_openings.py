@@ -441,3 +441,17 @@ def test_the_frame_check_says_where_linings_run_to(elevation):
     params = _params(_with_window(-420.0), trim=True)
     (c,) = [c for c in check_rules(params, generate_preview(params)["info"]) if c["name"] == "Window frames"]
     assert c["status"] == "warn" and "W1 found 420 mm behind the wall face" in c["message"]
+
+
+def test_a_door_with_a_window_beside_it_splitting_the_face_is_two_openings(elevation):
+    """The job's merged wall: a full-height door with a window alongside it at the top, so
+    the gap between the pieces is L-shaped, not a rectangle, and was no opening at all (no
+    reveals, no profiles). Its full-height core is the door; what is left, a rectangle, the
+    window."""
+    W, H = float(elevation["width"]), float(elevation["height"])
+    split = dict(elevation, polygons=[{"exterior": [[0, 0], [2900, 0], [2900, 1200], [2200, 1200], [2200, H], [0, H]], "holes": []},
+                                      {"exterior": [[3800, 0], [W, 0], [W, H], [3800, H]], "holes": []}],
+                 notches=[], abutments=[a for a in elevation["abutments"] if a.get("source") == "base"])
+    found = openings(split)
+    assert (2900.0, 3800.0, 0.0, H) in found              # the door, the full height
+    assert (2200.0, 2900.0, 1200.0, H) in found           # the window beside it, from 1200 up

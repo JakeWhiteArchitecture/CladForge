@@ -181,11 +181,46 @@ def _splits(polygons, limit):
         if piece.is_empty or piece.geom_type != "Polygon":
             continue
         u0, v0, u1, v1 = piece.bounds
-        if piece.area < 0.9 * (u1 - u0) * (v1 - v0) or u1 - u0 < limit:
+        if u1 - u0 < limit or not (abs(v0 - vmin) < 1.0 and abs(v1 - vmax) < 1.0 and u0 > umin + 1.0 and u1 < umax - 1.0):
             continue
-        if abs(v0 - vmin) < 1.0 and abs(v1 - vmax) < 1.0 and u0 > umin + 1.0 and u1 < umax - 1.0:
+        if piece.area >= 0.9 * (u1 - u0) * (v1 - v0):
             out.append((round(u0, 2), round(u1, 2), round(v0, 2), round(v1, 2)))
+            continue
+        # not a rectangle: a door with a window beside it, the gap L-shaped. Its core, what is
+        # open the full height, is the door; what is left over, where it is a rectangle, the window.
+        core = _full_height_core(piece, v0, v1)
+        if core is None or core[1] - core[0] < limit:
+            continue
+        out.append((round(core[0], 2), round(core[1], 2), round(v0, 2), round(v1, 2)))
+        try:
+            from shapely.geometry import box
+            left = piece.difference(box(core[0], v0 - 1.0, core[1], v1 + 1.0))
+        except Exception:   # noqa: BLE001
+            continue
+        for bit in getattr(left, "geoms", [left]):
+            if bit.is_empty or bit.geom_type != "Polygon":
+                continue
+            a0, b0, a1, b1 = bit.bounds
+            if a1 - a0 >= limit and b1 - b0 >= limit and bit.area >= 0.9 * (a1 - a0) * (b1 - b0):
+                out.append((round(a0, 2), round(a1, 2), round(b0, 2), round(b1, 2)))
     return out
+
+
+def _full_height_core(piece, v0, v1):
+    """(u0, u1) of what of a gap is open from its bottom to its top: the span every level of
+    it shares, or None."""
+    from shapely.geometry import LineString
+    levels = sorted({round(y, 3) for x, y in piece.exterior.coords if v0 < y < v1} | {v0, v1})
+    lo, hi = -float("inf"), float("inf")
+    for a, b in zip(levels, levels[1:]):
+        y = (a + b) / 2.0
+        cut = piece.intersection(LineString([(piece.bounds[0] - 1.0, y), (piece.bounds[2] + 1.0, y)]))
+        spans = [g.bounds for g in getattr(cut, "geoms", [cut]) if not g.is_empty]
+        if not spans:
+            return None
+        widest = max(spans, key=lambda s: s[2] - s[0])
+        lo, hi = max(lo, widest[0]), min(hi, widest[2])
+    return (lo, hi) if hi > lo else None
 
 
 def bays_between(stops, max_panel, gap):
