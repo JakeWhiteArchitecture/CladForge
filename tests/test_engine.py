@@ -275,3 +275,20 @@ def test_a_penetration_is_cut_on_the_grid_where_anything_nearly_meets():
     clean = Polygon([(1000.123456, 1000), (1500, 1000), (1500, 1500), (1000.123456, 1500)])
     exact = _cut_out(face, clean)
     assert 1000.123456 in [round(x, 6) for x, _y in exact.interiors[0].coords]
+
+
+def test_faces_picked_on_parallel_surfaces_are_clad_on_the_outermost():
+    """A wall face picked on a 9 mm board and on the wall's face beside it, 9 mm behind
+    (the job's skirts): the face is the board's, not a plane 4.5 mm into it, and it says
+    so. A sliver on a third plane further out does not count."""
+    from fabric_extract import fit_plane
+    quad = lambda y, x0, x1, z0, z1: [[(x0, y, z0), (x1, y, z0), (x1, y, z1)], [(x0, y, z0), (x1, y, z1), (x0, y, z1)]]   # noqa: E731
+    # outward is -y: the wall's face at y = 0, the board on it 9 mm out at y = -9 (n.p = 9 there)
+    faces = quad(-9.0, 0, 4000, 0, 2400) + quad(0.0, 4000, 6000, 0, 2400)
+    n, d, warnings = fit_plane(faces, (0.0, -1.0, 0.0))
+    assert n == pytest.approx((0.0, -1.0, 0.0)) and d == pytest.approx(9.0, abs=1e-6)
+    assert any("parallel planes" in w for w in warnings)
+    n, d, _w = fit_plane(faces + quad(-39.0, 0, 20, 0, 20), (0.0, -1.0, 0.0))  # a 20 mm square 30 mm further out: a sliver
+    assert d == pytest.approx(9.0, abs=1e-6)
+    n, d, warnings = fit_plane(quad(0.0, 0, 4000, 0, 2400), (0.0, -1.0, 0.0))  # one plane: as before, no warning
+    assert d == pytest.approx(0.0, abs=1e-6) and not warnings

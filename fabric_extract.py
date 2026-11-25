@@ -118,9 +118,14 @@ def _dedupe(tris, quant=10.0):
 ROOF_TOL = math.cos(math.radians(5.0))   # a roof face's normal is within 5 deg of world Z
 
 
+PLANE_SHARE = 0.05     # a surface with this share of the picked area or more counts for where the face is
+PLANE_LAYER = 1.0      # mm – triangles this near one another's plane are one surface
+
+
 def fit_plane(faces, outward=None, mode="wall"):
-    """Area-weighted plane through the picked triangles. Returns (n, d, warnings) with
-    n·p = d on the plane.
+    """The plane of the picked triangles: their area-weighted normal, through the outermost
+    surface among them that carries PLANE_SHARE of the area (picks on parallel surfaces a
+    little apart are clad on the outermost). Returns (n, d, warnings) with n·p = d on it.
 
     "wall" points n outward. Within VERTICAL_TOL of vertical the face is a wall and n is
     flattened to horizontal; any other face (leaning, pitched, level) keeps its own n.
@@ -145,13 +150,24 @@ def fit_plane(faces, outward=None, mode="wall"):
         return None, 0.0, ["Picked faces have no area"]
     if abs(n[2]) <= VERTICAL_TOL:
         n = _norm((n[0], n[1], 0.0))
-    tot, dsum = 0.0, 0.0
+    tris = []
     for a, b, c in faces:
         area = math.sqrt(_dot(_cross(_sub(b, a), _sub(c, a)), _cross(_sub(b, a), _sub(c, a)))) / 2
         cen = ((a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3)
-        dsum += _dot(n, cen) * area
-        tot += area
-    return n, (dsum / tot if tot else 0.0), warnings
+        tris.append((_dot(n, cen), area))
+    tot = sum(w for _o, w in tris)
+    if not tot:
+        return n, 0.0, warnings
+    # Picks on parallel surfaces a little apart (a board on a wall, and the wall's face beside
+    # it): the cladding goes on the outermost that carries a real part of the area, not on a
+    # plane between them (the job's skirts sat 4.5 mm into their 9 mm boards)
+    out = max(o for o, w in tris if w >= PLANE_SHARE * tot)
+    near = [(o, w) for o, w in tris if abs(o - out) <= PLANE_LAYER]
+    d = sum(o * w for o, w in near) / sum(w for _o, w in near)
+    spread = d - min(o for o, w in tris if w >= PLANE_SHARE * tot)
+    if spread > PLANE_LAYER:
+        warnings.append("The picked faces lie on parallel planes up to %.0f mm apart: clad on the outermost" % spread)
+    return n, d, warnings
 
 
 def _fit_roof_plane(faces, outward=None):
