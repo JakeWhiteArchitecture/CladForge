@@ -19,6 +19,7 @@ import ifcopenshell
 import ifcopenshell.geom
 import ifcopenshell.util.unit
 
+GLASS_TRANSPARENCY = 0.1     # a surface style this see-through or more is glazing
 MAX_ELEMENTS = 40000          # a model larger than this is refused rather than hung on
 SKIP_TYPES = frozenset({"IfcOpeningElement", "IfcOpeningStandardCase", "IfcSpace", "IfcAnnotation",
                         "IfcGrid", "IfcVirtualElement", "IfcSpatialZone"})
@@ -42,6 +43,24 @@ def _storey_map(ifc):
         for product in rel.RelatedElements or []:
             out[product.id()] = record
     return out
+
+
+def _glass_last(geometry):
+    """The element's triangles with its glazing (a surface style GLASS_TRANSPARENCY or more
+    see-through) moved to the end, and how many indices of it there are: the viewer draws
+    those see-through, as other viewers do."""
+    faces = list(geometry.faces)
+    try:
+        see = [float(getattr(m, "transparency", 0.0) or 0.0) >= GLASS_TRANSPARENCY for m in geometry.materials]
+        ids = list(geometry.material_ids)
+    except Exception:  # noqa: BLE001 — no styles: all of it drawn solid
+        return faces, 0
+    if not any(see) or len(ids) * 3 != len(faces):
+        return faces, 0
+    solid, glass = [], []
+    for t, m in enumerate(ids):
+        (glass if 0 <= m < len(see) and see[m] else solid).extend(faces[3 * t:3 * t + 3])
+    return solid + glass, len(glass)
 
 
 def _context(ifc):
@@ -85,13 +104,13 @@ def import_ifc(path):
             shape = iterator.get()
             geometry = shape.geometry
             verts = [c * 1000.0 for c in geometry.verts]
-            faces = list(geometry.faces)
+            faces, n_glass = _glass_last(geometry)
             if verts and faces:
                 seen.add(shape.id)
                 result["elements"].append({
                     "type": shape.type, "name": shape.name or "", "expressID": shape.id,
                     "storey": storeys.get(shape.id),
-                    "verts": _b64(verts, "f"), "idx": _b64(faces, "I"),
+                    "verts": _b64(verts, "f"), "idx": _b64(faces, "I"), "n_glass": n_glass,
                     "n_tris": len(faces) // 3})
         except Exception as exc:  # noqa: BLE001
             result["failed"].append(str(exc)[:200])

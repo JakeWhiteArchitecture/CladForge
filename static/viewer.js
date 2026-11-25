@@ -289,10 +289,11 @@ async function readWithWebIfc(file, onStatus) {
         ifcApi.StreamAllMeshes(modelID, (mesh) => {
             // One unbuildable element must not abandon the file.
             try {
-                const verts = [], idx = [];
+                const verts = [], idx = [], glass = [];
                 let off = 0;
                 for (let i = 0; i < mesh.geometries.size(); i++) {
                     const pg = mesh.geometries.get(i);
+                    const see = pg.color && pg.color.w < GLASS_OPACITY;   // glazing: drawn see-through, as viewers do
                     const g = ifcApi.GetGeometry(modelID, pg.geometryExpressID);
                     const v = ifcApi.GetVertexArray(g.GetVertexData(), g.GetVertexDataSize());
                     const ix = ifcApi.GetIndexArray(g.GetIndexData(), g.GetIndexDataSize());
@@ -305,14 +306,17 @@ async function readWithWebIfc(file, onStatus) {
                         p.set(v[k * 6], v[k * 6 + 1], v[k * 6 + 2]).applyMatrix4(m);
                         verts.push(p.x * 1000, p.y * 1000, p.z * 1000);   // web-ifc emits metres
                     }
-                    for (let k = 0; k < ix.length; k++) idx.push(ix[k] + off);
+                    const into = see ? glass : idx;
+                    for (let k = 0; k < ix.length; k++) into.push(ix[k] + off);
                     off += n;
                 }
                 if (!verts.length) return;
+                const nGlass = glass.length;
+                for (const k of glass) idx.push(k);
                 let type = '', name = '';
                 try { type = ifcTypeName(ifcApi.GetLineType(modelID, mesh.expressID)); } catch (e) { /* unknown */ }
                 try { name = attr(ifcApi.GetLine(modelID, mesh.expressID), 'Name') || ''; } catch (e) { /* unnamed */ }
-                raw.push({ verts, idx, expressID: mesh.expressID, type, name,
+                raw.push({ verts, idx, nGlass, expressID: mesh.expressID, type, name,
                            storey: spatial.elemStorey[mesh.expressID] || null });
             } catch (err) { failed++; }
         });
@@ -342,7 +346,7 @@ async function readWithServer(file, onStatus) {
     const data = await resp.json();
     if (!data.success) throw new Error(data.error || 'server importer failed');
     const raw = data.elements.map(e => ({
-        verts: b64ToArray(e.verts, Float32Array), idx: b64ToArray(e.idx, Uint32Array),
+        verts: b64ToArray(e.verts, Float32Array), idx: b64ToArray(e.idx, Uint32Array), nGlass: e.n_glass || 0,
         expressID: e.expressID, type: e.type, name: e.name, storey: e.storey }));
     if (!raw.length) throw new Error((data.warnings || []).join(' ') || 'no geometry in this file');
     return { raw, context: data.context || {}, failed: (data.failed || []).length,
@@ -370,19 +374,30 @@ function modelScale(raw) {
 const MODEL_MATS = {
     wall: new THREE.MeshPhongMaterial({ color: 0xd8d8d8, flatShading: true, side: THREE.DoubleSide }),
     other: new THREE.MeshPhongMaterial({ color: 0xa8a8b8, flatShading: true, side: THREE.DoubleSide }),
+    // A window's glass is a thin box: drawn solid, its two faces a few mm apart fight in the
+    // depth buffer and read as triangles across the opening. See-through, as other viewers draw it.
+    glass: new THREE.MeshPhongMaterial({ color: 0xbfd4e0, flatShading: true, side: THREE.DoubleSide,
+                                         transparent: true, opacity: 0.25, depthWrite: false }),
 };
+const GLASS_OPACITY = 0.9;      // a surface style less opaque than this is glazing (IFC transparency 0.1 or more)
 function rebuildModelBatch() {
     clearGroup(modelGroup);
     for (const kind of Object.keys(MODEL_MATS)) {
-        const parts = meshMeta.filter(m => m.mesh.visible && m.kind === kind).map(m => m.mesh.geometry);
+        // each element's glazing sits at the end of its index list (nGlass of it): into the glass batch
+        const parts = [];
+        for (const m of meshMeta) {
+            if (!m.mesh.visible) continue;
+            const g = m.mesh.geometry, all = g.index.array, ng = m.nGlass || 0;
+            const src = kind === 'glass' ? all.subarray(all.length - ng) : (m.kind === kind ? all.subarray(0, all.length - ng) : null);
+            if (src && src.length) parts.push([g, src]);
+        }
         if (!parts.length) continue;
         let nv = 0, ni = 0;
-        for (const g of parts) { nv += g.attributes.position.count; ni += g.index.count; }
+        for (const [g, src] of parts) { nv += g.attributes.position.count; ni += src.length; }
         const pos = new Float32Array(nv * 3), idx = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
         let v = 0, i = 0;
-        for (const g of parts) {
+        for (const [g, src] of parts) {
             pos.set(g.attributes.position.array, v * 3);
-            const src = g.index.array;
             for (let k = 0; k < src.length; k++) idx[i + k] = src[k] + v;
             v += g.attributes.position.count; i += src.length;
         }
@@ -430,7 +445,7 @@ function buildScene(raw, context, warnings) {
         th.userData.index = allMeshes.length;
         th.updateMatrixWorld(true);
         allMeshes.push(th);
-        meshMeta.push({ mesh: th, kind, expressID: r.expressID, type: r.type, name: r.name, storey: r.storey });
+        meshMeta.push({ mesh: th, kind, nGlass: r.nGlass || 0, expressID: r.expressID, type: r.type, name: r.name, storey: r.storey });
     }
     rebuildModelBatch();
     placeGrid();
