@@ -206,3 +206,28 @@ def test_a_chain_s_split_height_puts_a_joint_at_that_level_on_every_face():
     assert rows == [pytest.approx(1803.0 - 10.0 - 5.0)]
     assert _split_rows(dict(p, panel_split_z=None), {"frame": frame}, 10.0, 2421.0, 10.0) is None
     assert _split_rows(dict(p, panel_split_z=4000.0), {"frame": frame}, 10.0, 2421.0, 10.0) is None    # above the face
+
+
+@pytest.mark.parametrize("drop, expect", [(120.0, 120.0), (45.0, 45.0), (400.0, 0.0), (0.0, 0.0)])
+def test_the_cladding_comes_down_to_battens_that_run_below_the_wall(drop, expect):
+    """The job's ground floor: walls modelled 120 (or 45) mm short of the battens on them,
+    which run down to the level the cladding is meant to start at. The face's foot comes down
+    to the battens' (within BASE_REACH: a batten running far below is something else)."""
+    plain = _elevation(posts=[], distractors=False)
+    pl = payload()
+    pl["context"] = list(pl["context"]) + [_column("Beam %d" % i, u, v0=-drop, kind="IFCBEAM") for i, u in enumerate(POSTS)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        elev = extract_elevation(pl)
+    assert elev["height"] == pytest.approx(plain["height"] + expect)
+    assert elev["area"] == pytest.approx(plain["area"] + expect * plain["width"], rel=1e-6)
+    assert {round(q["v0"], 1) for q in elev["posts"]} == {round(expect - drop, 1)}
+    assert any("brought down to them" in w for w in elev["warnings"]) == (expect > 0)
+
+
+def test_one_batten_below_the_wall_does_not_move_its_foot():
+    pl = payload()
+    pl["context"] = list(pl["context"]) + [_column("Beam %d" % i, u, v0=-120.0 if i == 3 else 0.0, kind="IFCBEAM")
+                                           for i, u in enumerate(POSTS)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        elev = extract_elevation(pl)
+    assert elev["height"] == pytest.approx(_elevation(posts=[], distractors=False)["height"])

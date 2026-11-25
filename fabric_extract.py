@@ -61,6 +61,7 @@ POST_MIN_HEIGHT = 600.0     # mm – and how tall at least: anything shorter is 
 POST_DEPTH = 150.0          # mm – and how deep at most, out from the wall: more is a column
 POST_REACH = 150.0          # mm – its back within this of the face (it stands on the sarking)
 POST_INSIDE = 0.5           # at least this much of its section in front of the face, where its back is sunk in
+BASE_REACH = 300.0          # mm – battens running this far below a wall's foot or less: its cladding comes down to them
 # Windows and doors: where a reveal lining runs back to (cladding_edges.opening_frames).
 FRAME_TYPES = frozenset({"IFCWINDOW", "IFCWINDOWSTANDARDCASE", "IFCDOOR", "IFCDOORSTANDARDCASE"})
 IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE", "IFCSPACE",
@@ -720,6 +721,10 @@ def _extract(payload):
     region, dropped = _seeded(region, payload.get("seeds"), u, n=n)
     if dropped:
         result["warnings"].append("%d patch(es) beyond the junction you clicked were left out" % dropped)
+    if not roofish:
+        region, drop = _down_to_battens(region, posts)
+        if drop:
+            result["warnings"].append("The battens on it run %.0f mm below the wall: its cladding is brought down to them" % drop)
 
     # Local origin at the region's bottom-left; everything shifts accordingly.
     umin, vmin, umax, vmax = region.bounds
@@ -871,6 +876,35 @@ def _post_of(tris, n, d, u):
         if inside < POST_INSIDE:
             return None, "is sunk %.0f mm into the face, only %.0f%% of it in front" % (-back, 100.0 * inside)
     return {"u": (min(us) + max(us)) / 2.0, "w": w, "v0": min(vs), "v1": max(vs)}, None
+
+
+def _down_to_battens(region, posts):
+    """A wall modelled short of the battens on it (the job's ground floor: the battens run on
+    down to where the cladding starts): its foot comes down to theirs, along every stretch of
+    its bottom line. Only where they say so together: two or more, and half or more of those
+    at the wall's foot, each reaching from no more than BASE_REACH below it up into the wall;
+    one batten running long, or battens running far below (a plinth's), leave it as it is.
+    (region, how far it came down)."""
+    if not posts or region.is_empty:
+        return region, 0.0
+    umin, vmin, umax, vmax = region.bounds
+    at_foot = [q for q in posts if umin <= q["u"] <= umax and q["v0"] <= vmin + 50.0 and q["v1"] > vmin + 50.0]
+    low = [q for q in at_foot if vmin - BASE_REACH <= q["v0"] < vmin - 1.0]
+    if len(low) < 2 or 2 * len(low) < len(at_foot):
+        return region, 0.0
+    v_lo = min(q["v0"] for q in low)
+    try:
+        foot = region.intersection(shapely.box(umin - 1.0, vmin - 1.0, umax + 1.0, vmin + 1.0))
+        add = [shapely.box(b[0], v_lo, b[2], vmin + 0.5) for g in iter_polygons(foot)
+               for b in [g.bounds] if b[2] - b[0] > 1.0]
+        if not add:
+            return region, 0.0
+        grown = unary_union([region] + add).simplify(0.01, preserve_topology=True)
+        if grown.is_empty or not grown.is_valid:
+            return region, 0.0
+        return grown, round(vmin - v_lo, 1)
+    except Exception:   # noqa: BLE001 — a foot that will not grow leaves the wall as modelled
+        return region, 0.0
 
 
 def _passed_report(passed):
