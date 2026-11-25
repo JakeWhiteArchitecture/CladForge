@@ -182,6 +182,16 @@ def _steel_wall(**kw):
     return params["elevations"][0], generate_preview(params)
 
 
+def _drip_box(geometry, elevation=None):
+    """The drip flashing's extent over all its plates: (back, front) out of the face,
+    (low, high) up it, and its length along the face."""
+    plates = [m for m in geometry if (m.get("cladding_drip") or m.get("drip_part")) and (elevation is None or m["elevation"] == elevation)]
+    us = [q[0] for m in plates for q in m["profile"]]
+    vs = [q[1] for m in plates for q in m["profile"]]
+    return ((min(m["depth"] for m in plates), max(m["depth"] + m["thickness"] for m in plates)),
+            (min(vs), max(vs)), max(us) - min(us))
+
+
 def test_a_steel_wall_has_greencoats_cladding_drip_at_its_foot():
     from cladding_greencoat import DRIP_DOWN
     e, out = _steel_wall()
@@ -193,9 +203,10 @@ def test_a_steel_wall_has_greencoats_cladding_drip_at_its_foot():
     deck = next(m for m in g if m["ifc_type"] == "deck")
     v0 = min(q[1] for q in deck["profile"])
     xb, xf = deck["depth"], deck["depth"] + deck["thickness"]
-    xs, ys = [q[0] for q in drips[0]["profile"]], [q[1] for q in drips[0]["profile"]]
-    assert min(ys) == pytest.approx(v0 - DRIP_DOWN, abs=0.5)               # the drip below the plywood's foot
-    assert min(xs) == pytest.approx(xb - 0.6, abs=0.1) and max(xs) == pytest.approx(xf + 0.6, abs=0.1)   # round its foot, no hem
+    (back, front), (low, _high), length = _drip_box(g)
+    assert low == pytest.approx(v0 - DRIP_DOWN, abs=0.5)                   # the drip below the plywood's foot
+    assert back == pytest.approx(xb - 0.6, abs=0.1) and front == pytest.approx(xf + 0.6, abs=0.1)   # round its foot, no hem
+    assert length == pytest.approx(8000.0)
     # the trays carried down over it and turned round its leg's end as their own fold, 1.2 of air round it,
     # one element with the tray
     from cladding_greencoat import FOLD_AIR
@@ -271,7 +282,7 @@ def test_the_drip_finds_the_foot_past_a_notch_at_the_corner():
     p = _parse(dict(params, elevations=[{"name": "W", "frame": frame}]))
     out = cladding_drips([deck], p, [{"elevation": "W"}])
     drips = [m for m in out if m.get("cladding_drip")]
-    assert len(drips) == 1 and abs(drips[0]["thickness"] - 3605.0) < 0.5
+    assert len(drips) == 1 and abs(_drip_box(out)[2] - 3605.0) < 0.5
 
 
 @pytest.mark.parametrize("below, stepped", [("boards", True), ("rockpanel", False)])
@@ -294,8 +305,77 @@ def test_a_skirt_s_drip_over_cladding_that_stands_out_to_it_is_stepped_out(below
     out = generate_preview({"elevations": [skirt, wall], "trim": True, "splash": 0})
     info = next(i for i in out["info"] if i["elevation"] == "Skirt")["cladding_drip"]
     assert info["stepped"] == (pytest.approx(info["length"]) if stepped else 0.0)
-    drip = next(m for m in out["geometry"] if m.get("cladding_drip"))
     deck = next(m for m in out["geometry"] if m["elevation"] == "Skirt" and m["ifc_type"] == "deck")
     xf = deck["depth"] + deck["thickness"]
-    reach = max(q[0] for q in drip["profile"])
+    reach = _drip_box(out["geometry"], "Skirt")[0][1]
     assert reach == pytest.approx(xf + (DRIP_STEP if stepped else 0.0) + 0.6, abs=0.2)
+
+
+def test_the_drips_of_two_walls_mitre_round_their_corner():
+    """The job's skirt corners: each wall's drip ran square to its own end, so at an external
+    corner one ran past the other. Built as plates on the face, each takes its deck's corner:
+    the two meet on the bisector, the outer corner of one's leg on the other's."""
+    from synthetic import payload, corner_payload
+    from fabric_extract import extract_elevation
+    from cladding_preview import generate_preview
+    from cladding_constants import frame_to_world
+    from cladding_primitives import ring_at
+    a, b = extract_elevation(payload()), extract_elevation(corner_payload())
+    chain = dict(chain="Chain 1", chain_reversed=False, offset=0)
+    elevs = [dict(a, chain_start=0, corner_hi=1.0, master_hi=True, **chain),
+             dict(b, chain_start=a["width"], corner_lo=1.0, master_lo=False, **chain)]
+    out = generate_preview({"elevations": elevs, "trim": True, "cladding_type": "plank", "plank_profile": "seam",
+                            "plank_orient": "vertical", "seam_metal": "steel", "splash": 150})
+    legs = {m["elevation"]: m for m in out["geometry"] if m.get("cladding_drip")}
+    assert set(legs) == {"Elevation A", "Elevation B"}
+
+    def outer(m, side):
+        s = float(m["depth"]) + float(m["thickness"])
+        ring = ring_at(m, 0, s)
+        u = max(q[0] for q in ring) if side == "r" else min(q[0] for q in ring)
+        v = min(q[1] for q in ring if abs(q[0] - u) < 1e-6)
+        return frame_to_world(m["frame"], u, v, s)
+    pa, pb = outer(legs["Elevation A"], "r"), outer(legs["Elevation B"], "l")
+    assert max(abs(x - y) for x, y in zip(pa, pb)) < 1.0, (pa, pb)
+    # and it is a mitre: the leg's back corner stands back from its front one
+    assert legs["Elevation A"]["corner"]["k_r"] == pytest.approx(1.0)
+
+
+def test_the_drip_turns_into_the_reveal_of_a_door_through_the_foot():
+    """The job's skirts over plank walls with doors up through them: the drip ran square to
+    each jamb. It turns into the reveal: a return on the lining at the drip's height, from
+    the face drip's front back to the frame, and the face's leg runs on round the arris over
+    the return's end."""
+    from cladding_preview import generate_preview
+    from cladding_constants import frame_to_world
+    from cladding_primitives import ring_at
+    from fabric_extract import extract_elevation
+    from cladding_greencoat import DRIP_DOWN, DRIP_UP
+    quad = lambda q: [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]   # noqa: E731
+    # a 6 m wall with a 1 m door from its foot to 2.1 m, in the middle
+    faces = quad([(0, 0, 0), (2500, 0, 0), (2500, 0, 3000), (0, 0, 3000)]) + quad([(3500, 0, 0), (6000, 0, 0), (6000, 0, 3000), (3500, 0, 3000)]) \
+        + quad([(2500, 0, 2100), (3500, 0, 2100), (3500, 0, 3000), (2500, 0, 3000)])
+    e = extract_elevation({"name": "Skirt", "faces": faces, "outward": [0, -1, 0], "context": [], "options": {"debug": False, "clad_depth": 150.0}})
+    out = generate_preview({"elevations": [dict(e, offset=0)], "trim": True, "reveals": True, "cladding_type": "plank",
+                            "plank_profile": "seam", "plank_orient": "vertical", "seam_metal": "steel", "splash": 0})
+    g = out["geometry"]
+    f = e["frame"]
+
+    def box(m):        # its extent in the face's (u, v, out)
+        pts = [frame_to_world(m["frame"], a, b, s) for s in (m["depth"], m["depth"] + m["thickness"]) for a, b in ring_at(m, 0, s)]
+        loc = [[sum((q[i] - f["origin"][i]) * f[k][i] for i in range(3)) for k in ("u", "v", "n")] for q in pts]
+        return [(min(x[i] for x in loc), max(x[i] for x in loc)) for i in range(3)]
+    returns = [m for m in g if m.get("drip_return")]
+    linings = [m for m in g if m["ifc_type"] == "reveal" and abs(abs(sum(a * b for a, b in zip(m["frame"]["n"], f["u"]))) - 1.0) < 1e-3]
+    assert len(returns) == 2 and len(linings) == 2
+    legs = [box(m) for m in g if m.get("cladding_drip")]
+    for r in returns:
+        (u0, u1), (v0, v1), (n0, n1) = box(r)
+        lin = min(linings, key=lambda m: abs(box(m)[0][0] - u0))
+        (lu0, lu1), _lv, (ln0, _ln1) = box(lin)
+        assert u1 - u0 < 1.0 and min(abs(u0 - lu0), abs(u0 - lu1), abs(u1 - lu0), abs(u1 - lu1)) < 0.01   # on the lining's face
+        assert n0 == pytest.approx(ln0, abs=0.1)                                                          # back to the frame
+        assert n1 == pytest.approx(max(lg[2][1] for lg in legs), abs=0.1)                                  # out to the face drip's front
+        assert v1 - v0 == pytest.approx(DRIP_DOWN + DRIP_UP, abs=0.1)
+        # the face's leg runs on over the return's end
+        assert any(lg[0][0] <= u0 + 0.01 <= lg[0][1] and lg[0][0] <= u1 - 0.01 <= lg[0][1] for lg in legs)

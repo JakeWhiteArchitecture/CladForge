@@ -612,6 +612,97 @@ def _fold_ring(xt, xf, v0, t, step=0.0):
     return [[round(x, 3), round(y, 3)] for x, y in list(sheet.exterior.coords)[:-1]], bottom - t / 2.0
 
 
+JAMB_REACH = 120.0   # mm – a drip run ending this near an opening's jamb turns into its reveal
+JAMB_LINING = 5.0    # mm – a reveal lining standing this near a jamb line is that jamb's
+
+
+def _foot_jambs(elev, mine):
+    """The jambs of the openings the wall's foot runs into (an opening from the foot up, a
+    door through a skirt), each with the reveal lining built there: [{"u", "side" (which side
+    of the jamb the wall is: "l" the wall lies to lower u), "lining" (its mesh)}]. A jamb with
+    no lining has nothing for the drip to turn onto."""
+    from cladding_edges import openings
+    out = []
+    if not elev.get("polygons"):
+        return out                                  # no outline, so no openings: a drip on its own
+    reveals = [m for m in mine if m["ifc_type"] == "reveal"]
+    U = [float(c) for c in elev["frame"]["u"]]
+    for o in openings(elev):
+        u0, u1, v0 = float(o[0]), float(o[1]), float(o[2])
+        if v0 > 1.0:
+            continue
+        for u, side in ((u0, "l"), (u1, "r")):
+            # the reveal lining at this jamb: stood on the jamb line (a few mm in), its normal along the face
+            lin = [m for m in reveals if abs(_along(elev["frame"], m["frame"]["origin"]) - u) < JAMB_LINING
+                   and abs(abs(sum(float(a) * b for a, b in zip(m["frame"]["n"], U))) - 1.0) < 1e-3
+                   and min(q[1] for q in m["profile"]) < 1.0]
+            if lin:
+                out.append({"u": u, "side": side, "lining": min(lin, key=lambda m: abs(_along(elev["frame"], m["frame"]["origin"]) - u))})
+    return out
+
+
+def _along(frame, p, axis="u"):
+    return sum((float(p[i]) - float(frame["origin"][i])) * float(frame[axis][i]) for i in range(3))
+
+
+def _reveal_return(frame, jamb, front, v0, t, title, name, step=0.0):
+    """The drip's return into a reveal: its leg on the lining, at the drip's height, from the
+    face drip's front (*front* out of the wall: the face's leg runs on round the arris over its
+    end) back along the lining to the frame. In the lining's own frame: u along the reveal into
+    the wall, v up, n out of the lining into the opening."""
+    lin = jamb["lining"]
+    rf = lin["frame"]
+    start = _along(frame, rf["origin"], "n") - front           # the lining's u runs into the wall from its origin
+    end = max(q[0] for q in lin["profile"])
+    low = v0 - (DRIP_STEP_FALL if step else 0.0) - DRIP_DOWN      # as low as the face's leg, stepped or not
+    ring = [[start, low], [end, low], [end, v0 + DRIP_UP], [start, v0 + DRIP_UP]]
+    leg = _prism(ring, float(lin["depth"]) + float(lin["thickness"]), t, rf, "eaves_strip",
+                 "%s Return %s" % (title, "L" if jamb["side"] == "l" else "R"), name)
+    leg["opacity"] = 1.0
+    return [leg]
+
+
+def _corner_at(corner, a, b, tol=0.6):
+    """The part of a deck's chain-corner treatment ({k_l, ext_l, u_l, k_r, ...}) that lands
+    on a piece running a..b along the face: the ends of it at the deck's own ends."""
+    if not corner:
+        return None
+    out = {}
+    for side, u in (("l", a), ("r", b)):
+        at = corner.get("u_" + side)
+        if at is not None and abs(at - u) < tol and (corner.get("k_" + side) or corner.get("ext_" + side)):
+            out.update({"k_" + side: corner.get("k_" + side, 0.0), "ext_" + side: corner.get("ext_" + side, 0.0), "u_" + side: at})
+    return out or None
+
+
+def _drip_plates(frame, u0, u1, xb, xf, v0, t, step, title, name, past=(0.0, 0.0)):
+    """The drip flashing (_drip_ring's section) as flat plates laid out on the face: each a
+    prism in the face's own frame, its outline along the wall and up it, its depth out of the
+    face. A corner's shear (ring_at, by depth) then mitres every part of it at a chain corner,
+    as it does the deck it is fixed to. The leg up the plywood's face and down past its foot;
+    stepped, out along the step (falling DRIP_STEP_FALL: a vshift with depth) and down again;
+    the return under the foot and up the plywood's back. The first is the element, the rest
+    join it ("of"). *past*: how far the leg (what shows) runs on past each end, round the arris
+    of a reveal it turns into (_reveal_return)."""
+    rect = lambda v_lo, v_hi, a=u0, b=u1: [[a, v_lo], [b, v_lo], [b, v_hi], [a, v_hi]]   # noqa: E731
+    legs = lambda v_lo, v_hi: rect(v_lo, v_hi, u0 - past[0], u1 + past[1])           # noqa: E731
+    plates = []
+    if step:
+        plates.append(_prism(legs(v0, v0 + DRIP_UP), xf, t, frame, "eaves_strip", title, name))
+        fall = _prism(legs(v0 - t / 2.0, v0 + t / 2.0), xf + t, step, frame, "eaves_strip", title + " Step", name)
+        fall["vshift"] = [[[0.0, 0.0, DRIP_STEP_FALL * (xf + t) / step, -DRIP_STEP_FALL / step] for _q in fall["profile"]]]
+        plates.append(fall)
+        low = v0 - DRIP_STEP_FALL
+        plates.append(_prism(legs(low - DRIP_DOWN, low + t / 2.0), xf + step, t, frame, "eaves_strip", title + " Leg", name))
+    else:
+        plates.append(_prism(legs(v0 - DRIP_DOWN, v0 + DRIP_UP), xf, t, frame, "eaves_strip", title, name))
+    plates.append(_prism(rect(v0 - t, v0), xb - t, xf - (xb - t), frame, "eaves_strip", title + " Return", name))
+    plates.append(_prism(rect(v0, v0 + DRIP_TURN), xb - t, t, frame, "eaves_strip", title + " Upstand", name))
+    for m in plates:
+        m["opacity"] = 1.0
+    return plates
+
+
 DRIP_NOTCH = 60.0    # mm – a long level edge this near the outline's lowest point is still its foot
 DRIP_STEP = 25.0     # mm – a stepped drip: its leg brought this far out past the plywood's face, over cladding below
 DRIP_STEP_FALL = 5.0 # mm – the step's fall outward
@@ -704,23 +795,46 @@ def cladding_drips(meshes, p, infos):
             v0 = min((v for v in level if v - low <= DRIP_NOTCH), default=low)
             for a, b in zip(ring, ring[1:] + ring[:1]):
                 if abs(a[1] - v0) < 0.5 and abs(b[1] - v0) < 0.5 and abs(b[0] - a[0]) > 50.0:
-                    runs.append((min(a[0], b[0]), max(a[0], b[0]), v0, float(d["depth"]), float(d["depth"]) + float(d["thickness"])))
+                    runs.append((min(a[0], b[0]), max(a[0], b[0]), v0, float(d["depth"]), float(d["depth"]) + float(d["thickness"]), d.get("corner")))
         if not runs:
             continue
         U, V, N = [float(c) for c in frame["u"]], [float(c) for c in frame.get("v") or (0, 0, 1)], [float(c) for c in frame["n"]]
         steps = elev.get("drip_steps") or []
         split = []
-        for (u0, u1, v0, xb, xf) in runs:
+        for (u0, u1, v0, xb, xf, corner) in runs:
             cuts = sorted({u0, u1} | {x for a, b in steps for x in (a, b) if u0 < x < u1})
             for a, b in zip(cuts, cuts[1:]):
                 stepped = any(s0 - 1.0 <= (a + b) / 2.0 <= s1 + 1.0 for s0, s1 in steps)
-                split.append((a, b, v0, xb, xf, DRIP_STEP if stepped else 0.0))
-        for k, (u0, u1, v0, xb, xf, step) in enumerate(split):
+                # a piece that ends on the deck's end at a chain corner takes the deck's corner
+                # there (its mitre), so the drips of the two faces meet on the bisector
+                ends = _corner_at(corner, a, b)
+                split.append((a, b, v0, xb, xf, DRIP_STEP if stepped else 0.0, ends))
+        jambs = _foot_jambs(elev, [m for m in meshes if m.get("elevation") == name])     # linings have frames of their own
+        for k, (u0, u1, v0, xb, xf, step, ends) in enumerate(split):
             # the section in (out of the face, up), run along the wall from u1 back to u0 (out × up = -along)
             sec = {"origin": frame_to_world(frame, u1, 0.0, 0.0), "u": N, "v": V, "n": [-c for c in U]}
-            drip = _prism(_drip_ring(xb, xf, v0, t, step), 0.0, u1 - u0, sec, "eaves_strip", "%s Cladding Drip %d" % (name, k + 1), name)
-            drip.update(opacity=1.0, cladding_drip=True, drip_step=step)
-            extra.append(drip)
+            title = "%s Cladding Drip %d" % (name, k + 1)
+            # an end at the jamb of an opening the foot runs into: the drip turns into its reveal,
+            # the leg on round the arris and a return along the lining back to the frame
+            past = [0.0, 0.0]
+            for side, u_end in (("l", u0), ("r", u1)):
+                for jb in jambs:
+                    if abs(jb["u"] - u_end) > JAMB_REACH or jb["side"] == side:
+                        continue
+                    lin = jb["lining"]
+                    face_of = abs(_along(frame, lin["frame"]["origin"]) - jb["u"]) + float(lin["depth"]) + float(lin["thickness"])
+                    past[0 if side == "l" else 1] = abs(jb["u"] - u_end) + face_of + t
+                    for plate in _reveal_return(frame, jb, xf + step + t, v0, t, title, name, step):
+                        plate.update(of=title, drip_part=True, drip_return=True)
+                        extra.append(plate)
+            for j, plate in enumerate(_drip_plates(frame, u0, u1, xb, xf, v0, t, step, title, name, tuple(past))):
+                if ends:
+                    plate["corner"] = dict(ends)
+                if j == 0:
+                    plate.update(cladding_drip=True, drip_step=step)
+                else:
+                    plate.update(of=title, drip_part=True)
+                extra.append(plate)
             mesh = _prism([[back_of_cavity, v0 - t - MESH_T], [xb - t, v0 - t - MESH_T], [xb - t, v0 - t], [back_of_cavity, v0 - t]],
                           0.0, u1 - u0, sec, "dpm", "%s Insect Mesh %d" % (name, k + 1), name)
             mesh.update(color="#3a3f44", insect_mesh=True)
