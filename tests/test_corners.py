@@ -12,7 +12,7 @@ from synthetic import payload, corner_payload, U, N, ORIGIN  # noqa: E402
 from fabric_extract import extract_elevation  # noqa: E402
 from cladding_preview import generate_preview, check_rules  # noqa: E402
 from cladding_constants import _parse, frame_to_world  # noqa: E402
-from cladding_primitives import buildup_depth  # noqa: E402
+from cladding_primitives import buildup_depth, ring_at  # noqa: E402
 import cladding_corners as profiles  # noqa: E402
 from cladding_edges import settings as edge_settings  # noqa: E402
 
@@ -445,3 +445,20 @@ def test_the_job_wide_corner_setting_is_kept(faces, detail):
     trims = [m for m in out["geometry"] if m["ifc_type"] == "corner_trim"]
     assert bool(trims) == (detail == "profile")
     assert out["info"][0]["corner"]["details"][1] == detail
+
+
+@pytest.mark.parametrize("kind", ["panel", "plank"])
+def test_a_chain_corner_never_shears_a_window_s_profiles(faces, kind):
+    """The job's doorway: a face turning a corner at its start (a 1:1 mitre there) and an
+    opening with profiled jambs and head. A profile is drawn in its own frame, its section
+    across the jamb; one edge of that section sits at 0, which is where the face's corner
+    is, so the corner's shear was put on it and each jamb's profile leaned 1 mm sideways for
+    every mm up: the two crossed the opening. Only what is laid out on the face is sheared."""
+    corner = dict(chain="Chain 1", chain_reversed=False, chain_start=0, corner_lo=1.0, master_lo=False, detail_lo="mitre")
+    _params, out = _opening(faces, {"jamb": "profile", "head": "profile"}, kind=kind, elev=corner)
+    trims = [m for m in out["geometry"] if m["ifc_type"] in ("corner_profile", "corner_trim")]
+    assert len(trims) == 3
+    for m in trims:
+        assert ring_at(m, 0, 0.0) == ring_at(m, 0, float(m["thickness"])), m["name"]
+    assert any((m.get("corner") or {}).get("k_l") for m in out["geometry"] if m["ifc_type"] in ("panel", "plank")), \
+        "the face's own boards still take the corner"

@@ -105,8 +105,8 @@ def build_elevation(p, elev, layout=None):
     left, right, (d_left, d_right) = corner_ends(elev, p)
     # behind a standing seam's corner seam the deck and battens mitre, as behind a mitre
     behind = lambda d: "mitre" if p["seam"] and d == "lap" else d   # noqa: E731
-    _apply_corner(meshes, {lo: left}, behind(d_left), skip=("reveal", "closer"))
-    _apply_corner(meshes, {hi: right}, behind(d_right), skip=("reveal", "closer"))
+    _apply_corner(meshes, {lo: left}, behind(d_left), skip=("reveal", "closer"), frame=frame)
+    _apply_corner(meshes, {hi: right}, behind(d_right), skip=("reveal", "closer"), frame=frame)
     k_ends = (elev.get("corner_lo"), elev.get("corner_hi"))          # run order, like the details
     k_l, k_r = k_ends[::-1] if elev.get("chain_reversed") else k_ends
     ends = ((lo, left, d_left, "l", float(k_l or 0.0)), (hi, right, d_right, "r", float(k_r or 0.0)))
@@ -576,13 +576,15 @@ def _gaskets(p, elev, meshes, board_back):
     meshes.extend(out)
 
 
-def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
+def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6, frame=None):
     """Mark the elements whose end lands on one of *treatments*, {u: (k, ext)}.
     Consumers move the vertices there to u -/+ (ext + k x depth): k shears the end onto
     a bisector plane, ext runs it past square. A mitre cuts the whole buildup; a
     master-lap is a board detail, so the layers behind it stay square at the corner.
     An element is only ever treated at its own outermost edges, so a panel is never
-    marked on an opening it merely spans."""
+    marked on an opening it merely spans; and only one laid out on the face (*frame*):
+    a window's profile is drawn in its own frame, across the jamb, and an edge of that
+    section at 0 is not the face's end."""
     live = {u: t for u, t in treatments.items() if any(t)}
     if not live:
         return
@@ -590,6 +592,8 @@ def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
         if (types is not None and m["ifc_type"] not in types) or m["ifc_type"] in skip:
             continue
         if detail == "lap" and types is None and m["ifc_type"] not in ("panel", "plank"):
+            continue
+        if frame is not None and not _on_face(m, frame):
             continue
         us = [q[0] for q in m["profile"]]
         lo, hi = min(us), max(us)
@@ -601,6 +605,15 @@ def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
                 corner["k_r"], corner["ext_r"], corner["u_r"] = k, ext, u_pos
         if corner:
             m["corner"] = corner
+
+
+def _on_face(mesh, frame):
+    """Is the element laid out in the face's own frame (its u along the face's u, its
+    depth out of the face)? Its origin may be moved along the face; its axes are the face's."""
+    f = mesh.get("frame")
+    if f is None or f is frame:
+        return True
+    return all(abs(float(a) - float(b)) < 1e-6 for key in ("u", "n") for a, b in zip(f.get(key) or (), frame.get(key) or ()))
 
 
 def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None, **extra):
