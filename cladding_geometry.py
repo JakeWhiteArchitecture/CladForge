@@ -14,7 +14,7 @@ from cladding_constants import frame_to_world, frame_v, z_to_v
 from cladding_edges import (classify_edges, mitre_pullback, offset_region, opening_details, reveal_treatment,
                             opening_key, opening_frames, settings as edge_settings)
 import cladding_corners as profiles
-from cladding_primitives import (centred_positions, stacked_positions, batten_positions, dedupe,
+from cladding_primitives import (ROW_MIN, centred_positions, stacked_positions, batten_positions, dedupe,
                                  dedupe_priority, subdivide, panel_bays, bays_between, split_run,
                                  base_level, corner_ends, openings, buildup_depth, clip_bounds,
                                  clip_bounds_v, panel_rows, row_height, bays_on_posts, end_master)
@@ -105,8 +105,8 @@ def build_elevation(p, elev, layout=None):
     left, right, (d_left, d_right) = corner_ends(elev, p)
     # behind a standing seam's corner seam the deck and battens mitre, as behind a mitre
     behind = lambda d: "mitre" if p["seam"] and d == "lap" else d   # noqa: E731
-    _apply_corner(meshes, {lo: left}, behind(d_left), skip=("reveal", "closer"))
-    _apply_corner(meshes, {hi: right}, behind(d_right), skip=("reveal", "closer"))
+    _apply_corner(meshes, {lo: left}, behind(d_left), skip=("reveal", "closer"), frame=frame)
+    _apply_corner(meshes, {hi: right}, behind(d_right), skip=("reveal", "closer"), frame=frame)
     k_ends = (elev.get("corner_lo"), elev.get("corner_hi"))          # run order, like the details
     k_l, k_r = k_ends[::-1] if elev.get("chain_reversed") else k_ends
     ends = ((lo, left, d_left, "l", float(k_l or 0.0)), (hi, right, d_right, "r", float(k_r or 0.0)))
@@ -576,13 +576,15 @@ def _gaskets(p, elev, meshes, board_back):
     meshes.extend(out)
 
 
-def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
+def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6, frame=None):
     """Mark the elements whose end lands on one of *treatments*, {u: (k, ext)}.
     Consumers move the vertices there to u -/+ (ext + k x depth): k shears the end onto
     a bisector plane, ext runs it past square. A mitre cuts the whole buildup; a
     master-lap is a board detail, so the layers behind it stay square at the corner.
     An element is only ever treated at its own outermost edges, so a panel is never
-    marked on an opening it merely spans."""
+    marked on an opening it merely spans; and only one laid out on the face (*frame*):
+    a window's profile is drawn in its own frame, across the jamb, and an edge of that
+    section at 0 is not the face's end."""
     live = {u: t for u, t in treatments.items() if any(t)}
     if not live:
         return
@@ -590,6 +592,8 @@ def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
         if (types is not None and m["ifc_type"] not in types) or m["ifc_type"] in skip:
             continue
         if detail == "lap" and types is None and m["ifc_type"] not in ("panel", "plank"):
+            continue
+        if frame is not None and not _on_face(m, frame):
             continue
         us = [q[0] for q in m["profile"]]
         lo, hi = min(us), max(us)
@@ -603,6 +607,30 @@ def _apply_corner(meshes, treatments, detail, types=None, skip=(), tol=0.6):
             m["corner"] = corner
 
 
+def _symmetry_axis(holes, W):
+    """Where a face's panels may be set out as mirror images, or None: its middle, where its
+    openings stand symmetrically about it; or a lone opening's middle, where that is near the
+    face's (within 300 mm or a tenth of the face). A blank wall is left as the posts give it."""
+    from cladding_primitives import MIRROR_TOL
+    if not holes:
+        return None
+    mid = [((o[0] + o[1]) / 2.0, o[1] - o[0]) for o in holes]
+    if all(any(abs((c + c2) - W) <= MIRROR_TOL and abs(w - w2) <= MIRROR_TOL for c2, w2 in mid) for c, w in mid):
+        return W / 2.0
+    if len(mid) == 1 and abs(mid[0][0] - W / 2.0) <= max(300.0, 0.1 * W):
+        return mid[0][0]
+    return None
+
+
+def _on_face(mesh, frame):
+    """Is the element laid out in the face's own frame (its u along the face's u, its
+    depth out of the face)? Its origin may be moved along the face; its axes are the face's."""
+    f = mesh.get("frame")
+    if f is None or f is frame:
+        return True
+    return all(abs(float(a) - float(b)) < 1e-6 for key in ("u", "n") for a, b in zip(f.get(key) or (), frame.get(key) or ()))
+
+
 def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None, **extra):
     """*kind* names what the dimension measures, so the UI can offer to edit it, and
     *extra* carries what it needs to write the value back (a panel row's index)."""
@@ -613,6 +641,24 @@ def _dim(elev, p1, p2, label, offset, norm, kind=None, value=None, **extra):
         d["kind"], d["value"] = kind, float(value)
     d.update(extra)
     return d
+
+
+def _split_rows(p, elev, start, H, gap):
+    """The rows that put a horizontal joint at the chain's split height (p["panel_split_z"],
+    in the model's own coordinates): the first from *start* sized to end half a joint gap
+    under it, sheet-high rows under that where it is higher than a sheet. None where the
+    chain has no split, or it falls outside this face's cladding."""
+    z = p.get("panel_split_z")
+    if z is None:
+        return None
+    off = float(((p.get("context") or {}).get("offset") or [0.0, 0.0, 0.0])[2])
+    at = z_to_v(elev["frame"], z - off)
+    first = at - start - gap / 2.0
+    if first < ROW_MIN or at > H - ROW_MIN:
+        return None
+    ph = float(p["panel_h"])
+    n = max(0, int(math.ceil((first - ph) / (ph + gap) - 1e-9)))
+    return [first - n * (ph + gap)] + [ph] * n if n else [first]
 
 
 def _datum(elev):
@@ -1396,7 +1442,7 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
         # height: the panels either side stand the joint gap apart, on a batten of ours.
         info["staggers"] = _staggers(elev, region, W, bw, holes, on)
         steps = [q["u"] for q in info["staggers"] if q["on"] and all(abs(q["u"] - j) > bw for j in jambs)]
-        panels, joints, extra = bays_on_posts(sorted([0.0] + jambs + steps + [W]), on, p["panel_w"], gap)
+        panels, joints, extra = bays_on_posts(sorted([0.0] + jambs + steps + [W]), on, p["panel_w"], gap, axis=_symmetry_axis(holes, W))
         if steps:
             at = lambda x: any(abs(x - u) < 1e-6 for u in steps)   # noqa: E731
             panels = [(s0 + (gap / 2.0 if at(s0) else 0.0), e0 - (gap / 2.0 if at(e0) else 0.0), full)
@@ -1457,7 +1503,8 @@ def _panels(p, elev, meshes, dims, info, depth, W, H, v0, offset, region=None):
     # The row list starts at the chain's datum, so rows line up round its corners; a face
     # that starts higher cuts the row at its base, one that starts lower carries on down.
     datum = _datum(elev)
-    rows, short = panel_rows(elev.get("panel_rows"), p["panel_h"], gap, v0 if datum is None else datum, H, v0)
+    heights = _split_rows(p, elev, v0 if datum is None else datum, H, gap) or elev.get("panel_rows")
+    rows, short = panel_rows(heights, p["panel_h"], gap, v0 if datum is None else datum, H, v0)
     joints, dissolved, dropped = _hjoints(elev, rows, panels, gap, region)
     # A noggin between vertical battens sits on the drainage plane and dams it, so the
     # horizontal seams are left unsupported unless a counter-batten layer holds the
@@ -1635,6 +1682,87 @@ def barrier_zones(p, elev):
         out.append({"index": index, "rect": (u0, u1, v0, v1), "head": (a, v1, b, top) if head_in and top - v1 > 1.0 else None,
                     "sill": (a, bot, b, v0) if sill_in and v0 - bot > 1.0 else None,
                     "solid": (a, bot, b, top), "clear": (a - BARRIER_BESIDE, lo, b + BARRIER_BESIDE, hi), "gap": gap})
+    return out + _edge_zones(p, elev, len(out), cw, gap)
+
+
+EDGE_REACH = 30.0     # mm – past an opening's edge on its face's boundary, where the face beyond is looked for
+EDGE_PLANE = 150.0    # mm – a face whose wall face stands this near another's plane is in it
+
+
+def boundary_barriers(params):
+    """Before anything is built: an opening closed with cavity barriers whose head (or sill)
+    lies on its face's boundary, the window's head on the line where the Rockpanel stops and
+    a standing seam skirt above takes over. That face leaves the head out (it is its edge),
+    and the one above has no opening there: so no barrier. The face beyond in the same plane
+    is told ("edge_barriers", in its own u and v) and builds that side of the frame in its
+    own cavity (barrier_zones), so the barriers wrap the opening all the way round."""
+    from cladding_constants import _parse, chain_params
+    from shapely.geometry import Point, Polygon
+    elevs = [e for e in params.get("elevations") or [] if e.get("ok", True) and e.get("polygons") and e.get("frame")]
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))                     # noqa: E731
+    wall = lambda f: abs(float((f.get("v") or (0.0, 0.0, 1.0))[2])) > 0.999   # noqa: E731
+    for e in elevs:
+        e.pop("edge_barriers", None)
+    parsed, shapes = {}, {}
+    for e in elevs:
+        try:
+            parsed[e.get("name")] = _parse(dict(chain_params(params, e), elevations=[]))
+            shapes[e.get("name")] = [Polygon(pg["exterior"]).buffer(0) for pg in e["polygons"]]
+        except Exception:   # noqa: BLE001
+            continue
+
+    def local(f, q):
+        d = [a - b for a, b in zip(q, f["origin"])]
+        return dot(d, f["u"]), dot(d, f.get("v") or (0.0, 0.0, 1.0))
+    for e in elevs:
+        pe, f = parsed.get(e.get("name")), e["frame"]
+        if not pe or not wall(f):
+            continue
+        band_lo, band_hi = clip_bounds_v(e)
+        for (u0, u1, v0, v1), d in opening_details(e, pe):
+            if not d.get("barriers"):
+                continue
+            for side, v, beyond in (("head", v1, v1 + EDGE_REACH), ("sill", v0, v0 - EDGE_REACH)):
+                if (side == "head" and v1 < band_hi - 0.5) or (side == "sill" and v0 > band_lo + 0.5):
+                    continue                                    # within the face: it builds that side itself
+                probe = frame_to_world(f, (u0 + u1) / 2.0, beyond, 0.0)
+                for w in elevs:
+                    fw = w["frame"]
+                    if w is e or not wall(fw) or dot(fw["n"], f["n"]) < 0.98 or w.get("name") not in shapes:
+                        continue
+                    if abs(dot([a - b for a, b in zip(fw["origin"], f["origin"])], f["n"])) > EDGE_PLANE:
+                        continue
+                    if not any(g.buffer(1.0).contains(Point(*local(fw, probe))) for g in shapes[w["name"]]):
+                        continue
+                    a, _va = local(fw, frame_to_world(f, u0, v, 0.0))
+                    b, vb = local(fw, frame_to_world(f, u1, v, 0.0))
+                    w.setdefault("edge_barriers", []).append({"u0": round(min(a, b), 1), "u1": round(max(a, b), 1), "v": round(vb, 1),
+                                                              "side": side, "of": e.get("name")})
+                    break
+
+
+def _edge_zones(p, elev, start, cw, gap):
+    """The barriers this face builds for openings of the face beyond its edge
+    (boundary_barriers): a head at its foot, a sill at its top, the width of the opening and
+    its jamb closers; the battens kept clear of it as of its own."""
+    band_lo, band_hi = clip_bounds_v(elev)
+    out = []
+    for k, eb in enumerate(elev.get("edge_barriers") or []):
+        a, b = eb["u0"] - cw, eb["u1"] + cw
+        if eb["side"] == "head":
+            v = max(float(eb["v"]), band_lo)
+            if v + cw > band_hi:
+                continue
+            head = (a, v, b, v + cw)
+            out.append({"index": start + k, "rect": (eb["u0"], eb["u1"], v - 1.0, v), "head": head, "sill": None, "solid": head,
+                        "clear": (a - BARRIER_BESIDE, band_lo - 1.0, b + BARRIER_BESIDE, v + cw + gap), "gap": gap, "edge": eb["of"]})
+        else:
+            v = min(float(eb["v"]), band_hi)
+            if v - cw < band_lo:
+                continue
+            sill = (a, v - cw, b, v)
+            out.append({"index": start + k, "rect": (eb["u0"], eb["u1"], v, v + 1.0), "head": None, "sill": sill, "solid": sill,
+                        "clear": (a - BARRIER_BESIDE, v - cw - gap, b + BARRIER_BESIDE, band_hi + 1.0), "gap": gap, "edge": eb["of"]})
     return out
 
 

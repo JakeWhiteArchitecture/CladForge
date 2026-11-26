@@ -61,6 +61,7 @@ POST_MIN_HEIGHT = 600.0     # mm – and how tall at least: anything shorter is 
 POST_DEPTH = 150.0          # mm – and how deep at most, out from the wall: more is a column
 POST_REACH = 150.0          # mm – its back within this of the face (it stands on the sarking)
 POST_INSIDE = 0.5           # at least this much of its section in front of the face, where its back is sunk in
+BASE_REACH = 300.0          # mm – battens running this far below a wall's foot or less: its cladding comes down to them
 # Windows and doors: where a reveal lining runs back to (cladding_edges.opening_frames).
 FRAME_TYPES = frozenset({"IFCWINDOW", "IFCWINDOWSTANDARDCASE", "IFCDOOR", "IFCDOORSTANDARDCASE"})
 IGNORE_TYPES = frozenset({"IFCWALL", "IFCWALLSTANDARDCASE", "IFCWALLELEMENTEDCASE", "IFCSPACE",
@@ -118,9 +119,14 @@ def _dedupe(tris, quant=10.0):
 ROOF_TOL = math.cos(math.radians(5.0))   # a roof face's normal is within 5 deg of world Z
 
 
+PLANE_SHARE = 0.05     # a surface with this share of the picked area or more counts for where the face is
+PLANE_LAYER = 1.0      # mm – triangles this near one another's plane are one surface
+
+
 def fit_plane(faces, outward=None, mode="wall"):
-    """Area-weighted plane through the picked triangles. Returns (n, d, warnings) with
-    n·p = d on the plane.
+    """The plane of the picked triangles: their area-weighted normal, through the outermost
+    surface among them that carries PLANE_SHARE of the area (picks on parallel surfaces a
+    little apart are clad on the outermost). Returns (n, d, warnings) with n·p = d on it.
 
     "wall" points n outward. Within VERTICAL_TOL of vertical the face is a wall and n is
     flattened to horizontal; any other face (leaning, pitched, level) keeps its own n.
@@ -145,13 +151,24 @@ def fit_plane(faces, outward=None, mode="wall"):
         return None, 0.0, ["Picked faces have no area"]
     if abs(n[2]) <= VERTICAL_TOL:
         n = _norm((n[0], n[1], 0.0))
-    tot, dsum = 0.0, 0.0
+    tris = []
     for a, b, c in faces:
         area = math.sqrt(_dot(_cross(_sub(b, a), _sub(c, a)), _cross(_sub(b, a), _sub(c, a)))) / 2
         cen = ((a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3)
-        dsum += _dot(n, cen) * area
-        tot += area
-    return n, (dsum / tot if tot else 0.0), warnings
+        tris.append((_dot(n, cen), area))
+    tot = sum(w for _o, w in tris)
+    if not tot:
+        return n, 0.0, warnings
+    # Picks on parallel surfaces a little apart (a board on a wall, and the wall's face beside
+    # it): the cladding goes on the outermost that carries a real part of the area, not on a
+    # plane between them (the job's skirts sat 4.5 mm into their 9 mm boards)
+    out = max(o for o, w in tris if w >= PLANE_SHARE * tot)
+    near = [(o, w) for o, w in tris if abs(o - out) <= PLANE_LAYER]
+    d = sum(o * w for o, w in near) / sum(w for _o, w in near)
+    spread = d - min(o for o, w in tris if w >= PLANE_SHARE * tot)
+    if spread > PLANE_LAYER:
+        warnings.append("The picked faces lie on parallel planes up to %.0f mm apart: clad on the outermost" % spread)
+    return n, d, warnings
 
 
 def _fit_roof_plane(faces, outward=None):
@@ -373,6 +390,35 @@ def _meets_foot(zone, top, vmin, umin, umax, depth):
     return bool(line) and max(v for _u, v in line) >= vmin - EDGE_MARGIN - depth
 
 
+BOX_TYPES = frozenset({"IFCBEAM", "IFCBEAMSTANDARDCASE", "IFCMEMBER", "IFCMEMBERSTANDARDCASE", "IFCBUILDINGELEMENTPROXY",
+                       "IFCCOVERING"})
+BOX_MIN_W = 300.0    # mm – a box in front of a wall's head is this long or more along it,
+BOX_MIN_H = 150.0    # mm – this deep or more (a batten or noggin is not: the cladding goes over those),
+BOX_LONG = 2.0       # and this many times longer than deep: lying along the wall, not up it
+BOX_TOP = 50.0       # mm – and its top this near the face's top or above it
+
+
+def _box_in_front(tris, n, d, u, depth, etype, straddles, roofish, vmin, vmax):
+    """A box at the head of a wall standing in front of it, in the cladding zone without
+    passing through the face (an eaves box): what of the face it takes, from its underside
+    up past the face's top, or None. On a roof slope, or for anything else, None."""
+    if roofish or straddles or depth <= 0 or etype not in BOX_TYPES:
+        return None
+    zone = _zone_section(tris, n, d, u, depth)
+    if zone is None or zone.is_empty:
+        return None
+    x0, y0, x1, y1 = zone.bounds
+    w, h = x1 - x0, y1 - y0
+    if w < BOX_MIN_W or h < BOX_MIN_H or w < BOX_LONG * h or y1 < vmax - BOX_TOP or y0 <= vmin + EDGE_MARGIN:
+        return None
+    # its underside, and everything above it to past the face's top (a raking box's slope kept)
+    try:
+        pts = list(zone.convex_hull.exterior.coords) + [(x0, vmax + 1000.0), (x1, vmax + 1000.0)]
+        return MultiPoint(pts).convex_hull
+    except Exception:   # noqa: BLE001
+        return None
+
+
 def _zone_section(tris, n, d, u, depth):
     """What stands in the cladding zone in front of the face.
 
@@ -574,6 +620,7 @@ def _extract(payload):
         _t0 = time.perf_counter()
         try:   # one awkward element must not sink the whole extraction
             tris = [[tuple(float(c) for c in v) for v in tri] for tri in elem["tris"]]
+            post = None
             if etype in POST_TYPES or etype in POST_LIKE_TYPES:
                 post, why = _post_of(tris, n, d, u)
                 named = any(k in (elem.get("name") or "").lower() for k in POST_NAMES)
@@ -593,7 +640,7 @@ def _extract(payload):
             if ignored:
                 # Left alone on the face as picked; but one that passes right through a healed
                 # strip (a rafter's tail through a wall healed up to the roof) cuts that strip.
-                if strips and etype in HEAL_CUT_TYPES:
+                if strips and etype in HEAL_CUT_TYPES and not post:
                     shadow = _zone_shadow(tris, n, d, u, clad_depth, strip_area)
                     if shadow is not None:
                         cuts.append((None, elem, shadow))
@@ -604,7 +651,18 @@ def _extract(payload):
                 if fr:
                     frames.append(dict(fr, name=elem.get("name", ""), type=elem.get("type") or etype))
             straddles, touches, poly, pts = _section(tris, n, d, u)
-            shadow = _zone_shadow(tris, n, d, u, clad_depth, strip_area) if strips else None
+            # A batten stands in the cladding zone, but it is what the cladding is fixed to:
+            # it never cuts the face, through a healed strip or as a penetration.
+            shadow = _zone_shadow(tris, n, d, u, clad_depth, strip_area) if strips and not post else None
+            box = _box_in_front(tris, n, d, u, clad_depth, etype, straddles, roofish, vmin0, vmax0)
+            if box is not None:
+                # a box at the head of the wall (an eaves box) standing in front of it, where the
+                # cladding goes: the cladding stops on its underside
+                cuts.append((box, elem, None))
+                result["warnings"].append("%s stands in front of the wall at its head: the cladding stops under it"
+                                          % (elem.get("name") or etype))
+                clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
+                continue
             # An abutment counts if it reaches the wall or merely stands in the cladding
             # zone in front of it; a penetration still has to cross the face to be a hole.
             zone = _zone_section(tris, n, d, u, clad_depth) if etype in ABUTMENT_TYPES and clad_depth > 0 else None
@@ -628,8 +686,8 @@ def _extract(payload):
                 # high): not a hole; the roof runs on over it as over anything below its eaves
                 result["warnings"].append("%s sits under the roof but rises %.0f mm up through it: not cut out of the roof "
                                           "(an eaves box modelled a little high?)" % (elem.get("name") or etype, _rise(tris, n, d)))
-            elif (straddles and options.get("penetrations", True)) or shadow is not None:
-                cuts.append((poly if straddles and options.get("penetrations", True) else None, elem, shadow))
+            elif (straddles and not post and options.get("penetrations", True)) or shadow is not None:
+                cuts.append((poly if straddles and not post and options.get("penetrations", True) else None, elem, shadow))
         except Exception:   # noqa: BLE001
             skipped += 1
         clock[elem.get("name") or etype] = round((time.perf_counter() - _t0) * 1000)
@@ -663,6 +721,10 @@ def _extract(payload):
     region, dropped = _seeded(region, payload.get("seeds"), u, n=n)
     if dropped:
         result["warnings"].append("%d patch(es) beyond the junction you clicked were left out" % dropped)
+    if not roofish:
+        region, drop = _down_to_battens(region, posts)
+        if drop:
+            result["warnings"].append("The battens on it run %.0f mm below the wall: its cladding is brought down to them" % drop)
 
     # Local origin at the region's bottom-left; everything shifts accordingly.
     umin, vmin, umax, vmax = region.bounds
@@ -814,6 +876,35 @@ def _post_of(tris, n, d, u):
         if inside < POST_INSIDE:
             return None, "is sunk %.0f mm into the face, only %.0f%% of it in front" % (-back, 100.0 * inside)
     return {"u": (min(us) + max(us)) / 2.0, "w": w, "v0": min(vs), "v1": max(vs)}, None
+
+
+def _down_to_battens(region, posts):
+    """A wall modelled short of the battens on it (the job's ground floor: the battens run on
+    down to where the cladding starts): its foot comes down to theirs, along every stretch of
+    its bottom line. Only where they say so together: two or more, and half or more of those
+    at the wall's foot, each reaching from no more than BASE_REACH below it up into the wall;
+    one batten running long, or battens running far below (a plinth's), leave it as it is.
+    (region, how far it came down)."""
+    if not posts or region.is_empty:
+        return region, 0.0
+    umin, vmin, umax, vmax = region.bounds
+    at_foot = [q for q in posts if umin <= q["u"] <= umax and q["v0"] <= vmin + 50.0 and q["v1"] > vmin + 50.0]
+    low = [q for q in at_foot if vmin - BASE_REACH <= q["v0"] < vmin - 1.0]
+    if len(low) < 2 or 2 * len(low) < len(at_foot):
+        return region, 0.0
+    v_lo = min(q["v0"] for q in low)
+    try:
+        foot = region.intersection(shapely.box(umin - 1.0, vmin - 1.0, umax + 1.0, vmin + 1.0))
+        add = [shapely.box(b[0], v_lo, b[2], vmin + 0.5) for g in iter_polygons(foot)
+               for b in [g.bounds] if b[2] - b[0] > 1.0]
+        if not add:
+            return region, 0.0
+        grown = unary_union([region] + add).simplify(0.01, preserve_topology=True)
+        if grown.is_empty or not grown.is_valid:
+            return region, 0.0
+        return grown, round(vmin - v_lo, 1)
+    except Exception:   # noqa: BLE001 — a foot that will not grow leaves the wall as modelled
+        return region, 0.0
 
 
 def _passed_report(passed):

@@ -117,6 +117,35 @@ def test_a_joint_with_no_column_in_reach_gets_a_batten_of_its_own():
     assert all(e - s <= 1200.0 + 1e-6 for s, e, _f in panels) and panels[-1][1] == 4000.0
 
 
+def test_a_batten_of_our_own_never_leaves_a_sliver_at_the_end():
+    """The job's J1: its last usable column 1234 mm from the corner, too far for one panel.
+    A batten of ours at a full sheet's width left a 24 mm strip at the corner; the stretch
+    is shared between two panels instead."""
+    from cladding_primitives import bays_on_posts
+    panels, joints, extra = bays_on_posts([0.0, 7483.0], [714.0, 1314.0, 2499.0, 3179.0, 4379.0, 5059.0, 6244.0], 1200.0, 10.0)
+    assert min(e - s for s, e, _f in panels) >= 300.0, panels
+    assert all(e - s <= 1200.0 + 1e-6 for s, e, _f in panels)
+    assert extra == [joints[-1]] and joints[-1] == pytest.approx((6249.0 + 7483.0) / 2.0)
+
+
+def test_panels_either_side_of_a_central_window_mirror_each_other():
+    """The job's recessed wall: a window near the middle, the panels either side 1190 + 423
+    and 977 + 697. Mirrored about the window, as the battens allow, they read as one
+    composition: 590 + 1023 and 1072 + 602 (each side's count of panels the same)."""
+    from cladding_primitives import bays_on_posts
+    posts = [22.0, 181.0, 187.0, 595.0, 1195.0, 1795.0, 2395.0, 2995.0, 3515.0, 3522.0, 3610.0, 4110.0, 4195.0]
+    stops = [0.0, 1623.0, 2533.0, 4217.0]
+    plain, _j, _x = bays_on_posts(stops, posts, 1200.0, 10.0)
+    mirrored, _j, _x = bays_on_posts(stops, posts, 1200.0, 10.0, axis=2078.0)
+    widths = lambda ps, a, b: [round(e - s) for s, e, _f in ps if s >= a - 1 and e <= b + 1]   # noqa: E731
+    left, right = widths(mirrored, 0, 1623), widths(mirrored, 2533, 4217)
+    assert len(left) == len(widths(plain, 0, 1623)) and len(right) == len(widths(plain, 2533, 4217))
+    assert sum(abs(a - b) for a, b in zip(left[::-1], right)) <= 100, (left, right)
+    assert all(e - s <= 1200.0 + 1e-6 for s, e, _f in mirrored)
+    # with no axis, as before
+    assert widths(plain, 0, 1623) == [1190, 423]
+
+
 # ── found more tolerantly, and saying why not ──────────────────────────────
 
 def _extract(context):
@@ -164,3 +193,70 @@ def test_something_batten_shaped_is_offered_switched_off_and_can_be_turned_on():
     # a column or member on the same line as a look-alike wins
     both = _extract(proxies[:1] + [_column("Batten", POSTS[0])])
     assert len(both["posts"]) == 1 and "default" not in both["posts"][0]
+
+
+def test_on_battens_at_600_with_a_pair_100_apart_the_most_1200_panels_and_a_700_over_the_pair():
+    """The job's client battens: 600 centres, now and then two 100 apart, then 600 again.
+    The fewest vertical joints, as many 1200 panels as can be, and the pair taken in one
+    700 panel (600 + 100, an extra fixing) rather than a joint more."""
+    from cladding_primitives import bays_on_posts
+    posts = [600.0, 1200.0, 1800.0, 1900.0, 2500.0, 3100.0, 3700.0, 4300.0]
+    panels, joints, extra = bays_on_posts([0.0, 4900.0], posts, 1200.0, 10.0)
+    widths = [round(e - s) for s, e, _f in panels]
+    assert not extra and len(panels) == 5 and all(j in posts for j in joints)
+    assert sum(1 for w in widths if w >= 1185) == 3, widths          # three full sheets
+    assert any(685 <= w <= 700 for w in widths), widths               # the pair in one ~700 panel
+    # greedy from the left would have stopped at 1200 and 1900 and 3100 and 4300: the same here,
+    # but with the pair first it must look ahead: 0 | 100 pair at 600/700 | ...
+    panels, joints, extra = bays_on_posts([0.0, 3700.0], [600.0, 700.0, 1300.0, 1900.0, 2500.0, 3100.0], 1200.0, 10.0)
+    widths = [round(e - s) for s, e, _f in panels]
+    assert len(panels) == 4 and sum(1 for w in widths if w >= 1185) >= 2, widths
+
+
+def test_a_joint_may_stand_up_to_10_off_its_batten_to_get_a_full_sheet():
+    """Client battens at about 606: from the corner, two bays are 1212, too wide for a 1200
+    sheet with its joint on the centre. Up to JOINT_SLIP off a batten's centre, it fits."""
+    from cladding_primitives import bays_on_posts, JOINT_SLIP
+    posts = [605.0, 1212.0, 1818.0, 2424.0]
+    panels, joints, extra = bays_on_posts([0.0, 3030.0], posts, 1200.0, 10.0)
+    widths = [round(e - s) for s, e, _f in panels]
+    assert not extra and sum(1 for w in widths if w >= 1185) >= 2, widths
+    assert all(min(abs(j - q) for q in posts) <= JOINT_SLIP + 1e-6 for j in joints)
+
+
+def test_a_chain_s_split_height_puts_a_joint_at_that_level_on_every_face():
+    """The job's band: a horizontal joint at the sill of two windows (z 1774 in the model's
+    own coordinates) round the building, whatever each face's base and the model's offset."""
+    from cladding_geometry import _split_rows
+    frame = {"origin": [0.0, 0.0, -3698.0], "u": [1.0, 0.0, 0.0], "v": [0.0, 0.0, 1.0], "n": [0.0, -1.0, 0.0]}
+    p = {"panel_split_z": 1774.0, "panel_h": 2400.0, "context": {"offset": [0.0, 0.0, 3669.0]}}
+    rows = _split_rows(p, {"frame": frame}, 10.0, 2421.0, 10.0)
+    # the joint's centre at z 1774 - 3669 = -1895 in the engine, v 1803 on this face
+    assert rows == [pytest.approx(1803.0 - 10.0 - 5.0)]
+    assert _split_rows(dict(p, panel_split_z=None), {"frame": frame}, 10.0, 2421.0, 10.0) is None
+    assert _split_rows(dict(p, panel_split_z=4000.0), {"frame": frame}, 10.0, 2421.0, 10.0) is None    # above the face
+
+
+@pytest.mark.parametrize("drop, expect", [(120.0, 120.0), (45.0, 45.0), (400.0, 0.0), (0.0, 0.0)])
+def test_the_cladding_comes_down_to_battens_that_run_below_the_wall(drop, expect):
+    """The job's ground floor: walls modelled 120 (or 45) mm short of the battens on them,
+    which run down to the level the cladding is meant to start at. The face's foot comes down
+    to the battens' (within BASE_REACH: a batten running far below is something else)."""
+    plain = _elevation(posts=[], distractors=False)
+    pl = payload()
+    pl["context"] = list(pl["context"]) + [_column("Beam %d" % i, u, v0=-drop, kind="IFCBEAM") for i, u in enumerate(POSTS)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        elev = extract_elevation(pl)
+    assert elev["height"] == pytest.approx(plain["height"] + expect)
+    assert elev["area"] == pytest.approx(plain["area"] + expect * plain["width"], rel=1e-6)
+    assert {round(q["v0"], 1) for q in elev["posts"]} == {round(expect - drop, 1)}
+    assert any("brought down to them" in w for w in elev["warnings"]) == (expect > 0)
+
+
+def test_one_batten_below_the_wall_does_not_move_its_foot():
+    pl = payload()
+    pl["context"] = list(pl["context"]) + [_column("Beam %d" % i, u, v0=-120.0 if i == 3 else 0.0, kind="IFCBEAM")
+                                           for i, u in enumerate(POSTS)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        elev = extract_elevation(pl)
+    assert elev["height"] == pytest.approx(_elevation(posts=[], distractors=False)["height"])

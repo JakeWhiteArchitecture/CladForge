@@ -275,3 +275,47 @@ def test_a_penetration_is_cut_on_the_grid_where_anything_nearly_meets():
     clean = Polygon([(1000.123456, 1000), (1500, 1000), (1500, 1500), (1000.123456, 1500)])
     exact = _cut_out(face, clean)
     assert 1000.123456 in [round(x, 6) for x, _y in exact.interiors[0].coords]
+
+
+def test_faces_picked_on_parallel_surfaces_are_clad_on_the_outermost():
+    """A wall face picked on a 9 mm board and on the wall's face beside it, 9 mm behind
+    (the job's skirts): the face is the board's, not a plane 4.5 mm into it, and it says
+    so. A sliver on a third plane further out does not count."""
+    from fabric_extract import fit_plane
+    quad = lambda y, x0, x1, z0, z1: [[(x0, y, z0), (x1, y, z0), (x1, y, z1)], [(x0, y, z0), (x1, y, z1), (x0, y, z1)]]   # noqa: E731
+    # outward is -y: the wall's face at y = 0, the board on it 9 mm out at y = -9 (n.p = 9 there)
+    faces = quad(-9.0, 0, 4000, 0, 2400) + quad(0.0, 4000, 6000, 0, 2400)
+    n, d, warnings = fit_plane(faces, (0.0, -1.0, 0.0))
+    assert n == pytest.approx((0.0, -1.0, 0.0)) and d == pytest.approx(9.0, abs=1e-6)
+    assert any("parallel planes" in w for w in warnings)
+    n, d, _w = fit_plane(faces + quad(-39.0, 0, 20, 0, 20), (0.0, -1.0, 0.0))  # a 20 mm square 30 mm further out: a sliver
+    assert d == pytest.approx(9.0, abs=1e-6)
+    n, d, warnings = fit_plane(quad(0.0, 0, 4000, 0, 2400), (0.0, -1.0, 0.0))  # one plane: as before, no warning
+    assert d == pytest.approx(0.0, abs=1e-6) and not warnings
+
+
+def _box(x0, y0, z0, x1, y1, z1, kind="IfcBeam", name="BOX"):
+    c = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0), (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+    q = [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+    return {"type": kind, "name": name, "tris": [[list(c[a]), list(c[b]), list(c[e])] for f in q for a, b, e in ((f[0], f[1], f[2]), (f[0], f[2], f[3]))]}
+
+
+@pytest.mark.parametrize("what, cut", [("eaves box", True), ("batten", False), ("box mid-wall", False)])
+def test_an_eaves_box_in_front_of_a_wall_s_head_stops_the_cladding_under_it(what, cut):
+    """The job's eaves boxes stand in front of the skirt walls' heads, in the cladding zone,
+    without passing through the wall: the wall's cladding ran on up behind them. Now the face
+    is cut from the box's underside up. A batten modelled in front, or a box part way down the
+    wall, leaves the face as it is."""
+    from fabric_extract import extract_elevation as ex
+    wall = [[(0, 0, 0), (6000, 0, 0), (6000, 0, 3000)], [(0, 0, 0), (6000, 0, 3000), (0, 0, 3000)]]     # facing -y
+    box = {"eaves box": _box(1000, -120, 2750, 5000, 0, 3000),
+           "batten": _box(1000, -45, 2925, 5000, 0, 3000, name="Beam Dimension Lumber 75x45"),
+           "box mid-wall": _box(1000, -120, 1200, 5000, 0, 1450)}[what]
+    face = ex({"name": "Wall", "faces": wall, "outward": [0, -1, 0], "context": [box],
+               "options": {"debug": False, "clad_depth": 150.0}})
+    assert face["ok"]
+    if cut:
+        assert face["area"] == pytest.approx(6000 * 3000 - 4000 * 250, rel=1e-3)
+        assert any("stops under it" in w for w in face["warnings"])
+    else:
+        assert face["area"] == pytest.approx(6000 * 3000, rel=1e-3)

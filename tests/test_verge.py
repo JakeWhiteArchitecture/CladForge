@@ -642,3 +642,13 @@ def test_a_scrap_of_upright_edge_at_a_hip_foot_does_not_hide_the_verge():
     found = _edges(info)
     assert found["l"][:3] == (3053.0, 3547.0, 10411.0)
     assert found["r"][0] == 13308.0
+
+
+def test_a_side_is_its_longest_edge_near_the_end_not_a_short_one_a_little_further_out():
+    """The job's roof D: its 5.1 m verge at u = 11989, and its head running on 75 mm past it
+    for 400 mm near the top. The side is the verge (where the wall under it is looked for),
+    not the head's short end."""
+    from cladding_verge import _outline_sides
+    ring = [[0, 0], [11989, 0], [11989, 7190], [12064, 7190], [12064, 7600], [0, 7600]]
+    u, v = _outline_sides({"polygons": [{"exterior": ring}]})["r"]
+    assert u == 11989 and 3000 < v < 4000

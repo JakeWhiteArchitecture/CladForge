@@ -181,11 +181,46 @@ def _splits(polygons, limit):
         if piece.is_empty or piece.geom_type != "Polygon":
             continue
         u0, v0, u1, v1 = piece.bounds
-        if piece.area < 0.9 * (u1 - u0) * (v1 - v0) or u1 - u0 < limit:
+        if u1 - u0 < limit or not (abs(v0 - vmin) < 1.0 and abs(v1 - vmax) < 1.0 and u0 > umin + 1.0 and u1 < umax - 1.0):
             continue
-        if abs(v0 - vmin) < 1.0 and abs(v1 - vmax) < 1.0 and u0 > umin + 1.0 and u1 < umax - 1.0:
+        if piece.area >= 0.9 * (u1 - u0) * (v1 - v0):
             out.append((round(u0, 2), round(u1, 2), round(v0, 2), round(v1, 2)))
+            continue
+        # not a rectangle: a door with a window beside it, the gap L-shaped. Its core, what is
+        # open the full height, is the door; what is left over, where it is a rectangle, the window.
+        core = _full_height_core(piece, v0, v1)
+        if core is None or core[1] - core[0] < limit:
+            continue
+        out.append((round(core[0], 2), round(core[1], 2), round(v0, 2), round(v1, 2)))
+        try:
+            from shapely.geometry import box
+            left = piece.difference(box(core[0], v0 - 1.0, core[1], v1 + 1.0))
+        except Exception:   # noqa: BLE001
+            continue
+        for bit in getattr(left, "geoms", [left]):
+            if bit.is_empty or bit.geom_type != "Polygon":
+                continue
+            a0, b0, a1, b1 = bit.bounds
+            if a1 - a0 >= limit and b1 - b0 >= limit and bit.area >= 0.9 * (a1 - a0) * (b1 - b0):
+                out.append((round(a0, 2), round(a1, 2), round(b0, 2), round(b1, 2)))
     return out
+
+
+def _full_height_core(piece, v0, v1):
+    """(u0, u1) of what of a gap is open from its bottom to its top: the span every level of
+    it shares, or None."""
+    from shapely.geometry import LineString
+    levels = sorted({round(y, 3) for x, y in piece.exterior.coords if v0 < y < v1} | {v0, v1})
+    lo, hi = -float("inf"), float("inf")
+    for a, b in zip(levels, levels[1:]):
+        y = (a + b) / 2.0
+        cut = piece.intersection(LineString([(piece.bounds[0] - 1.0, y), (piece.bounds[2] + 1.0, y)]))
+        spans = [g.bounds for g in getattr(cut, "geoms", [cut]) if not g.is_empty]
+        if not spans:
+            return None
+        widest = max(spans, key=lambda s: s[2] - s[0])
+        lo, hi = max(lo, widest[0]), min(hi, widest[2])
+    return (lo, hi) if hi > lo else None
 
 
 def bays_between(stops, max_panel, gap):
@@ -210,16 +245,137 @@ def bays_between(stops, max_panel, gap):
 MIN_BAY = 300.0   # mm – a bay set out on posts is never narrower than this where a post allows
 
 
-def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY):
+FULL_PANEL = 15.0   # mm – a panel this near the most a panel may be is a full one (the joint gaps come off it)
+JOINT_SLIP = 10.0   # mm – a joint may stand this far off its batten's centreline
+SLIPS = (0.0, -2.5, 2.5, -5.0, 5.0, -7.5, 7.5, -10.0, 10.0)
+
+
+def _best_bays(a, b, posts, max_panel, gap, min_bay):
+    """The panels across one span [a, b] with every joint on a post, chosen among all the
+    ways the posts allow: the fewest panels (the fewest vertical joints), then the most
+    full ones (a 1200 sheet uncut), then the joints nearest their battens' centres (one moved
+    up to JOINT_SLIP off only for a joint less or a full sheet more), then the widest
+    narrowest panel (no sliver at a corner or beside an opening), then the longer panels
+    first, as before. Posts at 600 with now and
+    then two 100 apart: a 700 panel over the pair (an extra fixing) rather than a joint
+    more. None where some stretch has no post in reach (bays_on_posts then adds battens)."""
+    if b - a <= max_panel + 1e-6:
+        return [(a, b)]
+    # each joint on a batten's centre, or up to JOINT_SLIP off it (a 1200 sheet over two bays
+    # set out at 605 and more, the fixings still well within the batten)
+    cand = sorted({(q + d, abs(d)) for q in posts for d in SLIPS if a + gap / 2.0 + 1.0 < q + d < b - gap / 2.0 - 1.0})
+    nodes = [(a, 0.0)] + cand + [(b, 0.0)]
+    start = lambda i: nodes[i][0] if i == 0 else nodes[i][0] + gap / 2.0           # noqa: E731
+    end = lambda j: nodes[j][0] if j == len(nodes) - 1 else nodes[j][0] - gap / 2.0   # noqa: E731
+    for floor in (min_bay, 1.0):          # no way within min_bay: any way at all
+        best = {0: ((0, 0, 0.0, -float("inf"), ()), None)}
+        for j in range(1, len(nodes)):
+            for i in range(j):
+                if i not in best or nodes[j][0] <= nodes[i][0]:
+                    continue
+                w = end(j) - start(i)
+                if w > max_panel + 1e-6 or w < floor - 1e-6:
+                    continue
+                (n, full, slip, narrow, order), _p = best[i]
+                # a joint off its batten's centre only for a joint less or a full sheet more; then
+                # the widest narrowest panel; last, as the old rule did where nothing else
+                # chooses: the longer panels first
+                score = (n + 1, full - (1 if w >= max_panel - FULL_PANEL else 0), round(slip + nodes[j][1], 3),
+                         max(narrow, -w), order + (-round(w, 3),))
+                if j not in best or score < best[j][0]:
+                    best[j] = (score, i)
+        last = len(nodes) - 1
+        if last in best:
+            out, j = [], last
+            while j:
+                i = best[j][1]
+                out.append((start(i), end(j)))
+                j = i
+            return out[::-1]
+    return None
+
+
+MIRROR_GAIN = 50.0   # mm – a mirrored set-out is taken where it is this much more symmetrical, in all
+MIRROR_SPANS = 2000  # the most set-outs of one span compared for a mirrored pair
+MIRROR_TOL = 150.0   # mm – spans this near mirror images of each other about the axis are a pair
+
+
+def _all_bays(a, b, posts, max_panel, gap, n, floor):
+    """Every way of filling [a, b] with *n* panels, each joint on a post (or JOINT_SLIP off
+    it), none wider than *max_panel* or narrower than *floor*: lists of (start, end)."""
+    cand = sorted({q + d for q in posts for d in SLIPS if a + gap / 2.0 + 1.0 < q + d < b - gap / 2.0 - 1.0})
+    out = []
+
+    def walk(start, left, acc):
+        if len(out) >= MIRROR_SPANS:
+            return
+        if left == 1:
+            if floor - 1e-6 <= b - start <= max_panel + 1e-6:
+                out.append(acc + [(start, b)])
+            return
+        for j in cand:
+            end = j - gap / 2.0
+            if end - start > max_panel + 1e-6:
+                break
+            if end - start >= floor - 1e-6 and b - (j + gap / 2.0) >= floor * (left - 1) - 1e-6:
+                walk(j + gap / 2.0, left - 1, acc + [(start, end)])
+    walk(a, n, [])
+    return out
+
+
+def _asymmetry(left, right):
+    """How far two spans' panels are from mirror images: the left's widths read from the
+    axis outward against the right's, and any panel without a partner counts whole."""
+    wl = [e - s for s, e in left][::-1]
+    wr = [e - s for s, e in right]
+    return sum(abs(x - y) for x, y in zip(wl, wr)) + sum(wl[len(wr):]) + sum(wr[len(wl):])
+
+
+def _mirrored(spans, posts, max_panel, gap, min_bay, axis):
+    """The set-outs of span pairs mirrored about *axis* (each the other's image, within
+    MIRROR_TOL) chosen together, as near mirror images as the posts allow with no more
+    panels than each had: where that is MIRROR_GAIN more symmetrical than each chosen alone."""
+    for i, (a, b, best) in enumerate(spans):
+        if best is None:
+            continue
+        for j in range(i + 1, len(spans)):
+            c, d, other = spans[j]
+            if other is None or abs((a + d) - 2.0 * axis) > MIRROR_TOL or abs((b + c) - 2.0 * axis) > MIRROR_TOL:
+                continue
+            now = _asymmetry(best, other)
+            if now < MIRROR_GAIN:
+                break
+            ls = _all_bays(a, b, posts, max_panel, gap, len(best), min_bay)
+            rs = _all_bays(c, d, posts, max_panel, gap, len(other), min_bay)
+            pick = min(((_asymmetry(x, y), x, y) for x in ls for y in rs), key=lambda t: t[0], default=None)
+            if pick is not None and pick[0] <= now - MIRROR_GAIN:
+                spans[i] = (a, b, pick[1])
+                spans[j] = (c, d, pick[2])
+            break
+    return spans
+
+
+def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY, axis=None):
     """Panels filling each span between consecutive *stops* (the ends, opening jambs: fixed
     edges, no joint gap taken there) with every joint on a post, a batten the client's
-    model fixes: the furthest post that keeps the panel within *max_panel*, so as few
-    joints as the posts allow, avoiding one that leaves a last bay under *min_bay*. Where
-    no post is in reach the joint goes at the full panel width and is listed in *extra*,
-    needing a batten of its own. Returns (panels, joints, extra)."""
+    model fixes, chosen among all the ways the posts allow (_best_bays: the fewest joints,
+    then the most full panels, then no slivers). Where some stretch has no post in reach,
+    the furthest post that keeps the panel within *max_panel*, avoiding one that leaves a
+    last bay under *min_bay*, and where none is in reach the joint goes at the full panel
+    width and is listed in *extra*, needing a batten of its own; where that would leave less
+    than *min_bay* to the end, it goes half way, the two panels sharing the stretch rather than
+    a sliver at the corner. With an *axis* (a face whose openings stand symmetrically, or one
+    opening near its middle), spans that mirror each other about it are set out as mirror
+    images where the posts allow (_mirrored). Returns (panels, joints, extra)."""
     panels, joints, extra = [], [], []
-    for a, b in zip(stops, stops[1:]):
-        if b - a <= 1.0:
+    spans = [(a, b, _best_bays(a, b, posts, max_panel, gap, min_bay)) for a, b in zip(stops, stops[1:]) if b - a > 1.0]
+    if axis is not None:
+        spans = _mirrored(spans, posts, max_panel, gap, min_bay, axis)
+    for a, b, best in spans:
+        if best is not None:
+            for s0, e0 in best:
+                panels.append((s0, e0, True))
+            joints += [e0 + gap / 2.0 for _s0, e0 in best[:-1]]
             continue
         cur = a
         while b - cur > max_panel + 1e-6:
@@ -230,6 +386,8 @@ def bays_on_posts(stops, posts, max_panel, gap, min_bay=MIN_BAY):
                 j = (fair or inside)[-1]
             else:
                 j = reach
+                if b - (j + gap / 2.0) < min_bay and b - cur <= 2.0 * max_panel + gap:
+                    j = (cur + b) / 2.0        # a full sheet would leave a sliver at the end: share the stretch
                 extra.append(j)
             panels.append((cur, j - gap / 2.0, True))
             joints.append(j)
